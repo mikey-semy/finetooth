@@ -396,5 +396,65 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("H1", out.stdout)
 
 
+class InstallTest(unittest.TestCase):
+    """Установщик: набор должен работать сразу после него, без ручных правок."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="review-kit-install-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True)
+        (self.root / "app.ts").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True)
+
+    def install(self, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["python3", str(KIT / "install.py"), str(self.root), *extra],
+                              capture_output=True, text=True, check=False)
+
+    def test_после_установки_инструмент_работает_и_советует_свои_команды(self):
+        out = self.install("--cli", "npm run review --", "--project", "Демо")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        tool = self.root / "scripts" / "review" / "review.py"
+        self.assertTrue(tool.exists())
+        self.assertIn('CLI = "npm run review --"', tool.read_text(encoding="utf-8"),
+                      "подсказки собираются из CLI — установщик обязан её прописать")
+        for rel in ("docs/review/prompts/hunter.md", "docs/review/README.md",
+                    "docs/review/blocks.json", "docs/review/invariants.md"):
+            self.assertTrue((self.root / rel).exists(), rel)
+
+        init = subprocess.run(["python3", str(tool), "init"], capture_output=True, text=True)
+        self.assertEqual(init.returncode, 0, init.stderr)
+        cov = subprocess.run(["python3", str(tool), "coverage"], capture_output=True, text=True)
+        self.assertEqual(cov.returncode, 1, "непокрытый файл обязан ронять карту")
+        self.assertIn("npm run review --", cov.stdout, "советует команду проекта, а не свою")
+
+    def test_повторная_установка_не_затирает_работу(self):
+        self.install("--cli", "npm run review --")
+        marker = "# правила именно этого проекта\n"
+        inv = self.root / "docs" / "review" / "invariants.md"
+        inv.write_text(marker, encoding="utf-8")
+        # Промпт правят под проект чаще всего, и ставится он общей дорогой копирования —
+        # проверять надо именно её, иначе тест сторожит одну ветку из двух.
+        prompt = self.root / "docs" / "review" / "prompts" / "hunter.md"
+        prompt.write_text(marker, encoding="utf-8")
+        out = self.install("--cli", "make review")
+        self.assertEqual(inv.read_text(encoding="utf-8"), marker, "инварианты затёрты")
+        self.assertEqual(prompt.read_text(encoding="utf-8"), marker, "правленый промпт затёрт")
+        self.assertIn("уже есть", out.stdout)
+        self.assertIn('CLI = "npm run review --"',
+                      (self.root / "scripts" / "review" / "review.py").read_text(encoding="utf-8"),
+                      "повторный запуск не должен менять уже настроенный инструмент")
+
+    def test_вне_репозитория_установка_отказывает(self):
+        plain = Path(tempfile.mkdtemp(prefix="review-kit-plain-"))
+        self.addCleanup(shutil.rmtree, plain, True)
+        out = subprocess.run(["python3", str(KIT / "install.py"), str(plain)],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("git", out.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
