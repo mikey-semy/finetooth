@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import signal
 import subprocess
 import sys
@@ -269,14 +270,32 @@ def coverage_map() -> tuple[dict[str, list[str]], set[str], set[str]]:
     return owned, excluded, unassigned
 
 
+def head_commit() -> str:
+    """Коммит, про который карта покрытия что-то утверждает.
+
+    Аудиторский отчёт всегда называет версию, которую смотрел («Version c243e427»,
+    «at commit f508108»), и без этого «покрыто 1691 из 1691» — число без знаменателя:
+    репозиторий уехал, а карта осталась и выглядит как прежде.
+    """
+    try:
+        return subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() or "(нет коммитов)"
+    except (OSError, subprocess.CalledProcessError):
+        return "(коммит неизвестен)"
+
+
 def cmd_coverage(args) -> int:
     owned, excluded, unassigned = coverage_map()
-    lines = ["file\tblocks"]
+    commit = head_commit()
+    lines = [f"# коммит {commit}", "file\tblocks"]
     for f in sorted(owned):
         lines.append(f"{f}\t{','.join(owned[f])}")
     COVERAGE_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     total = len(owned) + len(unassigned)
+    print(f"коммит:      {commit}")
     print(f"покрыто:     {len(owned)}/{total} файлов")
     print(f"исключено:   {len(excluded)} (с обоснованием в blocks.json)")
     print(f"карта:       docs/review/coverage.tsv")
@@ -641,6 +660,94 @@ def block_lines(pathspecs: list[str]) -> tuple[int, int]:
     return len(files), total
 
 
+# --------------------------------------------------------------------- гипотезы
+
+# Второй знаменатель покрытия. Карта файлов отвечает «файл открывали», и этого мало:
+# файл можно открыть и ничего не понять. Профессиональный аудит считает покрытие не
+# файлами, а вопросами к системе — у OWASP ASVS требование обязано закрыться решением
+# «pass или fail», а неприменимое закрывается письменным обоснованием, не молчанием.
+# Гипотезы манифеста — наши вопросы, и каждая обязана получить один из трёх вердиктов.
+HYPOTHESIS_HEADING = re.compile(r"^#{1,6}\s*.*гипотез", re.IGNORECASE)
+LIMITS_HEADING = re.compile(r"^#{1,6}\s*.*(ограничени|не проверено|не смотрел)", re.IGNORECASE)
+LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)\S")
+VERDICTS = ("не проверена", "неприменима", "проверена")
+
+
+def section_items(md: str, heading: re.Pattern) -> list[str]:
+    """Пункты списка в разделе, чей заголовок совпал с образцом."""
+    lines = md.split("\n")
+    items: list[str] = []
+    depth = None
+    for line in lines:
+        if line.startswith("#"):
+            level = len(line) - len(line.lstrip("#"))
+            if depth is None:
+                if heading.match(line):
+                    depth = level
+                continue
+            if level <= depth:  # раздел кончился
+                break
+            continue
+        if depth is not None and LIST_ITEM.match(line):
+            items.append(line.strip())
+    return items
+
+
+def hypotheses(block_id: str, manifest: Path) -> list[str]:
+    """Идентификаторы гипотез блока: H1.1, H1.2 … по порядку пунктов в манифесте."""
+    if not manifest.exists():
+        return []
+    items = section_items(manifest.read_text(encoding="utf-8"), HYPOTHESIS_HEADING)
+    return [f"{block_id}.{i}" for i in range(1, len(items) + 1)]
+
+
+def verdicts_in(text: str) -> dict[str, str]:
+    """Вердикты по гипотезам, как их записал агент: «H1.3 — не проверена: …»."""
+    out: dict[str, str] = {}
+    for line in text.split("\n"):
+        low = line.lower()
+        for word in VERDICTS:  # «не проверена» раньше «проверена» — иначе съест
+            if word in low:
+                for token in re.findall(r"\b([A-Za-z]+\d*\.\d+)\b", line):
+                    out.setdefault(token, word)
+                break
+    return out
+
+
+def reports_text(b: dict) -> str:
+    """Отчёты блока одним текстом: вердикт может стоять у охотника или у проверяющего."""
+    parts = []
+    for role in ROLES:
+        p = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
+        if p.exists():
+            parts.append(p.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
+def cmd_hypotheses(args) -> int:
+    """Показать гипотезы блока и их вердикты — что закрыто, что висит."""
+    defn = blocks()
+    idx = block_index(defn)
+    if args.block not in idx:
+        die(f"unknown block {args.block}")
+    b = idx[args.block]
+    manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+    ids = hypotheses(b["id"], manifest)
+    if not ids:
+        print(f"{b['id']}: в манифесте нет раздела «Гипотезы» или он пуст")
+        return 1
+    seen = verdicts_in(reports_text(b))
+    items = section_items(manifest.read_text(encoding="utf-8"), HYPOTHESIS_HEADING)
+    for hid, text in zip(ids, items):
+        mark = seen.get(hid, "БЕЗ ВЕРДИКТА")
+        print(f"  {hid:<8} {mark:<14} {text[:90]}")
+    print(f"\nзакрыто {sum(1 for h in ids if h in seen)}/{len(ids)}")
+    return 0
+
+
+# --------------------------------------------------------------------------- check
+
+
 def cmd_check(args) -> int:
     defn, st, rows = blocks(), state(), findings()
     idx = block_index(defn)
@@ -784,14 +891,55 @@ def cmd_check(args) -> int:
         fresh = {f"{f}\t{','.join(bs)}" for f, bs in owned.items()}
         on_disk = {
             ln.rstrip("\n")
-            for ln in cov.read_text(encoding="utf-8").splitlines()[1:]
-            if ln.strip()
+            for ln in cov.read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.startswith("#") and ln != "file\tblocks"
         }
         if fresh != on_disk:
             problems.append(
                 f"coverage.tsv устарел: на диске {len(on_disk)} строк, "
                 f"пересчёт даёт {len(fresh)} — выполните `{CLI} coverage`"
             )
+
+    # Гипотезы — второй знаменатель покрытия, рядом с картой файлов. Манифест без
+    # гипотез даёт ревью «по общим соображениям», а гипотеза без вердикта теряется
+    # в прозе отчёта: спросить «проверил ли ты вот это» потом будет некому.
+    for b in defn["blocks"]:
+        stt = st["blocks"].get(b["id"], {}).get("status", "todo")
+        if stt in ("todo", "blocked"):
+            continue
+        manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+        ids = hypotheses(b["id"], manifest)
+        if not ids:
+            problems.append(
+                f"{b['id']}: в манифесте нет гипотез — такой блок даёт ревью "
+                f"«по общим соображениям»; раздел «Гипотезы», по пункту на гипотезу"
+            )
+            continue
+        if stt not in ("verified", "closed"):
+            continue
+        seen = verdicts_in(reports_text(b))
+        missing = [h for h in ids if h not in seen]
+        if missing:
+            problems.append(
+                f"{b['id']}: без вердикта {len(missing)} из {len(ids)} гипотез "
+                f"({', '.join(missing[:5])}{'…' if len(missing) > 5 else ''}) — "
+                f"каждая закрывается словом «проверена», «не проверена» или «неприменима»"
+            )
+
+    # Раздел про ограничения охвата обязателен: полноту доказывают перечислением
+    # НЕпросмотренного, и в аудиторских отчётах это отдельная глава. «Находок нет»
+    # без него неотличимо от «посмотрел по диагонали».
+    for b in defn["blocks"]:
+        if st["blocks"].get(b["id"], {}).get("status", "todo") not in ("verified", "closed"):
+            continue
+        hunter = REVIEW / "reports" / f"{b['id']}-{b['slug']}.hunter.md"
+        if hunter.exists():
+            head = [ln for ln in hunter.read_text(encoding="utf-8").split("\n") if ln.startswith("#")]
+            if not any(LIMITS_HEADING.match(ln) for ln in head):
+                problems.append(
+                    f"{b['id']}: в отчёте охотника нет раздела об ограничениях охвата — "
+                    f"что осознанно не смотрел и почему"
+                )
 
     # Блок, который за сеанс не прочитать, — обещание, а не блок.
     for bid, b in idx.items():
@@ -867,6 +1015,9 @@ def main() -> int:
     c.add_argument("--reason", help="причина отказа; обязательна для rejected")
     c.add_argument("--dup-of", dest="dup_of", help="id находки, дублем которой она является")
 
+    c = sub.add_parser("hypotheses", help="гипотезы блока и их вердикты")
+    c.add_argument("block")
+
     sub.add_parser("findings", help="перегенерировать findings.md из findings.jsonl")
     sub.add_parser("check", help="проверить непротиворечивость состояния")
 
@@ -879,7 +1030,7 @@ def main() -> int:
         "init": cmd_init, "status": cmd_status, "next": cmd_next, "coverage": cmd_coverage,
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
-        "set-finding": cmd_set_finding,
+        "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
     }[args.cmd](args)
 
 
