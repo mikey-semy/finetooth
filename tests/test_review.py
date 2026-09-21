@@ -69,9 +69,19 @@ class Stand:
         }, ensure_ascii=False, indent=2), )
 
     def manifest(self, hypotheses: int = 2) -> None:
-        items = "\n".join(f"{i}. Гипотеза номер {i}." for i in range(1, hypotheses + 1))
+        # Манифест намеренно не заглушка: проверка состояния ловит куцый файл, потому что
+        # «манифест есть» и «манифест что-то требует» — разные вещи.
+        items = "\n".join(
+            f"{i}. Гипотеза номер {i}: предикат в этом месте расходится с каноном, "
+            f"и расхождение меняет ответ на граничных значениях."
+            for i in range(1, hypotheses + 1))
         self.write("docs/review/blocks/H1-demo.md",
-                   f"# H1 — Демоблок\n\n## Гипотезы\n{items}\n\n## Критерий приёмки\nТаблица.\n")
+                   f"# H1 — Демоблок\n\n## Зачем\n\nПроверить, что оснастка ведёт себя так, "
+                   f"как обещает: гейты краснеют на сломанном состоянии и молчат на целом.\n\n"
+                   f"## Что считается находкой\n\nРасхождение поведения с тем, что обещает "
+                   f"документация модуля. Стилистика находкой не считается.\n\n"
+                   f"## Гипотезы\n{items}\n\n## Критерий приёмки\n\n"
+                   f"Таблица «вход → ожидание → факт» по каждой гипотезе.\n")
 
     def reports(self, hunter: str = "", verify: str = "") -> None:
         if hunter:
@@ -391,6 +401,56 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("findings")
         out = self.s.run("check")
         self.assertIn("указана строка 900", out.stdout)
+
+    def test_коммит_починки_обязан_касаться_файла_находки(self):
+        """Отметка «починено» проверяется коммитом, а не словом."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/other.ts", "b\n")
+        self.s.blocks(paths=["src/one.ts", "src/other.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+
+        # правка сделана в СОСЕДНЕМ файле, а отметка ставится на находку про src/one.ts
+        self.s.write("src/other.ts", "b\nправка не там\n")
+        self.s.commit("правка соседнего модуля")
+        wrong = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", wrong)
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertIn("не трогает src/one.ts", out.stdout)
+
+        # а теперь коммит, которого в репозитории нет вовсе
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
+        self.s.run("findings")
+        self.assertIn("нет в репозитории", self.s.run("check").stdout)
+
+    def test_статус_блока_вписанный_руками_роняет_проверку(self):
+        """set-status словарь проверял, а правку state.json руками — никто."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        st = self.s.root / "docs" / "review" / "state.json"
+        data = json.loads(st.read_text(encoding="utf-8"))
+        data["blocks"]["H1"]["status"] = "почти готово"
+        st.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.assertIn("вне словаря", self.s.run("check").stdout)
+
+    def test_куцый_манифест_роняет_проверку(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.write("docs/review/blocks/H1-demo.md", "# H1\n\n## Гипотезы\n1. Раз.\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("set-status", "H1", "running")
+        self.assertIn("пуст или почти пуст", self.s.run("check").stdout)
 
     # ----------------------------------------------------------------- корни и узды
 
