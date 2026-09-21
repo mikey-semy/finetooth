@@ -456,6 +456,45 @@ def render_refs(pathspecs: list[str], refs: list[str]) -> str:
     )
 
 
+def volume_note(files: list[str]) -> str:
+    """Сколько кода блок просит прочитать — и что из этого заведомо не прочитается.
+
+    Бюджет должен стоять в самом задании, а не в голове у ведущей сессии. Соседи по нише
+    делают это двумя способами, и нужны оба: repomix роняет сборку ненулевым кодом, когда
+    пакет перерос бюджет, а ai-digest оставляет невлезший файл в выводе заглушкой — путь
+    виден, содержимого нет. Промолчать хуже всего: тогда агент отчитывается об охвате,
+    которого не было, и никто не скажет, где проходила граница.
+    """
+    sizes = sorted(((file_lines(f) or 0, f) for f in files), reverse=True)
+    total = sum(n for n, _ in sizes)
+    # Грубая оценка, а не замер: около четырёх символов на токен — общее место, и здесь
+    # оно честнее точного счёта, потому что токенайзер у каждой модели свой.
+    chars = sum(len(f) for f in files) + total * 40
+    out = [f"Файлов: {len(files)}. Строк: {total}. Порядок величины: ~{chars // 4000}k токенов "
+           f"только на чтение, без рассуждений и вызовов инструментов."]
+    if total <= READABLE_LINES:
+        out.append(f"Это укладывается в то, что читается за сеанс (порог {READABLE_LINES} строк).")
+        return "\n".join(out)
+
+    out.append(f"\n⚠️ **Блок больше, чем прочитывается за сеанс** — {total} строк при пороге "
+               f"{READABLE_LINES}. Прочитать всё внимательно не выйдет, и честный выход один: "
+               f"прочитать столько, сколько получится, и **поимённо назвать остальное** в "
+               f"разделе об ограничениях охвата. Не делайте вид, что прочитали.")
+    out.append("\nГде проходит граница бюджета (по убыванию размера, накопительно):")
+    shown = 0
+    for n, f in sizes:
+        shown += 1
+        acc = sum(x for x, _ in sizes[:shown])
+        mark = "  " if acc <= READABLE_LINES else "▲ "
+        out.append(f"  {mark}{acc:>6} · {f} ({n} строк)")
+        if acc > READABLE_LINES * 2 and shown < len(sizes):
+            out.append(f"  … и ещё {len(sizes) - shown} файл(ов)")
+            break
+    out.append("\n▲ — то, что за границей. Это не запрет их открывать: это то, что вы обязаны "
+               "назвать непрочитанным, если не открыли.")
+    return "\n".join(out)
+
+
 def cmd_prompt(args) -> int:
     defn = blocks()
     idx = block_index(defn)
@@ -492,6 +531,7 @@ def cmd_prompt(args) -> int:
         ),
         "{{FILES}}": "\n".join(files) if files else "(нет)",
         "{{FILE_COUNT}}": str(len(files)),
+        "{{VOLUME}}": volume_note(files),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
         # Имя проекта и его ворота — подстановки, а не текст в шаблоне. Скопированный
@@ -666,6 +706,12 @@ def cmd_set_finding(args) -> int:
         f["reject_reason"] = args.reason
     if args.dup_of:
         f["dup_of"] = args.dup_of
+    if args.rule:
+        # Узда записывается на ВСЕ находки этого корня: класс закрыт целиком или не закрыт.
+        for row in rows:
+            if (row.get("root") or "") == (f.get("root") or "") and f.get("root"):
+                row["rule"] = args.rule
+        f["rule"] = args.rule
     f["updated_at"] = now()
 
     with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
@@ -784,6 +830,50 @@ def cmd_restamp(args) -> int:
     st["updated_at"] = now()
     save_json(STATE_FILE, st)
     print(f"{args.block}: отпечаток переснят — изменения в файлах блока считаются просмотренными")
+    return 0
+
+
+# Сколько раз класс дефекта должен повториться, чтобы список правок перестал быть ответом.
+#
+# Число не выдумано: это правило карты корней ревью, выведенное из практики — «второй повтор
+# пишем строкой, третий закрываем уздой». Причина простая: два экземпляра ещё могут оказаться
+# совпадением, третий означает, что дефект порождается устройством кода, а не невнимательностью,
+# и следующий появится сам. Аудиторские фирмы делают то же самое под именем variant analysis:
+# из находки пишут правило статического анализа и гоняют по всей базе.
+ROOT_RULE_AT = 3
+
+
+def roots_of(rows: list[dict], block_id: str | None = None) -> dict[str, list[dict]]:
+    """Находки, сгруппированные по корню. Без корня — не группируются."""
+    out: dict[str, list[dict]] = {}
+    for f in rows:
+        if block_id and f.get("block") != block_id:
+            continue
+        if f.get("status") in ("rejected", "duplicate"):
+            continue
+        root = (f.get("root") or "").strip()
+        if root:
+            out.setdefault(root, []).append(f)
+    return out
+
+
+def cmd_roots(args) -> int:
+    """Корни: сколько экземпляров у каждого и чем класс закрыт."""
+    rows = findings()
+    groups = roots_of(rows, args.block)
+    if not groups:
+        print("корней не отмечено — поле `root` у находок не заполнено")
+        return 0
+    for root, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        rule = next((f.get("rule") for f in items if f.get("rule")), None)
+        mark = f"узда: {rule}" if rule else (
+            "УЗДЫ НЕТ" if len(items) >= ROOT_RULE_AT else "узды нет, но повторов мало")
+        print(f"  {len(items):>2} × {root}  — {mark}")
+        for f in items:
+            where = f.get("file", "")
+            if f.get("line"):
+                where += f":{f['line']}"
+            print(f"       {f.get('id','?'):<10} {f.get('status','?'):<9} {where}")
     return 0
 
 
@@ -1162,6 +1252,21 @@ def cmd_check(args) -> int:
                     f"что осознанно не смотрел и почему"
                 )
 
+    # Класс дефекта, повторившийся трижды, закрывается уздой, а не тремя правками: иначе
+    # следующий проход найдёт четвёртый экземпляр. Правило переживает рефакторинг, список
+    # починенных мест — нет.
+    for root, items in roots_of(rows).items():
+        if len(items) < ROOT_RULE_AT:
+            continue
+        if any((f.get("rule") or "").strip() for f in items):
+            continue
+        ids = ", ".join(f.get("id", "?") for f in items[:4])
+        problems.append(
+            f"корень «{root}»: {len(items)} экземпляров ({ids}) и ни одной узды — "
+            f"класс, повторившийся {ROOT_RULE_AT} раза, закрывается правилом, а не списком "
+            f"правок; запишите чем: `{CLI} set-finding <ID> <статус> --rule <путь-к-узде>`"
+        )
+
     # Дерево, отставшее от сервера, показывает починенное как сломанное. Находки такого
     # прохода описывают код, которого уже нет, а «проверено исполнением» звучит так же
     # убедительно, как на свежем дереве.
@@ -1248,12 +1353,16 @@ def main() -> int:
     c.add_argument("--commit", help="коммит правки; обязателен для fixed")
     c.add_argument("--reason", help="причина отказа; обязательна для rejected")
     c.add_argument("--dup-of", dest="dup_of", help="id находки, дублем которой она является")
+    c.add_argument("--rule", help="чем закрыт класс: путь к узде, тесту или правилу линтера")
 
     c = sub.add_parser("hypotheses", help="гипотезы блока и их вердикты")
     c.add_argument("block")
 
     c = sub.add_parser("restamp", help="подтвердить, что изменения в файлах блока просмотрены")
     c.add_argument("block")
+
+    c = sub.add_parser("roots", help="корни находок: сколько экземпляров и чем закрыт класс")
+    c.add_argument("block", nargs="?")
 
     sub.add_parser("findings", help="перегенерировать findings.md из findings.jsonl")
     sub.add_parser("check", help="проверить непротиворечивость состояния")
@@ -1268,7 +1377,7 @@ def main() -> int:
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
-        "restamp": cmd_restamp,
+        "restamp": cmd_restamp, "roots": cmd_roots,
     }[args.cmd](args)
 
 
