@@ -1020,6 +1020,10 @@ def cmd_check(args) -> int:
     for bid in st["blocks"]:
         if bid not in idx:
             problems.append(f"{bid}: есть в state.json, но отсутствует в blocks.json")
+        # `set-status` словарь проверял, а вписанное руками — никто.
+        status = st["blocks"][bid].get("status")
+        if status not in STATUSES:
+            problems.append(f"{bid}: статус «{status}» вне словаря — вписан мимо set-status")
 
     # Манифест спрашиваем только у блока, который ДОШЁЛ до работы: манифест пишется
     # перед своим блоком, и требование его у всех сразу роняет проверку всегда —
@@ -1030,6 +1034,9 @@ def cmd_check(args) -> int:
         manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
         if not manifest.exists():
             problems.append(f"{bid}: нет манифеста {manifest.relative_to(ROOT)}")
+        elif len(manifest.read_text(encoding="utf-8").strip()) < 200:
+            # Пустой файл проходил проверку «манифест есть».
+            problems.append(f"{bid}: манифест {manifest.relative_to(ROOT)} пуст или почти пуст")
 
     # Блок, объявленный проверенным или закрытым, обязан предъявить отчёт
     # ВЕРИФИКАТОРА. Иначе `set-status closed` закрывает блок с одним отчётом
@@ -1062,10 +1069,16 @@ def cmd_check(args) -> int:
 
     # 5. a session that died mid-block
     for bid, s in st["blocks"].items():
+        if s.get("status") == "running" and not s.get("started"):
+            problems.append(f"{bid}: висит в running без отметки времени — когда начали, неизвестно")
         if s.get("status") == "running" and s.get("started"):
-            started = dt.datetime.strptime(s["started"], "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=dt.timezone.utc
-            )
+            try:
+                started = dt.datetime.strptime(s["started"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=dt.timezone.utc
+                )
+            except ValueError:
+                problems.append(f"{bid}: отметка времени «{s['started']}» не читается")
+                continue
             hours = (dt.datetime.now(dt.timezone.utc) - started).total_seconds() / 3600
             if hours > STALE_RUNNING_HOURS:
                 problems.append(
@@ -1093,6 +1106,22 @@ def cmd_check(args) -> int:
             problems.append(f"находка {fid}: status={f.get('status')} вне словаря")
         if f.get("file") and f["file"] not in tracked and not f["file"].startswith("("):
             problems.append(f"находка {fid}: файла {f['file']} нет в репозитории")
+        if f.get("status") == "fixed" and f.get("fix_commit"):
+            # Коммит правки обязан существовать и касаться файла находки. Две отметки
+            # в соседнем проекте указывали на коммит, который названного файла не трогал
+            # вовсе: правку сделали в другом модуле, а запись осталась прежней. Руками
+            # такое не проверяют — и не проверяли полгода.
+            touched = subprocess.run(
+                ["git", "-C", str(ROOT), "show", "--name-only", "--format=", f["fix_commit"]],
+                capture_output=True, text=True,
+            )
+            if touched.returncode != 0:
+                problems.append(f"находка {fid}: коммита {f['fix_commit']} нет в репозитории")
+            elif f.get("file") and f["file"] not in touched.stdout.split():
+                problems.append(
+                    f"находка {fid}: коммит {f['fix_commit']} не трогает {f['file']} — "
+                    f"либо отметка не от той находки, либо чинили не там"
+                )
         if f.get("status") == "fixed" and not f.get("fix_commit"):
             problems.append(f"находка {fid}: помечена fixed, но не указан коммит правки")
         if f.get("status") == "duplicate" and not f.get("dup_of"):
