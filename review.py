@@ -111,6 +111,31 @@ def save_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# Режимы в индексе git, которые выглядят как файлы, но файлами не являются.
+# Проверено экспериментом: подмодуль (160000) в `ls-files` — одна запись, а на диске
+# каталог, и счётчик строк падает на нём с IsADirectoryError. Симлинк (120000) читается
+# как обычный файл, и содержимое цели считается ДВАЖДЫ — второй раз под именем ссылки.
+# В наших трёх проектах ни того, ни другого нет, поэтому и не всплывало; в первом же
+# чужом репозитории знаменатель покрытия поехал бы молча.
+NOT_A_FILE_MODES = ("160000", "120000")
+
+
+def listed(pathspecs: list[str] | None) -> set[str]:
+    """Отслеживаемые файлы — настоящие файлы, без подмодулей и симлинков."""
+    cmd = ["git", "-C", str(ROOT), "ls-files", "--stage", "-z"]
+    if pathspecs is not None:
+        cmd += ["--"] + pathspecs
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    files = set()
+    for row in out.split("\0"):
+        if not row:
+            continue
+        head, _, path = row.partition("\t")
+        if head.split(" ", 1)[0] not in NOT_A_FILE_MODES:
+            files.add(path)
+    return files
+
+
 def git_files(pathspecs: list[str]) -> set[str]:
     """Tracked files matching git pathspecs.
 
@@ -121,18 +146,11 @@ def git_files(pathspecs: list[str]) -> set[str]:
     """
     if not pathspecs:
         return set()
-    out = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "-z", "--"] + pathspecs,
-        capture_output=True, text=True, check=True,
-    ).stdout
-    return {p for p in out.split("\0") if p}
+    return listed(pathspecs)
 
 
 def all_files() -> set[str]:
-    out = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, text=True, check=True
-    ).stdout
-    return {p for p in out.split("\0") if p}
+    return listed(None)
 
 
 def file_sha(rel: str) -> str | None:
@@ -168,14 +186,24 @@ def changed_since_review(b: dict, seen: str) -> bool:
 
 
 def file_lines(rel: str) -> int | None:
-    p = ROOT / rel
-    if not p.is_file():
-        return None
-    try:
-        with open(p, encoding="utf-8", errors="ignore") as fh:
-            return sum(1 for _ in fh)
-    except OSError:
-        return None
+    """Число строк — из ИНДЕКСА, а не с диска.
+
+    На диске файла может не быть при живой записи в индексе (удалили, не закоммитив;
+    sparse-checkout вообще не выкладывает часть дерева, а `ls-files` её печатает).
+    Открывать такой путь — падать на ровном месте или молча терять его из знаменателя.
+    """
+    out = subprocess.run(["git", "-C", str(ROOT), "show", f":{rel}"],
+                         capture_output=True, check=False)
+    if out.returncode != 0:
+        p = ROOT / rel
+        if not p.is_file():
+            return None
+        try:
+            with open(p, encoding="utf-8", errors="ignore") as fh:
+                return sum(1 for _ in fh)
+        except OSError:
+            return None
+    return out.stdout.count(b"\n") + (0 if out.stdout.endswith(b"\n") or not out.stdout else 1)
 
 
 def blocks() -> dict:
@@ -472,12 +500,13 @@ def volume_note(files: list[str]) -> str:
     chars = sum(len(f) for f in files) + total * 40
     out = [f"Файлов: {len(files)}. Строк: {total}. Порядок величины: ~{chars // 4000}k токенов "
            f"только на чтение, без рассуждений и вызовов инструментов."]
-    if total <= READABLE_LINES:
-        out.append(f"Это укладывается в то, что читается за сеанс (порог {READABLE_LINES} строк).")
+    limit = readable_lines()
+    if total <= limit:
+        out.append(f"Это укладывается в то, что читается за сеанс (порог {limit} строк).")
         return "\n".join(out)
 
     out.append(f"\n⚠️ **Блок больше, чем прочитывается за сеанс** — {total} строк при пороге "
-               f"{READABLE_LINES}. Прочитать всё внимательно не выйдет, и честный выход один: "
+               f"{limit}. Прочитать всё внимательно не выйдет, и честный выход один: "
                f"прочитать столько, сколько получится, и **поимённо назвать остальное** в "
                f"разделе об ограничениях охвата. Не делайте вид, что прочитали.")
     out.append("\nГде проходит граница бюджета (по убыванию размера, накопительно):")
@@ -485,9 +514,9 @@ def volume_note(files: list[str]) -> str:
     for n, f in sizes:
         shown += 1
         acc = sum(x for x, _ in sizes[:shown])
-        mark = "  " if acc <= READABLE_LINES else "▲ "
+        mark = "  " if acc <= limit else "▲ "
         out.append(f"  {mark}{acc:>6} · {f} ({n} строк)")
-        if acc > READABLE_LINES * 2 and shown < len(sizes):
+        if acc > limit * 2 and shown < len(sizes):
             out.append(f"  … и ещё {len(sizes) - shown} файл(ов)")
             break
     out.append("\n▲ — то, что за границей. Это не запрет их открывать: это то, что вы обязаны "
@@ -825,7 +854,22 @@ def cmd_findings(args) -> int:
 # проект прошёл блок в 1727 строк за шесть запусков и два часа, а блок в 87 тысяч строк
 # отчитался по 4 файлам из 14 — то есть соврал про охват, не нарушив ни одной проверки.
 # Порог с запасом втрое от прочитанного, чтобы ловить заведомо невыполнимое.
-READABLE_LINES = 6000
+READABLE_LINES = 6000  # дефолт; переопределяется полем `readable_lines` в blocks.json
+
+
+def readable_lines() -> int:
+    """Сколько строк блок может честно отдать агенту за сеанс.
+
+    ⚠️ Число из ОДНОГО языка. 6000 выведены из прогонов на TypeScript, а медианный
+    размер изменения различается между языками в два-три раза (826 тыс. PR, MSR 2022:
+    Shell 8 строк, Ruby 13, Python 21, TypeScript 35, Java 43), и по Go с Rust данных
+    нет вовсе. Переносить это число молча нельзя — проект задаёт своё в `blocks.json`,
+    полем `readable_lines`.
+    """
+    try:
+        return int(blocks().get("readable_lines") or READABLE_LINES)
+    except (ValueError, TypeError):
+        return READABLE_LINES
 
 
 def block_lines(pathspecs: list[str]) -> tuple[int, int]:
@@ -1351,10 +1395,11 @@ def cmd_check(args) -> int:
         if not b.get("paths"):
             continue
         n, lines = block_lines(b["paths"])
-        if lines > READABLE_LINES:
+        limit = readable_lines()
+        if lines > limit:
             problems.append(
                 f"{bid}: {n} файлов, {lines} строк — за сеанс не прочитать "
-                f"(порог {READABLE_LINES}). Разрежьте блок, иначе отчёт соврёт про охват"
+                f"(порог {limit}). Разрежьте блок, иначе отчёт соврёт про охват"
             )
 
     if problems:

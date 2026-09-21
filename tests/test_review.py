@@ -56,9 +56,10 @@ class Stand:
                               capture_output=True, text=True, check=False, env=env)
 
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
-               ref_paths: list[str] | None = None) -> None:
+               ref_paths: list[str] | None = None, readable_lines: int | None = None) -> None:
+        extra = {"readable_lines": readable_lines} if readable_lines else {}
         self.write("docs/review/blocks.json", json.dumps({
-            "review_id": "test", "project": "Тестовый проект", "gates": ["npm test"],
+            "review_id": "test", "project": "Тестовый проект", "gates": ["npm test"], **extra,
             "exclusions": (exclusions or []) + [
                 {"pattern": "docs/review", "reason": "аппарат ревью"},
                 {"pattern": "scripts/review", "reason": "аппарат ревью"},
@@ -149,6 +150,45 @@ class ReviewToolTest(unittest.TestCase):
         cov_path.write_text(cov.replace(head, "deadbee"), encoding="utf-8")
         out = self.s.run("check")
         self.assertIn("другой линии", out.stdout)
+
+    def test_подмодули_и_симлинки_не_считаются_файлами(self):
+        """`ls-files` печатает и то, и другое; открыть нельзя, а симлинк считается дважды."""
+        self.s.write("src/real.ts", "одна\nдве\nтри\n")
+        (self.s.root / "src" / "link.ts").symlink_to("real.ts")
+        sub = self.s.root / "vendor"
+        subprocess.run(["git", "init", "-q", str(sub)], check=True)
+        for k, v in (("user.email", "t@e"), ("user.name", "t")):
+            subprocess.run(["git", "-C", str(sub), "config", k, v], check=True)
+        (sub / "f.txt").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(sub), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(sub), "commit", "-qm", "sub"], check=True)
+        subprocess.run(["git", "-C", str(self.s.root), "-c", "protocol.file.allow=always",
+                        "submodule", "add", "-q", "./vendor", "lib"],
+                       check=False, capture_output=True)
+
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("coverage")
+        self.assertNotIn("link.ts", out.stdout, "симлинк — не файл блока")
+        self.assertNotIn("lib", out.stdout.replace("библиотек", ""), "подмодуль — не файл")
+
+        # и главное: счётчик не падает и не считает содержимое цели дважды
+        prompt = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(prompt.returncode, 0, prompt.stderr)
+        self.assertIn("Строк: 3", prompt.stdout, "три строки одного файла, а не шесть")
+
+    def test_файл_удалённый_с_диска_но_живой_в_индексе_не_роняет_счёт(self):
+        self.s.write("src/one.ts", "одна\nдве\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        (self.s.root / "src" / "one.ts").unlink()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Строк: 2", out.stdout)
 
     # -------------------------------------------------------------------- промпт
 
@@ -489,6 +529,18 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(by_id["H1-001"]["status"], "fixed", "отметка о починке затёрта")
         self.assertEqual(by_id["H1-002"]["claim"], "находка добора")
         self.assertFalse(src.exists(), "файл добора обязан помечаться сведённым")
+
+    def test_порог_читаемости_задаётся_проектом(self):
+        """6000 строк выведены из TypeScript; в другом языке плотность смысла другая."""
+        self.s.write("src/one.ts", "строка\n" * 500)
+        self.s.blocks(paths=["src/one.ts"], readable_lines=100)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        out = self.s.run("check")
+        self.assertIn("порог 100", out.stdout, "проектный порог должен применяться")
+        self.assertIn("за сеанс не прочитать", out.stdout)
 
     # ----------------------------------------------------------------- корни и узды
 
