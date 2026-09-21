@@ -270,6 +270,31 @@ def coverage_map() -> tuple[dict[str, list[str]], set[str], set[str]]:
     return owned, excluded, unassigned
 
 
+def behind_upstream() -> tuple[int, str] | None:
+    """На сколько коммитов дерево отстало от своей основной ветки на сервере.
+
+    Устаревшее дерево показывает починенное как сломанное, и это не теория: находка
+    «дыра в соседнем сервисе» была подтверждена исполнением по рабочей копии, которая
+    отставала на месяц, — в `origin/master` дыры уже не было. Проверяющий честно исполнил
+    всё, что обещал, на вчерашнем коде. Сеть здесь не трогаем (`fetch` — дело человека),
+    смотрим то, что git уже знает.
+    """
+    ref = subprocess.run(
+        ["git", "-C", str(ROOT), "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if not ref:
+        return None
+    out = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-list", "--count", f"HEAD..{ref}"],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0 or not out.stdout.strip().isdigit():
+        return None
+    n = int(out.stdout.strip())
+    return (n, ref) if n else None
+
+
 def head_commit() -> str:
     """Коммит, про который карта покрытия что-то утверждает.
 
@@ -1007,6 +1032,17 @@ def cmd_check(args) -> int:
                     f"{b['id']}: в отчёте охотника нет раздела об ограничениях охвата — "
                     f"что осознанно не смотрел и почему"
                 )
+
+    # Дерево, отставшее от сервера, показывает починенное как сломанное. Находки такого
+    # прохода описывают код, которого уже нет, а «проверено исполнением» звучит так же
+    # убедительно, как на свежем дереве.
+    stale = behind_upstream()
+    if stale:
+        n, ref = stale
+        problems.append(
+            f"дерево отстало от {ref} на {n} коммит(ов) — находки могут описывать уже "
+            f"починенное; `git fetch` и сверьтесь с {ref} перед тем, как их оформлять"
+        )
 
     # Блок, который за сеанс не прочитать, — обещание, а не блок.
     for bid, b in idx.items():
