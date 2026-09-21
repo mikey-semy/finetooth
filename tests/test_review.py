@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import shutil
@@ -351,10 +352,20 @@ class ReviewToolTest(unittest.TestCase):
 
         self.s.run("init")
         self.s.run("coverage")
-        self.assertNotIn("отстало", self.s.run("check").stdout, "на свежем дереве жалоб быть не должно")
+        self.assertNotIn("старше", self.s.run("check").stdout,
+                         "на свежем дереве жалоб быть не должно")
 
-        # сервер ушёл вперёд: чинит то, про что мы собираемся написать находку.
-        # Коммитим только исходник — служебные файлы ревью откат не должен уносить.
+        # Сервер ушёл вперёд и починил то, про что мы собираемся написать находку.
+        # Наша вершина при этом «двухнедельной давности»: устаревание меряется ВРЕМЕНЕМ,
+        # а не числом коммитов — ветка, отведённая час назад, отстаёт на десяток коммитов
+        # и не устарела ничуть.
+        long_ago = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14)).isoformat()
+        env = dict(os.environ, GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
+        subprocess.run(["git", "-C", str(self.s.root), "commit", "-q", "--amend",
+                        "--no-edit", f"--date={long_ago}"], env=env, check=True,
+                       capture_output=True)
+        self.s.git("push", "-qf", "origin", "HEAD:refs/heads/master")
+        self.s.git("fetch", "-q", "origin")
         self.s.write("src/one.ts", "a\nfixed\n")
         self.s.git("add", "src/one.ts")
         self.s.git("commit", "-qm", "починка на сервере")
@@ -363,7 +374,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.git("fetch", "-q", "origin")
 
         out = self.s.run("check")
-        self.assertIn("отстало", out.stdout)
+        self.assertIn("старше", out.stdout)
+        self.assertIn("суток", out.stdout)
         self.assertIn("fetch", out.stdout, "отказ обязан говорить, что делать")
 
     # ---------------------------------------------------------------- размещение
