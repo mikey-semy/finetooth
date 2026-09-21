@@ -54,6 +54,10 @@ REVIEW = ROOT / "docs" / "review"
 # `npm run review:check`, `just review check`. Поменяйте здесь одну строку, а не
 # в десятке сообщений по файлу, где они и разъехались у предыдущей версии:
 # часть подсказок звала `make`, которого в проекте уже не было.
+# Версия набора. Инструмент копируется В проект, а не подключается зависимостью,
+# поэтому спросить «что у меня стоит» больше не у кого: только у него самого.
+VERSION = "0.1.0"
+
 CLI = "python3 scripts/review/review.py"
 BLOCKS_FILE = REVIEW / "blocks.json"
 STATE_FILE = REVIEW / "state.json"
@@ -222,6 +226,11 @@ def cmd_init(args) -> int:
     save_json(STATE_FILE, st)
     FINDINGS_FILE.touch()
     print(f"state initialised: {len(st['blocks'])} blocks")
+    return 0
+
+
+def cmd_version(args) -> int:
+    print(VERSION)
     return 0
 
 
@@ -1212,6 +1221,7 @@ def main() -> int:
     sub.add_parser("init", help="создать/дополнить state.json по blocks.json").add_argument(
         "--force", action="store_true", help="перезаписать состояние с нуля"
     )
+    sub.add_parser("version", help="версия набора, стоящего в этом проекте")
     sub.add_parser("status", help="где мы сейчас")
     sub.add_parser("next", help="id следующего незакрытого блока")
 
@@ -1254,7 +1264,7 @@ def main() -> int:
 
     args = p.parse_args()
     return {
-        "init": cmd_init, "status": cmd_status, "next": cmd_next, "coverage": cmd_coverage,
+        "init": cmd_init, "version": cmd_version, "status": cmd_status, "next": cmd_next, "coverage": cmd_coverage,
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,

@@ -1,5 +1,7 @@
 # review-kit — сплошное ревью кодовой базы силами ИИ-агентов
 
+[![tests](https://github.com/mikey-semy/review-kit/actions/workflows/tests.yml/badge.svg)](https://github.com/mikey-semy/review-kit/actions/workflows/tests.yml)
+
 Оснастка, которая превращает просьбу «проведи ревью проекта» в работу с доказуемым
 результатом: код нарезан на блоки, каждый файл закреплён за блоком, состояние лежит на диске,
 а не в переписке, и ищет дефекты один агент, чинит другой, проверяет правку третий.
@@ -221,7 +223,7 @@ python3 install.py /путь/к/проекту --cli "npm run review --" --proje
 ## Что внутри
 
 ```
-review.py                         инструмент: init, status, coverage, prompt, import,
+review.py                         инструмент: version, init, status, coverage, prompt, import,
                                   set-status, set-finding, hypotheses, restamp,
                                   findings, check, log
 install.py                        установка в проект: ставит и настраивает CLI
@@ -240,6 +242,8 @@ example/guard-grep.sh             движок греп-ворот: разреш
 example/agent-banner.md           баннер в корневой файл инструкций проекта
 docs/how-it-works.md              описание автора набора, как есть
 docs/comparison-with-practice.md  сверка метода с аудитом, индустрией и наукой
+AGENTS.md                         правила для того, кто правит сам набор
+CHANGELOG.md                      история версий
 ```
 
 Статусы блока: `todo → running → hunted → verified → triaged → fixing → closed` (плюс
