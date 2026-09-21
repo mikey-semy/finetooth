@@ -185,6 +185,7 @@ example/package-json-snippet.json то же для проекта на npm
 example/guard-grep.sh             движок греп-ворот: разрешение по номеру строки
 example/баннер-в-корневые-инструкции.md
 docs/КАК-ЭТО-УСТРОЕНО.md          описание автора набора, как есть
+docs/СРАВНЕНИЕ-С-ПРАКТИКОЙ.md     сверка метода с аудитом, индустрией и наукой
 ```
 
 Статусы блока: `todo → running → hunted → verified → triaged → fixing → closed` (плюс
