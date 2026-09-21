@@ -379,8 +379,13 @@ def cmd_prompt(args) -> int:
     if not template.exists():
         die(f"prompt template missing: {template.relative_to(ROOT)}")
 
-    files = sorted(git_files(b.get("paths", [])))
-    refs = sorted(git_files(b.get("ref_paths", [])) - set(files))
+    # ⚠️ Исключения вычитаются и здесь. Карта покрытия и порог читаемости их вычитают,
+    # а промпт — нет, и блок получал в работу то, чего в его размере не числилось:
+    # `package-lock.json` на 19 тысяч строк, кодоген. Агент послушно начинал их читать,
+    # контекст уходил на файлы, которые никто читать не собирался.
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    files = sorted(git_files(b.get("paths", [])) - excluded)
+    refs = sorted(git_files(b.get("ref_paths", [])) - excluded - set(files))
     report = f"docs/review/reports/{b['id']}-{b['slug']}.{args.role}.md"
 
     body = template.read_text(encoding="utf-8")
@@ -750,14 +755,21 @@ def verdicts_in(text: str, block_id: str = "") -> dict[str, str]:
     return out
 
 
-def reports_text(b: dict) -> str:
-    """Отчёты блока одним текстом: вердикт может стоять у охотника или у проверяющего."""
-    parts = []
-    for role in ROLES:
+def verdicts_for(b: dict) -> dict[str, str]:
+    """Вердикты по гипотезам блока, где слово проверяющего перебивает слово охотника.
+
+    Промпт проверяющего прямо требует перебивать чужой вердикт своим, с объяснением.
+    Пока отчёты склеивались в один текст, первым шёл охотник, и `setdefault` навсегда
+    оставлял его вердикт: проверяющий мог написать «не проверена», а инструмент
+    продолжал показывать «проверена». Читаем по ролям и накладываем в порядке
+    старшинства.
+    """
+    out: dict[str, str] = {}
+    for role in ("hunter", "fix", "verify"):  # verify последним — он и перебивает
         p = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
         if p.exists():
-            parts.append(p.read_text(encoding="utf-8"))
-    return "\n".join(parts)
+            out.update(verdicts_in(p.read_text(encoding="utf-8"), b["id"]))
+    return out
 
 
 def cmd_hypotheses(args) -> int:
@@ -772,7 +784,7 @@ def cmd_hypotheses(args) -> int:
     if not ids:
         print(f"{b['id']}: в манифесте нет раздела «Гипотезы» или он пуст")
         return 1
-    seen = verdicts_in(reports_text(b), b["id"])
+    seen = verdicts_for(b)
     items = section_items(manifest.read_text(encoding="utf-8"), HYPOTHESIS_HEADING)
     for hid, text in zip(ids, items):
         mark = seen.get(hid, "БЕЗ ВЕРДИКТА")
@@ -935,6 +947,25 @@ def cmd_check(args) -> int:
                 f"coverage.tsv устарел: на диске {len(on_disk)} строк, "
                 f"пересчёт даёт {len(fresh)} — выполните `{CLI} coverage`"
             )
+        # Коммит в шапке — утверждение, а не украшение: «покрыто 1671 из 1671» имеет
+        # смысл только рядом с тем, про что это сказано. Записать его и не проверять
+        # значит завести вторую надпись, которая врёт молча. Сверяем, что снимок собран
+        # на этой линии истории, а не в чужой ветке; расхождение по СОСТАВУ ловится выше.
+        stamp = next(
+            (ln.split()[-1] for ln in cov.read_text(encoding="utf-8").splitlines()[:3]
+             if ln.startswith("#") and "коммит" in ln),
+            None,
+        )
+        if stamp and not stamp.startswith("("):
+            ok = subprocess.run(
+                ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", stamp, "HEAD"],
+                capture_output=True, text=True,
+            ).returncode == 0
+            if not ok:
+                problems.append(
+                    f"coverage.tsv собрана от коммита {stamp}, которого нет в истории этой "
+                    f"ветки — снимок из другой линии; выполните `{CLI} coverage`"
+                )
 
     # Гипотезы — второй знаменатель покрытия, рядом с картой файлов. Манифест без
     # гипотез даёт ревью «по общим соображениям», а гипотеза без вердикта теряется
@@ -953,7 +984,7 @@ def cmd_check(args) -> int:
             continue
         if stt not in ("verified", "closed"):
             continue
-        seen = verdicts_in(reports_text(b), b["id"])
+        seen = verdicts_for(b)
         missing = [h for h in ids if h not in seen]
         if missing:
             problems.append(
