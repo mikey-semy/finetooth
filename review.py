@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import re
 import signal
@@ -128,6 +129,49 @@ def all_files() -> set[str]:
         ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, text=True, check=True
     ).stdout
     return {p for p in out.split("\0") if p}
+
+
+def file_sha(rel: str) -> str | None:
+    """Отпечаток содержимого файла — тот же, что считает git, без лишних зависимостей."""
+    if not rel or rel.startswith("("):
+        return None
+    p = ROOT / rel
+    if not p.is_file():
+        return None
+    out = subprocess.run(["git", "-C", str(ROOT), "hash-object", "--", rel],
+                         capture_output=True, text=True)
+    return out.stdout.strip() or None
+
+
+def block_sha(b: dict) -> str:
+    """Отпечаток того, что блок получает в работу: состав файлов плюс их содержимое.
+
+    Считается по тем же правилам, по которым собирается промпт (исключения вычтены),
+    иначе отпечаток стерёг бы не тот набор, который агент читал.
+    """
+    defn = blocks()
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    files = sorted(git_files(b.get("paths", [])) - excluded)
+    h = hashlib.sha256()
+    for rel in files:
+        h.update(rel.encode("utf-8"))
+        h.update((file_sha(rel) or "").encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+def changed_since_review(b: dict, seen: str) -> bool:
+    return block_sha(b) != seen
+
+
+def file_lines(rel: str) -> int | None:
+    p = ROOT / rel
+    if not p.is_file():
+        return None
+    try:
+        with open(p, encoding="utf-8", errors="ignore") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return None
 
 
 def blocks() -> dict:
@@ -519,6 +563,11 @@ def cmd_import(args) -> int:
         f.setdefault("fix_commit", None)
         f.setdefault("dup_of", None)
         f["imported_at"] = now()
+        # Отпечаток кода, о котором находка говорит. Реестр протухает быстрее, чем кажется:
+        # находку чинят, статус не переводят, и следующий проход спорит с описанием кода,
+        # которого уже нет. Так и вышло — два проверяющих независимо «опровергли» две
+        # находки, закрытые накануне. Отпечаток превращает это из спора в вопрос.
+        f["code_sha"] = file_sha(f.get("file", ""))
         if f.get("confidence") == "rejected":
             f["status"] = "rejected"
     merged = kept + incoming
@@ -557,6 +606,12 @@ def cmd_set_status(args) -> int:
         s["started"] = now()
     if args.status == "closed":
         s["finished"] = now()
+    # Отпечаток того, ЧТО именно было просмотрено. Статус «пройден» без него держится
+    # вечно: файлы блока перепишут, а блок так и будет числиться закрытым — просмотренным
+    # оказался другой текст. Форма взята у doorstop, где у требования стоит поле `reviewed`
+    # с хешем содержимого, и правка текста сама переводит его в «непросмотренные изменения».
+    if args.status in ("verified", "closed"):
+        s["reviewed_sha"] = block_sha(block_index(defn)[args.block])
     if args.report:
         for r in args.report:
             if r not in s["reports"]:
@@ -700,6 +755,27 @@ def block_lines(pathspecs: list[str]) -> tuple[int, int]:
         except OSError:
             pass
     return len(files), total
+
+
+def cmd_restamp(args) -> int:
+    """Подтвердить, что изменения в файлах блока просмотрены, и переснять отпечаток.
+
+    Ровно как `doorstop review`: не «выключить проверку», а сказать под запись, что новый
+    текст видели. Поэтому команда требует блок поимённо и печатает, что именно штампует.
+    """
+    defn, st = blocks(), state()
+    idx = block_index(defn)
+    if args.block not in idx:
+        die(f"unknown block {args.block}")
+    s = st["blocks"].get(args.block, {})
+    if s.get("status") not in ("verified", "closed"):
+        die(f"{args.block} в статусе {s.get('status', 'todo')} — штамповать нечего")
+    s["reviewed_sha"] = block_sha(idx[args.block])
+    s["restamped_at"] = now()
+    st["updated_at"] = now()
+    save_json(STATE_FILE, st)
+    print(f"{args.block}: отпечаток переснят — изменения в файлах блока считаются просмотренными")
+    return 0
 
 
 # --------------------------------------------------------------------- гипотезы
@@ -928,6 +1004,24 @@ def cmd_check(args) -> int:
         # запись бесполезна: следующее ревью найдёт то же самое и потратит время
         # заново. Условие завершения ревью требовало причину у каждой отвергнутой
         # с самого начала, а проверки на это не было, и поле оставалось пустым.
+        # Код под находкой уехал — значит либо её уже починили, либо описание устарело.
+        # И то и другое требует действия, а не молчания: непереведённая находка заставляет
+        # следующий проход спорить с несуществующим кодом.
+        if f.get("status") in ("open", "deferred") and f.get("code_sha"):
+            fresh = file_sha(f.get("file", ""))
+            if fresh and fresh != f["code_sha"]:
+                problems.append(
+                    f"находка {fid}: код в {f.get('file')} изменился с момента импорта — "
+                    f"перепроверьте: либо она уже закрыта (`{CLI} set-finding {fid} fixed "
+                    f"--commit <sha>`), либо описание устарело"
+                )
+        # Номер строки, которого в файле нет, — самый дешёвый признак выдумки.
+        if f.get("line") and isinstance(f["line"], int):
+            n = file_lines(f.get("file", ""))
+            if n is not None and f["line"] > n:
+                problems.append(
+                    f"находка {fid}: указана строка {f['line']}, а в {f.get('file')} их {n}"
+                )
         if f.get("status") == "rejected" and not (f.get("reject_reason") or "").strip():
             problems.append(
                 f"находка {fid}: отвергнута, но причина отказа не записана — "
@@ -1028,6 +1122,20 @@ def cmd_check(args) -> int:
                 f"{b['id']}: без вердикта {len(missing)} из {len(ids)} гипотез "
                 f"({', '.join(missing[:5])}{'…' if len(missing) > 5 else ''}) — "
                 f"каждая закрывается словом «проверена», «не проверена» или «неприменима»"
+            )
+
+    # Блок, просмотренный на другой версии файлов, закрыт только на бумаге. Отпечаток
+    # снимается при переводе в verified/closed; разойтись он может лишь одним способом —
+    # файлы блока изменились после просмотра.
+    for b in defn["blocks"]:
+        s = st["blocks"].get(b["id"], {})
+        if s.get("status") not in ("verified", "closed") or not s.get("reviewed_sha"):
+            continue
+        if changed_since_review(b, s["reviewed_sha"]):
+            problems.append(
+                f"{b['id']}: файлы блока изменились после просмотра — блок закрыт на другой "
+                f"версии кода; перепройдите либо, если правки к предмету блока не относятся, "
+                f"перештампуйте: `{CLI} restamp {b['id']}`"
             )
 
     # Раздел про ограничения охвата обязателен: полноту доказывают перечислением
@@ -1134,6 +1242,9 @@ def main() -> int:
     c = sub.add_parser("hypotheses", help="гипотезы блока и их вердикты")
     c.add_argument("block")
 
+    c = sub.add_parser("restamp", help="подтвердить, что изменения в файлах блока просмотрены")
+    c.add_argument("block")
+
     sub.add_parser("findings", help="перегенерировать findings.md из findings.jsonl")
     sub.add_parser("check", help="проверить непротиворечивость состояния")
 
@@ -1147,6 +1258,7 @@ def main() -> int:
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
+        "restamp": cmd_restamp,
     }[args.cmd](args)
 
 

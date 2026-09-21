@@ -236,6 +236,37 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("hypotheses", "H1")
         self.assertIn("не проверена", out.stdout)
 
+    def test_блок_просмотренный_на_другой_версии_файлов_роняет_проверку(self):
+        """Статус «пройден» держится вечно, а файлы меняются — отпечаток это ловит."""
+        self.s.write("src/one.ts", "было\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+
+        self.s.write("src/one.ts", "переписали целиком\n")
+        self.s.commit("правка после ревью")
+        self.s.run("coverage")
+        out = self.s.run("check")
+        self.assertIn("изменились после просмотра", out.stdout)
+        self.assertIn("restamp", out.stdout, "отказ обязан говорить, что делать")
+
+        self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
+        self.assertNotIn("изменились после просмотра", self.s.run("check").stdout)
+
+    def test_штамповать_непройденный_блок_нельзя(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.assertEqual(self.s.run("restamp", "H1").returncode, 2)
+
     # -------------------------------------------------------------------- находки
 
     def test_находка_не_закрывается_без_коммита_причины_и_ссылки(self):
@@ -298,6 +329,42 @@ class ReviewToolTest(unittest.TestCase):
         by_claim = {f["claim"]: f["id"] for f in second}
         self.assertEqual(by_claim["находка 1"], "H1-001")
         self.assertEqual(by_claim["находка 2"], "H1-002")
+
+    def test_изменившийся_код_под_открытой_находкой_роняет_проверку(self):
+        """Реестр протухает: находку чинят, статус не переводят — гейт обязан это заметить."""
+        self.s.write("src/one.ts", "было\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "тут дефект",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.assertNotIn("изменился", self.s.run("check").stdout)
+
+        self.s.write("src/one.ts", "стало, починено\n")
+        self.s.commit("починка")
+        out = self.s.run("check")
+        self.assertIn("изменился с момента импорта", out.stdout)
+        self.assertIn("set-finding", out.stdout, "отказ обязан говорить, что делать")
+
+    def test_несуществующая_строка_в_находке_роняет_проверку(self):
+        self.s.write("src/one.ts", "одна\nдве\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "line": 900, "claim": "дефект на строке, которой нет",
+            "scenario": "сценарий"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertIn("указана строка 900", out.stdout)
 
     # --------------------------------------------------------------------- размер
 
