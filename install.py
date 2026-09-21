@@ -23,8 +23,17 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
 
+
+def kit_version() -> str:
+    """Версия набора — читается из самого инструмента, чтобы не разъехаться с ним."""
+    for line in (KIT / "review.py").read_text(encoding="utf-8").split("\n"):
+        if line.startswith("VERSION = "):
+            return line.split("=", 1)[1].strip().strip('"')
+    return "неизвестна"
+
 BLOCKS_SKELETON = {
     "review_id": "",
+    "kit_version": "",
     "project": "",
     "gates": [],
     "note": "Статическое определение блоков. Прогресс живёт в state.json, находки — в findings.jsonl. Порядок массива = порядок исполнения.",
@@ -122,6 +131,9 @@ def main() -> int:
         skel = dict(BLOCKS_SKELETON)
         skel["review_id"] = f"{root.name}-review"
         skel["project"] = args.project or root.name
+        # Версия набора едет в определение блоков: через полгода будет видно,
+        # что именно стоит в проекте и стоит ли обновлять.
+        skel["kit_version"] = kit_version()
         blocks.parent.mkdir(parents=True, exist_ok=True)
         blocks.write_text(json.dumps(skel, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         done.append(str(blocks))
