@@ -670,7 +670,22 @@ def block_lines(pathspecs: list[str]) -> tuple[int, int]:
 HYPOTHESIS_HEADING = re.compile(r"^#{1,6}\s*.*гипотез", re.IGNORECASE)
 LIMITS_HEADING = re.compile(r"^#{1,6}\s*.*(ограничени|не проверено|не смотрел)", re.IGNORECASE)
 LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)\S")
-VERDICTS = ("не проверена", "неприменима", "проверена")
+# Порядок важен и словарь шире трёх слов: в живом отчёте пишут «гипотеза 2 опровергнута»
+# и «не подтвердилась», и это тоже проверка — просто с отрицательным исходом, который в
+# ревью ценен не меньше. Гейт обязан понимать язык, которым отчёты пишутся на самом деле,
+# иначе он воюет с автором вместо того, чтобы ловить умолчание.
+VERDICT_WORDS = (
+    ("не проверена", "не проверена"),
+    ("не проверял", "не проверена"),
+    ("не удалось проверить", "не проверена"),
+    ("неприменима", "неприменима"),
+    ("не применима", "неприменима"),
+    ("не подтвердилась", "проверена"),
+    ("опровергнута", "проверена"),
+    ("подтвердилась", "проверена"),
+    ("подтверждена", "проверена"),
+    ("проверена", "проверена"),
+)
 
 
 def section_items(md: str, heading: re.Pattern) -> list[str]:
@@ -701,16 +716,22 @@ def hypotheses(block_id: str, manifest: Path) -> list[str]:
     return [f"{block_id}.{i}" for i in range(1, len(items) + 1)]
 
 
-def verdicts_in(text: str) -> dict[str, str]:
-    """Вердикты по гипотезам, как их записал агент: «H1.3 — не проверена: …»."""
+def verdicts_in(text: str, block_id: str = "") -> dict[str, str]:
+    """Вердикты по гипотезам: «H1.3 — не проверена: …» или «гипотеза 3 опровергнута»."""
     out: dict[str, str] = {}
+    plain = re.compile(r"гипотез\w*\s*№?\s*(\d+)", re.IGNORECASE)
     for line in text.split("\n"):
         low = line.lower()
-        for word in VERDICTS:  # «не проверена» раньше «проверена» — иначе съест
-            if word in low:
-                for token in re.findall(r"\b([A-Za-z]+\d*\.\d+)\b", line):
-                    out.setdefault(token, word)
-                break
+        verdict = next((v for w, v in VERDICT_WORDS if w in low), None)
+        if not verdict:
+            continue
+        for token in re.findall(r"\b([A-Za-z]+\d*\.\d+)\b", line):
+            out.setdefault(token, verdict)
+        # Свободная форма привязывается к блоку, чей отчёт мы читаем: «гипотеза 2» в
+        # отчёте H15 — это H15.2, и требовать от автора переписать её как ID незачем.
+        if block_id:
+            for n in plain.findall(line):
+                out.setdefault(f"{block_id}.{n}", verdict)
     return out
 
 
@@ -736,7 +757,7 @@ def cmd_hypotheses(args) -> int:
     if not ids:
         print(f"{b['id']}: в манифесте нет раздела «Гипотезы» или он пуст")
         return 1
-    seen = verdicts_in(reports_text(b))
+    seen = verdicts_in(reports_text(b), b["id"])
     items = section_items(manifest.read_text(encoding="utf-8"), HYPOTHESIS_HEADING)
     for hid, text in zip(ids, items):
         mark = seen.get(hid, "БЕЗ ВЕРДИКТА")
@@ -917,7 +938,7 @@ def cmd_check(args) -> int:
             continue
         if stt not in ("verified", "closed"):
             continue
-        seen = verdicts_in(reports_text(b))
+        seen = verdicts_in(reports_text(b), b["id"])
         missing = [h for h in ids if h not in seen]
         if missing:
             problems.append(
