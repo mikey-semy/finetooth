@@ -198,9 +198,9 @@ example/journal.example.md        шапка дневника решений
 example/makefile-snippet.mk       цели make
 example/package-json-snippet.json то же для проекта на npm
 example/guard-grep.sh             движок греп-ворот: разрешение по номеру строки
-example/agent-banner.md
-docs/how-it-works.md          описание автора набора, как есть
-docs/comparison-with-practice.md     сверка метода с аудитом, индустрией и наукой
+example/agent-banner.md           баннер в корневой файл инструкций проекта
+docs/how-it-works.md              описание автора набора, как есть
+docs/comparison-with-practice.md  сверка метода с аудитом, индустрией и наукой
 ```
 
 Статусы блока: `todo → running → hunted → verified → triaged → fixing → closed` (плюс
