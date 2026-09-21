@@ -593,6 +593,44 @@ def cmd_import(args) -> int:
             die(f"{src.name} строка {n}: не JSON — {exc}")
 
     existing = findings()
+    if args.append:
+        # ДОБОР: находки, найденные поверх уже записанного. Штатный импорт заменяет
+        # находки блока целиком, и у блока, где часть уже починена, это стёрло бы отметки
+        # о починке — в соседнем проекте на этом обожглись и завели отдельный сводчик.
+        # Здесь только дописываем, со следующими свободными номерами блока.
+        taken = [
+            int(m.group(1))
+            for f in existing
+            if f.get("block") == args.block
+            and (m := re.fullmatch(rf"{re.escape(args.block)}-(\d+)", f.get("id", "")))
+        ]
+        next_n = max(taken, default=0) + 1
+        added = []
+        for f in incoming:
+            if f.get("id") and any(e.get("id") == f["id"] for e in existing):
+                die(f"находка {f['id']} уже в реестре — добор дописывает новое, "
+                    f"а не переписывает записанное")
+            f.setdefault("block", args.block)
+            if f["block"] != args.block:
+                die(f"в файле добора находка чужого блока {f['block']} — сведение остановлено")
+            f["id"] = f"{args.block}-{next_n:03d}"
+            next_n += 1
+            f.setdefault("status", "open")
+            f.setdefault("confidence", "plausible")
+            f.setdefault("fix_commit", None)
+            f.setdefault("dup_of", None)
+            f["imported_at"] = now()
+            f["code_sha"] = file_sha(f.get("file", ""))
+            added.append(f)
+        with FINDINGS_FILE.open("a", encoding="utf-8") as fh:
+            for f in added:
+                fh.write(json.dumps(f, ensure_ascii=False) + "\n")
+        # Файл добора помечается сведённым: повторный запуск не должен записать то же дважды.
+        src.rename(src.with_suffix(".jsonl.merged"))
+        print(f"{args.block}: дописано {len(added)} находок (добор)")
+        print(f"не забудь: {CLI} findings && {CLI} check")
+        return 0
+
     mine = [f for f in existing if f.get("block") == args.block]
     locked = [f for f in mine if f.get("status") not in ("open", "rejected")]
     if locked and not args.force:
@@ -1375,6 +1413,8 @@ def main() -> int:
     c = sub.add_parser("import", help="втянуть находки блока в общий реестр")
     c.add_argument("block")
     c.add_argument("--force", action="store_true", help="перезаписать находки блока, уже взятые в работу")
+    c.add_argument("--append", action="store_true",
+                   help="добор: дописать новые находки, не трогая уже записанные и починенные")
 
     c = sub.add_parser("set-finding", help="перевести находку: fixed / rejected / duplicate / deferred")
     c.add_argument("finding")

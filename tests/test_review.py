@@ -452,6 +452,44 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-status", "H1", "running")
         self.assertIn("пуст или почти пуст", self.s.run("check").stdout)
 
+    def test_добор_не_затирает_починенное(self):
+        """Штатный импорт заменяет находки блока целиком — у блока в работе это потеря."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/two.ts", "b\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self.s.manifest(hypotheses=1)
+        src = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        src.write_text(json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "первая находка", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n", encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/one.ts", "a\nпочинено\n")
+        self.s.commit("починка")
+        fix = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", fix)
+
+        # добор: агент нашёл новое поверх уже починенного
+        (self.s.root / "docs/review/reports/H1-dobor.jsonl").write_text(json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/two.ts", "claim": "находка добора", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n", encoding="utf-8")
+        src.write_text((self.s.root / "docs/review/reports/H1-dobor.jsonl").read_text(
+            encoding="utf-8"), encoding="utf-8")
+        out = self.s.run("import", "H1", "--append")
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+        rows = [json.loads(l) for l in
+                (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8").splitlines()
+                if l.strip()]
+        by_id = {r["id"]: r for r in rows}
+        self.assertEqual(len(rows), 2, "починенная находка должна остаться")
+        self.assertEqual(by_id["H1-001"]["status"], "fixed", "отметка о починке затёрта")
+        self.assertEqual(by_id["H1-002"]["claim"], "находка добора")
+        self.assertFalse(src.exists(), "файл добора обязан помечаться сведённым")
+
     # ----------------------------------------------------------------- корни и узды
 
     def _three_of_one_root(self) -> None:
