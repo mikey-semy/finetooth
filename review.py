@@ -668,7 +668,13 @@ def block_lines(pathspecs: list[str]) -> tuple[int, int]:
 # «pass или fail», а неприменимое закрывается письменным обоснованием, не молчанием.
 # Гипотезы манифеста — наши вопросы, и каждая обязана получить один из трёх вердиктов.
 HYPOTHESIS_HEADING = re.compile(r"^#{1,6}\s*.*гипотез", re.IGNORECASE)
-LIMITS_HEADING = re.compile(r"^#{1,6}\s*.*(ограничени|не проверено|не смотрел)", re.IGNORECASE)
+# Раздел про непросмотренное живёт под разными именами: «Ограничения охвата»,
+# «Не прочитано из блока», «Чего НЕ сделал». Требовать одного заголовка значит
+# заставлять переписывать готовый отчёт ради слова.
+LIMITS_HEADING = re.compile(
+    r"^#{1,6}\s*.*(ограничени|не проверено|не прочитано|не сделал|не смотрел|не дошёл)",
+    re.IGNORECASE,
+)
 LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)\S")
 # Порядок важен и словарь шире трёх слов: в живом отчёте пишут «гипотеза 2 опровергнута»
 # и «не подтвердилась», и это тоже проверка — просто с отрицательным исходом, который в
@@ -727,11 +733,20 @@ def verdicts_in(text: str, block_id: str = "") -> dict[str, str]:
             continue
         for token in re.findall(r"\b([A-Za-z]+\d*\.\d+)\b", line):
             out.setdefault(token, verdict)
+        if not block_id:
+            continue
         # Свободная форма привязывается к блоку, чей отчёт мы читаем: «гипотеза 2» в
         # отчёте H15 — это H15.2, и требовать от автора переписать её как ID незачем.
-        if block_id:
-            for n in plain.findall(line):
-                out.setdefault(f"{block_id}.{n}", verdict)
+        for n in plain.findall(line):
+            out.setdefault(f"{block_id}.{n}", verdict)
+        # Сводная таблица «| # | гипотеза | итог |» — как отчёт по гипотезам пишется
+        # чаще всего: номер стоит в первой ячейке, а вердикт в последней, и слова
+        # «гипотеза» в строке нет вовсе. Без разбора таблицы гейт требовал бы
+        # переписать готовый отчёт ради формы, ничего не добавив к его содержанию.
+        if line.lstrip().startswith("|"):
+            first = line.strip().strip("|").split("|")[0].strip()
+            if first.isdigit():
+                out.setdefault(f"{block_id}.{first}", verdict)
     return out
 
 
