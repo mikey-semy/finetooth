@@ -167,6 +167,32 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("npm test", out.stdout)
         self.assertNotIn("{{", out.stdout, "остались незакрытые подстановки")
 
+    def test_промпт_называет_объём_работы(self):
+        self.s.write("src/one.ts", "строка\n" * 100)
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertIn("Строк: 100", out.stdout)
+        self.assertIn("токенов", out.stdout, "порядок величины должен стоять в задании")
+        self.assertNotIn("больше, чем прочитывается", out.stdout)
+
+    def test_слишком_большой_блок_показывает_границу_бюджета_в_промпте(self):
+        """Невлезшее называется поимённо прямо в задании, а не остаётся догадкой агента."""
+        self.s.write("src/huge.ts", "строка\n" * 7000)
+        self.s.write("src/small.ts", "строка\n" * 10)
+        self.s.blocks(paths=["src/huge.ts", "src/small.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertIn("больше, чем прочитывается за сеанс", out.stdout)
+        self.assertIn("src/huge.ts", out.stdout)
+        self.assertIn("▲", out.stdout, "граница бюджета должна быть видна поимённо")
+        self.assertIn("ограничени", out.stdout.lower(),
+                      "промпт обязан сказать, куда записать непрочитанное")
+
     # ------------------------------------------------------------------ гипотезы
 
     def test_гипотеза_без_вердикта_роняет_проверку(self):
@@ -365,6 +391,95 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("findings")
         out = self.s.run("check")
         self.assertIn("указана строка 900", out.stdout)
+
+    # ----------------------------------------------------------------- корни и узды
+
+    def _three_of_one_root(self) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/two.ts", "b\n")
+        self.s.write("src/three.ts", "c\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts", "src/three.ts"])
+        self.s.manifest(hypotheses=1)
+        rows = [{"block": "H1", "severity": "medium", "confidence": "confirmed", "status": "open",
+                 "file": f, "root": "рукописная копия предиката",
+                 "claim": f"копия предиката в {f}", "scenario": "поведение расходится с каноном"}
+                for f in ("src/one.ts", "src/two.ts", "src/three.ts")]
+        (self.s.root / "docs/review/reports/H1-findings.jsonl").write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+
+    def test_третий_повтор_корня_требует_узду(self):
+        """Класс, повторившийся трижды, закрывается правилом, а не списком правок."""
+        self._three_of_one_root()
+        out = self.s.run("check")
+        self.assertIn("ни одной узды", out.stdout)
+        self.assertIn("рукописная копия предиката", out.stdout)
+        self.assertIn("--rule", out.stdout, "отказ обязан говорить, что делать")
+
+    def test_узда_записывается_на_весь_корень_сразу(self):
+        """Класс закрыт целиком или не закрыт: узда проставляется всем экземплярам."""
+        self._three_of_one_root()
+        out = self.s.run("set-finding", "H1-001", "fixed", "--commit", "abc1234",
+                         "--rule", "eslint: no-handwritten-predicate")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = [json.loads(l) for l in
+                (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8").splitlines()
+                if l.strip()]
+        self.assertTrue(all(r.get("rule") for r in rows), "узда должна стоять у всех трёх")
+        self.s.run("findings")
+        self.assertNotIn("ни одной узды", self.s.run("check").stdout)
+
+    def test_два_экземпляра_узду_ещё_не_требуют(self):
+        """Два повтора могут быть совпадением — гейт не должен шуметь раньше времени."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/two.ts", "b\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self.s.manifest(hypotheses=1)
+        rows = [{"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                 "file": f, "root": "один корень", "claim": f"экземпляр в {f}",
+                 "scenario": "сценарий"} for f in ("src/one.ts", "src/two.ts")]
+        (self.s.root / "docs/review/reports/H1-findings.jsonl").write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.assertNotIn("ни одной узды", self.s.run("check").stdout)
+
+    def test_отвергнутые_и_дубли_не_считаются_экземплярами_класса(self):
+        """Три записи — ещё не три экземпляра: отвергнутое и дубли класс не образуют."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/two.ts", "b\n")
+        self.s.write("src/three.ts", "c\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts", "src/three.ts"])
+        self.s.manifest(hypotheses=1)
+        rows = [
+            {"file": "src/one.ts", "status": "open", "confidence": "confirmed"},
+            {"file": "src/two.ts", "status": "rejected", "confidence": "rejected",
+             "reject_reason": "поведение корректно, проверено вызовом"},
+            {"file": "src/three.ts", "status": "duplicate", "dup_of": "H1-001",
+             "confidence": "confirmed"},
+        ]
+        full = [{"block": "H1", "severity": "medium", "root": "один корень",
+                 "claim": f"экземпляр в {r['file']}", "scenario": "сценарий", **r} for r in rows]
+        (self.s.root / "docs/review/reports/H1-findings.jsonl").write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in full) + "\n", encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertNotIn("ни одной узды", out.stdout,
+                         "живой экземпляр один — узда ещё не требуется")
+
+    def test_команда_roots_показывает_состояние_классов(self):
+        self._three_of_one_root()
+        out = self.s.run("roots")
+        self.assertIn("3 × рукописная копия предиката", out.stdout)
+        self.assertIn("УЗДЫ НЕТ", out.stdout)
 
     # --------------------------------------------------------------------- размер
 
