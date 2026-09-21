@@ -1,0 +1,146 @@
+{
+  "review_id": "2026-09-full-project-review",
+  "created": "2026-09-15",
+  "note": "Статическое определение блоков. Прогресс живёт в state.json, находки — в findings.jsonl. Порядок массива = порядок исполнения.",
+  "exclusions": [
+    {
+      "pattern": "package-lock.json",
+      "reason": "сгенерирован npm; версии проверяются в H11 через манифесты"
+    },
+    {
+      "pattern": "apps/backend/go.sum",
+      "reason": "сгенерирован Go; пины проверяются в H11"
+    },
+    {
+      "pattern": "apps/web/src/fonts",
+      "reason": "бинарные шрифты"
+    },
+    {
+      "pattern": "apps/web/public/icons",
+      "reason": "сгенерированные иконки PWA"
+    },
+    {
+      "pattern": "apps/mobile/public/icons",
+      "reason": "сгенерированные иконки PWA"
+    },
+    {
+      "pattern": "apps/web/public/sounds",
+      "reason": "бинарные звуки уведомлений"
+    },
+    {
+      "pattern": "apps/web/public/.gitkeep",
+      "reason": "пустышка"
+    },
+    {
+      "pattern": "LICENSE",
+      "reason": "текст лицензии"
+    },
+    {
+      "pattern": "docs/review",
+      "reason": "сам аппарат ревью, не предмет ревью"
+    }
+  ],
+  "blocks": [
+    {
+      "id": "H1",
+      "slug": "authz",
+      "phase": 1,
+      "title": "Авторизация: RBAC, IDOR, видимость данных",
+      "role": "security-authz",
+      "goal": "Найти любой путь, которым пользователь получает доступ к объекту или действию, на которое у него нет права: пропущенный гейт на маршруте, отсутствующая проверка владения в usecase, скоуп-фильтр, который не сужает выборку, и грант, потерянный на чистой установке.",
+      "paths": [
+        "apps/backend/internal/handler/router.go",
+        "apps/backend/internal/infrastructure/middleware/rbac.go",
+        "apps/backend/internal/guard",
+        "apps/backend/internal/domain/permission",
+        "apps/backend/internal/handler/v1/actor_permissions.go",
+        "apps/backend/internal/handler/v1/role_handler.go",
+        "apps/backend/internal/handler/v1/role_preset_handler.go",
+        "apps/backend/internal/usecase/role",
+        "apps/backend/internal/usecase/rolepreset",
+        "apps/backend/internal/infrastructure/repository/role_repo.go",
+        "apps/backend/internal/infrastructure/repository/role_preset_repo.go",
+        "apps/backend/internal/infrastructure/repository/user_role_repo.go",
+        "apps/backend/internal/domain/entity/role.go",
+        "apps/backend/internal/domain/entity/role_preset.go",
+        "database/seeds/001_roles_permissions.sql"
+      ],
+      "ref_paths": [
+        "apps/backend/internal/usecase",
+        "apps/backend/internal/infrastructure/repository",
+        "apps/backend/internal/handler/v1",
+        "database/migrations",
+        "apps/web/src/lib/permission-categories.ts",
+        "packages/shared/src/user-roles.ts"
+      ]
+    },
+    {
+      "id": "V1a",
+      "slug": "ticket-lifecycle",
+      "phase": 2,
+      "title": "Заявка: жизненный цикл, статусы, переходы",
+      "role": "domain-state-machine",
+      "goal": "Пройти заявку насквозь от создания до закрытия и найти состояния, в которые система может попасть и из которых не может выйти, а также переходы, которые выполняются в обход правил.",
+      "paths": [
+        "apps/backend/internal/usecase/ticket",
+        "apps/backend/internal/usecase/status",
+        "apps/backend/internal/usecase/workflow",
+        "apps/backend/internal/handler/v1/ticket_handler.go",
+        "apps/backend/internal/handler/v1/status_handler.go",
+        "apps/backend/internal/handler/v1/workflow_handler.go",
+        "apps/backend/internal/infrastructure/repository/status_repo.go",
+        "apps/backend/internal/infrastructure/repository/workflow_repo.go",
+        "apps/backend/internal/infrastructure/repository/ticket_assignee_repo.go",
+        "apps/backend/internal/domain/entity/ticket.go",
+        "apps/backend/internal/domain/entity/ticket_assignee.go",
+        "apps/backend/internal/domain/entity/workflow.go",
+        "apps/backend/internal/domain/service",
+        "apps/web/src/app/(app)/workflow",
+        "apps/web/src/components/ticket-*",
+        "apps/web/src/components/force-close-dialog.tsx",
+        "apps/web/src/components/force-close-dialog.test.tsx",
+        "apps/web/src/components/status-*",
+        "apps/web/src/lib/use-workflow-name.ts",
+        "apps/web/src/lib/use-workflow-name.test.tsx",
+        "apps/mobile/src/components/status-badge.tsx",
+        "apps/mobile/src/components/status-badge.test.tsx",
+        "apps/mobile/src/components/priority-badge.tsx",
+        "apps/mobile/src/components/priority-badge.test.tsx",
+        "apps/mobile/src/lib/use-ticket-status-change.ts",
+        "apps/mobile/src/lib/use-ticket-status-change.test.tsx",
+        "apps/mobile/src/app/(app)/work",
+        "packages/shared/src/ticket-actions.ts",
+        "packages/shared/src/ticket-actions.test.ts",
+        "packages/shared/src/ticket-history.ts",
+        "packages/shared/src/ticket-history.test.ts",
+        "packages/shared/src/postpone.ts",
+        "packages/shared/src/postpone.test.ts",
+        "packages/shared/src/sla.ts",
+        "packages/shared/src/sla.test.ts",
+        "apps/web/src/lib/postpone.ts",
+        "apps/web/src/app/(app)/tickets/[id]/_components/status-action-menu.tsx",
+        "apps/mobile/src/app/(app)/work/[id]/_components/status-action-sheet.tsx",
+        "apps/mobile/src/app/(app)/work/[id]/_components/status-action-sheet.test.tsx",
+        "apps/mobile/src/app/(app)/tickets/[id]/_components/reporter-actions.tsx",
+        "apps/mobile/src/app/(app)/tickets/[id]/_components/reporter-actions.test.tsx"
+      ],
+      "ref_paths": [
+        "apps/backend/internal/infrastructure/repository/ticket_repo.go",
+        "database/seeds/002_statuses_transitions.sql"
+      ]
+    },
+    {
+      "id": "E1",
+      "slug": "rbac-probe",
+      "phase": 3,
+      "title": "Живая проверка матрицы прав по API",
+      "role": "security-live",
+      "goal": "Построить скрипт, который дёргает каждый маршрут каждой ролью и сверяет ответ с ожидаемой матрицей прав. Остаётся в репозитории и ловит регрессии навсегда.",
+      "paths": [],
+      "ref_paths": [
+        "apps/backend/internal/handler/router.go",
+        "database/seeds/001_roles_permissions.sql"
+      ]
+    }
+  ]
+}
