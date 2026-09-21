@@ -22,8 +22,37 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+def repo_root() -> Path:
+    """Корень репозитория, в котором лежит инструмент.
+
+    Исходно корень вычислялся как `parents[2]` — «на два каталога выше файла»,
+    то есть инструмент обязан был лежать ровно в `scripts/review/`. Положенный
+    иначе, он не падал: он молча начинал искать `docs/review/` в чужом месте,
+    сообщая, что состояние «отсутствует — запусти init», и init создавал второй
+    комплект. Корень спрашиваем у git — тогда инструмент можно класть куда
+    удобно проекту.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if out:
+            return Path(out)
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return Path(__file__).resolve().parents[2]
+
+
+ROOT = repo_root()
 REVIEW = ROOT / "docs" / "review"
+
+# Как проект зовёт этот инструмент. Строка идёт только в подсказки: отказ обязан
+# говорить, что набрать, а набирают в каждом проекте своё — `make review-check`,
+# `npm run review:check`, `just review check`. Поменяйте здесь одну строку, а не
+# в десятке сообщений по файлу, где они и разъехались у предыдущей версии:
+# часть подсказок звала `make`, которого в проекте уже не было.
+CLI = "python3 scripts/review/review.py"
 BLOCKS_FILE = REVIEW / "blocks.json"
 STATE_FILE = REVIEW / "state.json"
 FINDINGS_FILE = REVIEW / "findings.jsonl"
@@ -67,7 +96,7 @@ def load_json(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        die(f"{path.relative_to(ROOT)} is missing — run `make review-init`")
+        die(f"{path.relative_to(ROOT)} is missing — run `{CLI} init`")
     except json.JSONDecodeError as exc:
         die(f"{path.relative_to(ROOT)} is not valid JSON: {exc}")
 
@@ -211,7 +240,7 @@ def cmd_status(args) -> int:
         cur = st["blocks"][nxt["id"]]["status"]
         role = "verify" if cur == "hunted" else "hunter"
         print(f"\nследующий блок: {nxt['id']} ({nxt['title']}) — статус {cur}")
-        print(f"промпт:  make review-prompt BLOCK={nxt['id']} ROLE={role}")
+        print(f"промпт:  {CLI} prompt {nxt['id']} --role {role}")
         print(f"манифест: docs/review/blocks/{nxt['id']}-{nxt['slug']}.md")
     else:
         print("\nвсе блоки закрыты — пора сводить находки и удалять docs/review/")
@@ -257,6 +286,18 @@ def cmd_coverage(args) -> int:
             print(f"  {f}")
         if len(unassigned) > args.limit:
             print(f"  … ещё {len(unassigned) - args.limit}")
+        # ⚠️ Отказ обязан говорить, ЧТО делать. Плоские каталоги разрезаны поимённо
+        # намеренно: пусть блок для нового файла выбирает человек, а не шаблон —
+        # молча подошедший глоб означает «файл числится прочитанным», хотя его никто
+        # не открывал. Но если отказ ограничится списком путей, человек допишет файл
+        # в первый попавшийся блок, и цена решения не окупится.
+        print(
+            "\nЧто делать: добавьте путь в блок, который отвечает ЗА ЭТУ ОБЛАСТЬ "
+            "(docs/review/blocks.json, поле paths).\n"
+            f"Список блоков с их вопросами: {CLI} status.\n"
+            "Выбор делает человек: файл, попавший в блок по совпадению шаблона, "
+            "будет числиться прочитанным, не будучи прочитанным."
+        )
         return 1
     print("\nнепокрытых файлов нет")
     return 0
@@ -339,6 +380,12 @@ def cmd_prompt(args) -> int:
         "{{FILE_COUNT}}": str(len(files)),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
+        # Имя проекта и его ворота — подстановки, а не текст в шаблоне. Скопированный
+        # без вычитки шаблон здоровался с агентом от имени ЧУЖОГО проекта, и это
+        # заметили не сразу: задание выглядело осмысленным целиком.
+        "{{PROJECT}}": defn.get("project", ROOT.name),
+        "{{GATES}}": "\n".join(f"- `{g}`" for g in defn.get("gates", []))
+        or '(в blocks.json не заполнено поле "gates" — впишите команды ворот проекта)',
     }
     for k, v in subs.items():
         body = body.replace(k, v)
@@ -428,7 +475,7 @@ def cmd_import(args) -> int:
             fh.write(json.dumps(f, ensure_ascii=False) + "\n")
     live = sum(1 for f in incoming if f.get("status") == "open")
     print(f"{args.block}: импортировано {len(incoming)} записей, из них открытых {live}")
-    print("не забудь: make review-findings && make review-check")
+    print(f"не забудь: {CLI} findings && {CLI} check")
     return 0
 
 
@@ -461,6 +508,49 @@ def cmd_set_status(args) -> int:
     return 0
 
 
+# -------------------------------------------------------------------- set-finding
+
+
+def cmd_set_finding(args) -> int:
+    """Перевести находку: починена, отвергнута, дубль, отложена.
+
+    Правило «findings.jsonl правится только инструментом» держалось на честном
+    слове: команды, которая проставляет `fixed` и коммит правки, в наборе не
+    было — реестр правили руками, а руками ставят и `fixed` без коммита, и
+    `rejected` без причины. Здесь перевод проходит те же проверки, что `check`,
+    и файл перегенерируется вместе с записью.
+    """
+    rows = findings()
+    hit = [f for f in rows if f.get("id") == args.finding]
+    if not hit:
+        die(f"находки {args.finding} нет в реестре")
+    f = hit[0]
+    if args.status not in FINDING_STATUS:
+        die(f"неизвестный статус {args.status}; известные: {', '.join(FINDING_STATUS)}")
+    if args.status == "fixed" and not args.commit:
+        die("`fixed` без коммита правки — нечем подтвердить, что дефект закрыт (--commit)")
+    if args.status == "rejected" and not (args.reason or f.get("reject_reason")):
+        die("`rejected` без причины отказа — следующее ревью найдёт то же самое (--reason)")
+    if args.status == "duplicate" and not (args.dup_of or f.get("dup_of")):
+        die("`duplicate` без указания, чего именно это дубль (--dup-of)")
+
+    f["status"] = args.status
+    if args.commit:
+        f["fix_commit"] = args.commit
+    if args.reason:
+        f["reject_reason"] = args.reason
+    if args.dup_of:
+        f["dup_of"] = args.dup_of
+    f["updated_at"] = now()
+
+    with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
+    print(f"{args.finding}: {args.status}")
+    return 0
+
+
 # ------------------------------------------------------------------------ findings
 
 
@@ -469,7 +559,7 @@ def render_findings_md(rows: list[dict]) -> str:
 
     Deliberately a PURE function of `findings.jsonl`: no wall clock, no counts
     of anything not in the rows. A generation stamp would make every run of
-    `make review-findings` a diff, so the file would arrive in review commits as
+    `review.py findings` a diff, so the file would arrive in review commits as
     noise and `review-check` could not tell a stale render from a fresh one by
     comparing content. When the file changed is a question git already answers.
     """
@@ -479,7 +569,7 @@ def render_findings_md(rows: list[dict]) -> str:
     out = [
         "# Находки ревью",
         "",
-        "> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `make review-findings`.",
+        f"> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `{CLI} findings`.",
         "> Не редактируй его руками — правь jsonl и перегенерируй.",
         "",
     ]
@@ -522,6 +612,35 @@ def cmd_findings(args) -> int:
 # --------------------------------------------------------------------------- check
 
 
+# Сколько строк агент реально прочитывает за один сеанс. Число не выдумано: соседний
+# проект прошёл блок в 1727 строк за шесть запусков и два часа, а блок в 87 тысяч строк
+# отчитался по 4 файлам из 14 — то есть соврал про охват, не нарушив ни одной проверки.
+# Порог с запасом втрое от прочитанного, чтобы ловить заведомо невыполнимое.
+READABLE_LINES = 6000
+
+
+def block_lines(pathspecs: list[str]) -> tuple[int, int]:
+    """Сколько файлов и строк в блоке — чтобы отличить блок от обещания.
+
+    ⚠️ ИСКЛЮЧЁННОЕ НЕ СЧИТАЕТСЯ. Порог мерил то, чего блок не владеет: `coverage_map`
+    вычитает `exclusions`, а этот счёт — нет, и H13 показывал 30 388 строк, из которых
+    19 181 приходились на `package-lock.json`, исключённый ещё при заведении блоков.
+    Число выходило втрое больше настоящего и требовало резать то, что и так не читают.
+    Считать надо ровно тот набор, который блок получит в работу.
+    """
+    defn = blocks()
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    files = git_files(pathspecs) - excluded
+    total = 0
+    for f in files:
+        try:
+            with open(ROOT / f, encoding="utf-8", errors="ignore") as fh:
+                total += sum(1 for _ in fh)
+        except OSError:
+            pass
+    return len(files), total
+
+
 def cmd_check(args) -> int:
     defn, st, rows = blocks(), state(), findings()
     idx = block_index(defn)
@@ -530,16 +649,33 @@ def cmd_check(args) -> int:
     # 1. state and definition agree
     for bid in idx:
         if bid not in st["blocks"]:
-            problems.append(f"{bid}: нет записи в state.json — запусти `make review-init`")
+            problems.append(f"{bid}: нет записи в state.json — запусти `{CLI} init`")
     for bid in st["blocks"]:
         if bid not in idx:
             problems.append(f"{bid}: есть в state.json, но отсутствует в blocks.json")
 
-    # 2. every block has a manifest
+    # Манифест спрашиваем только у блока, который ДОШЁЛ до работы: манифест пишется
+    # перед своим блоком, и требование его у всех сразу роняет проверку всегда —
+    # тогда она перестаёт быть гейтом и её начинают игнорировать.
+    for bid, b in idx.items():
+        if st["blocks"].get(bid, {}).get("status", "todo") == "todo":
+            continue
+        manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+        if not manifest.exists():
+            problems.append(f"{bid}: нет манифеста {manifest.relative_to(ROOT)}")
+
+    # Блок, объявленный проверенным или закрытым, обязан предъявить отчёт
+    # ВЕРИФИКАТОРА. Иначе `set-status closed` закрывает блок с одним отчётом
+    # охотника, и непроверенные находки исчезают из остатка работ.
     for b in defn["blocks"]:
-        m = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
-        if not m.exists():
-            problems.append(f"{b['id']}: нет манифеста {m.relative_to(ROOT)}")
+        stt = st["blocks"].get(b["id"], {}).get("status", "todo")
+        if stt in ("verified", "closed"):
+            rep = REVIEW / "reports" / f"{b['id']}-{b['slug']}.verify.md"
+            if not rep.exists():
+                problems.append(
+                    f"{b['id']}: статус {stt}, но отчёта верификатора нет — "
+                    f"проверка держится на честном слове"
+                )
 
     # 3. declared reports exist
     for bid, s in st["blocks"].items():
@@ -596,6 +732,15 @@ def cmd_check(args) -> int:
             problems.append(f"находка {fid}: помечена duplicate, но не указано, чего именно")
         if f.get("confidence") == "rejected" and f.get("status") == "open":
             problems.append(f"находка {fid}: отвергнута верификатором, но всё ещё open")
+        # Отвергнутая находка остаётся в реестре ради причины отказа — без неё
+        # запись бесполезна: следующее ревью найдёт то же самое и потратит время
+        # заново. Условие завершения ревью требовало причину у каждой отвергнутой
+        # с самого начала, а проверки на это не было, и поле оставалось пустым.
+        if f.get("status") == "rejected" and not (f.get("reject_reason") or "").strip():
+            problems.append(
+                f"находка {fid}: отвергнута, но причина отказа не записана — "
+                f"`{CLI} set-finding {fid} rejected --reason '...'`"
+            )
         if len(f.get("claim") or "") > CLAIM_MAX:
             problems.append(
                 f"находка {fid}: claim длиной {len(f['claim'])} символов при пределе {CLAIM_MAX} — "
@@ -612,7 +757,7 @@ def cmd_check(args) -> int:
     #    two is the newer truth.
     if FINDINGS_MD.exists():
         if FINDINGS_MD.read_text(encoding="utf-8") != render_findings_md(rows):
-            problems.append("findings.md разошёлся с findings.jsonl — запусти `make review-findings`")
+            problems.append(f"findings.md разошёлся с findings.jsonl — запусти `{CLI} findings`")
 
     # 8. a pattern that matches nothing silently shrinks a block's scope: the
     #    manifest promises to read code that was never handed to the agent.
@@ -628,7 +773,36 @@ def cmd_check(args) -> int:
     # 9. coverage
     _, _, unassigned = coverage_map()
     if unassigned:
-        problems.append(f"{len(unassigned)} файлов не принадлежат ни одному блоку — `make review-coverage`")
+        problems.append(f"{len(unassigned)} файлов не принадлежат ни одному блоку — `{CLI} coverage`")
+
+    # Карта покрытия на диске обязана совпадать с пересчётом: иначе потребитель
+    # читает вчерашнее владение и не узнаёт об этом. Ровно так она и разошлась —
+    # файлы самого ревью появились после того, как карту записали.
+    cov = REVIEW / "coverage.tsv"
+    if cov.exists():
+        owned, excluded, unassigned = coverage_map()
+        fresh = {f"{f}\t{','.join(bs)}" for f, bs in owned.items()}
+        on_disk = {
+            ln.rstrip("\n")
+            for ln in cov.read_text(encoding="utf-8").splitlines()[1:]
+            if ln.strip()
+        }
+        if fresh != on_disk:
+            problems.append(
+                f"coverage.tsv устарел: на диске {len(on_disk)} строк, "
+                f"пересчёт даёт {len(fresh)} — выполните `{CLI} coverage`"
+            )
+
+    # Блок, который за сеанс не прочитать, — обещание, а не блок.
+    for bid, b in idx.items():
+        if not b.get("paths"):
+            continue
+        n, lines = block_lines(b["paths"])
+        if lines > READABLE_LINES:
+            problems.append(
+                f"{bid}: {n} файлов, {lines} строк — за сеанс не прочитать "
+                f"(порог {READABLE_LINES}). Разрежьте блок, иначе отчёт соврёт про охват"
+            )
 
     if problems:
         print("ПРОВЕРКА НЕ ПРОЙДЕНА:\n")
@@ -654,7 +828,7 @@ def cmd_log(args) -> int:
 
 
 def main() -> int:
-    # `make review-prompt BLOCK=H1 ROLE=hunter | head` is the obvious way to look
+    # `review.py prompt H1 --role hunter | head` is the obvious way to look
     # at a prompt before handing it to an agent; without this, python answers a
     # closed pipe with a traceback and exit code 120, which reads like the tool
     # is broken.
@@ -686,6 +860,13 @@ def main() -> int:
     c.add_argument("block")
     c.add_argument("--force", action="store_true", help="перезаписать находки блока, уже взятые в работу")
 
+    c = sub.add_parser("set-finding", help="перевести находку: fixed / rejected / duplicate / deferred")
+    c.add_argument("finding")
+    c.add_argument("status")
+    c.add_argument("--commit", help="коммит правки; обязателен для fixed")
+    c.add_argument("--reason", help="причина отказа; обязательна для rejected")
+    c.add_argument("--dup-of", dest="dup_of", help="id находки, дублем которой она является")
+
     sub.add_parser("findings", help="перегенерировать findings.md из findings.jsonl")
     sub.add_parser("check", help="проверить непротиворечивость состояния")
 
@@ -698,6 +879,7 @@ def main() -> int:
         "init": cmd_init, "status": cmd_status, "next": cmd_next, "coverage": cmd_coverage,
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
+        "set-finding": cmd_set_finding,
     }[args.cmd](args)
 
 

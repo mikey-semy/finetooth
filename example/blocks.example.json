@@ -1,6 +1,13 @@
 {
   "review_id": "2026-09-full-project-review",
   "created": "2026-09-15",
+  "project": "проект автора",
+  "gates": [
+    "make api-lint",
+    "make api-test",
+    "make web-test",
+    "make migrate-validate"
+  ],
   "note": "Статическое определение блоков. Прогресс живёт в state.json, находки — в findings.jsonl. Порядок массива = порядок исполнения.",
   "exclusions": [
     {

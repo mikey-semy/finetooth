@@ -1,0 +1,10 @@
+{
+  "_комментарий": "Те же цели для проекта на npm. Вставляются в scripts из package.json. Аргументы после review-- : npm run review -- prompt H1 --role verify",
+  "scripts": {
+    "review": "python3 scripts/review/review.py",
+    "review:status": "python3 scripts/review/review.py status",
+    "review:coverage": "python3 scripts/review/review.py coverage",
+    "review:check": "python3 scripts/review/review.py check",
+    "review:findings": "python3 scripts/review/review.py findings"
+  }
+}
