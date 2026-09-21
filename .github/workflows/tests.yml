@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Тесты ставят набор во временные git-репозитории и дёргают командную строку,
+      # поэтому git обязан уметь коммитить: в чистом раннере имени и почты нет.
+      - name: Настроить git
+        run: |
+          git config --global user.email "tests@example.com"
+          git config --global user.name "review-kit tests"
+          git config --global init.defaultBranch master
+      - name: Прогнать тесты
+        run: python3 -m unittest discover -s tests -v
