@@ -1,6 +1,6 @@
 # review-kit — сплошное ревью кодовой базы силами ИИ-агентов
 
-[![tests](https://github.com/mikey-semy/review-kit/actions/workflows/tests.yml/badge.svg)](https://github.com/mikey-semy/review-kit/actions/workflows/tests.yml)
+![Три роли ревью: охотник ищет, исполнитель чинит, проверяющий сверяет](docs/banner.png)
 
 Оснастка, которая превращает просьбу «проведи ревью проекта» в работу с доказуемым
 результатом: код нарезан на блоки, каждый файл закреплён за блоком, состояние лежит на диске,
