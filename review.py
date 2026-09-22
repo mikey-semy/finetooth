@@ -199,7 +199,7 @@ def hypotheses_sha(b: dict) -> str:
     отпечаток файлов, и правка манифеста после проверки ловится так же, как правка кода.
     """
     m = manifest_path(b)
-    items = section_items(m.read_text(encoding="utf-8"), HYPOTHESIS_HEADING) if m.exists() else []
+    items = section_items_full(m.read_text(encoding="utf-8"), HYPOTHESIS_HEADING) if m.exists() else []
     norm = [re.sub(r"\s+", " ", LIST_MARK.sub("", t)).strip() for t in items]
     return hashlib.sha256("\n".join(norm).encode("utf-8")).hexdigest()[:16]
 
@@ -1147,6 +1147,8 @@ LIMITS_HEADING = re.compile(
     r"^#{1,6}\s*.*(ограничени|не проверено|не прочитано|не сделал|не смотрел|не дошёл)",
     re.IGNORECASE,
 )
+# Текст инструкции из шаблона охотника, скопированный в отчёт как есть, — не раскрытие.
+LIMITS_PLACEHOLDER = re.compile(r"обязательный раздел, даже если он короткий", re.IGNORECASE)
 LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)\S")
 LIST_MARK = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 # Порядок важен и словарь шире трёх слов: в живом отчёте пишут «гипотеза 2 опровергнута»
@@ -1218,6 +1220,46 @@ def line_verdict(line: str) -> str | None:
     low = line.lower()
     hits = [(i, v) for w, v in VERDICT_WORDS if (i := low.find(w)) >= 0]
     return min(hits)[1] if hits else None
+
+
+def section_body(md: str, heading: re.Pattern) -> list[str] | None:
+    """Строки раздела под первым совпавшим заголовком (подзаголовки — тоже содержание).
+
+    None — раздела нет вовсе; пустой список — заголовок есть, под ним ничего.
+    """
+    body: list[str] | None = None
+    depth = 0
+    fenced = False
+    for line in md.split("\n"):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        if not fenced and line.startswith("#"):
+            level = len(line) - len(line.lstrip("#"))
+            if body is None:
+                if heading.match(line):
+                    body, depth = [], level
+                continue
+            if level <= depth:
+                break
+        if body is not None:
+            body.append(line)
+    return body
+
+
+def section_items_full(md: str, heading: re.Pattern) -> list[str]:
+    """Пункты верхнего уровня ЦЕЛИКОМ — со строками продолжения и вложенными подпунктами.
+
+    Гипотеза редко умещается в строку: сценарий, граница, ожидание пишутся под ней с
+    отступом. Отпечаток по одной первой строке не замечал правки ровно этой части.
+    """
+    lines = section_body(md, heading) or []
+    marks = [(i, len(ln) - len(ln.lstrip())) for i, ln in enumerate(lines) if LIST_ITEM.match(ln)]
+    if not marks:
+        return []
+    top = min(ind for _, ind in marks)
+    starts = [i for i, ind in marks if ind == top]
+    return ["\n".join(lines[a:b]).strip()
+            for a, b in zip(starts, starts[1:] + [len(lines)])]
 
 
 def section_items(md: str, heading: re.Pattern) -> list[str]:
@@ -1667,11 +1709,18 @@ def cmd_check(args) -> int:
             continue
         hunter = REVIEW / "reports" / f"{b['id']}-{b['slug']}.hunter.md"
         if hunter.exists():
-            head = [ln for ln in hunter.read_text(encoding="utf-8").split("\n") if ln.startswith("#")]
-            if not any(LIMITS_HEADING.match(ln) for ln in head):
+            body = section_body(hunter.read_text(encoding="utf-8"), LIMITS_HEADING)
+            if body is None:
                 problems.append(
                     f"{b['id']}: в отчёте охотника нет раздела об ограничениях охвата — "
                     f"что осознанно не смотрел и почему"
+                )
+            elif not [ln for ln in body if ln.strip() and not LIMITS_PLACEHOLDER.search(ln)]:
+                # Заголовок без текста — та же тишина, что и без заголовка: не названо ни
+                # непросмотренное, ни то, что его нет.
+                problems.append(
+                    f"{b['id']}: раздел об ограничениях охвата в отчёте охотника пуст — "
+                    f"назовите непросмотренное или прямо скажите, что его нет"
                 )
 
     # Класс дефекта, повторившийся трижды, закрывается уздой, а не тремя правками: иначе
