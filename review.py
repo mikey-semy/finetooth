@@ -18,6 +18,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import signal
 import subprocess
@@ -118,11 +119,13 @@ def save_json(path: Path, data) -> None:
 
 # Режимы в индексе git, которые выглядят как файлы, но файлами не являются.
 # Проверено экспериментом: подмодуль (160000) в `ls-files` — одна запись, а на диске
-# каталог, и счётчик строк падает на нём с IsADirectoryError. Симлинк (120000) читается
-# как обычный файл, и содержимое цели считается ДВАЖДЫ — второй раз под именем ссылки.
-# В наших трёх проектах ни того, ни другого нет, поэтому и не всплывало; в первом же
-# чужом репозитории знаменатель покрытия поехал бы молча.
-NOT_A_FILE_MODES = ("160000", "120000")
+# каталог, и счётчик строк падает на нём с IsADirectoryError. Его код живёт в другом
+# репозитории и ревьюится там.
+# Симлинк (120000) — НЕ исключается: ссылку можно перенаправить, и это правка, которую
+# кто-то обязан увидеть. Исключение убирало его отовсюду — ни владельца, ни «непокрытого»,
+# ни отпечатка. Двойного счёта при этом нет: строки берутся из индекса, где у симлинка
+# лежит текст ссылки, а не содержимое цели; отпечаток — тоже от текста ссылки.
+NOT_A_FILE_MODES = ("160000",)
 
 
 def listed(pathspecs: list[str] | None) -> set[str]:
@@ -163,6 +166,10 @@ def file_sha(rel: str) -> str | None:
     if not rel or rel.startswith("("):
         return None
     p = ROOT / rel
+    if p.is_symlink():
+        # `hash-object` прошёл бы по ссылке и хешировал цель: перенаправление на файл с
+        # тем же содержимым прошло бы незамеченным. Хешируется то, чем симлинк и является.
+        return "link:" + hashlib.sha1(os.readlink(p).encode("utf-8")).hexdigest()
     if not p.is_file():
         return None
     out = subprocess.run(["git", "-C", str(ROOT), "hash-object", "--", rel],
@@ -664,11 +671,14 @@ def cmd_import(args) -> int:
             and (m := re.fullmatch(rf"{re.escape(args.block)}-(\d+)", f.get("id", "")))
         ]
         next_n = max(taken, default=0) + 1
+        known = {e.get("id") for e in existing}
         added = []
         for f in incoming:
-            if f.get("id") and any(e.get("id") == f["id"] for e in existing):
-                die(f"находка {f['id']} уже в реестре — добор дописывает новое, "
-                    f"а не переписывает записанное")
+            # Файл блока после прошлого импорта хранит уже записанные находки с номерами —
+            # добор дописывает к нему новые строки. Записанное пропускается: реестр о нём
+            # знает больше (статус, починка), и файл блока его не перебивает.
+            if f.get("id") in known:
+                continue
             f.setdefault("block", args.block)
             if f["block"] != args.block:
                 die(f"в файле добора находка чужого блока {f['block']} — сведение остановлено")
@@ -684,8 +694,13 @@ def cmd_import(args) -> int:
         with FINDINGS_FILE.open("a", encoding="utf-8") as fh:
             for f in added:
                 fh.write(json.dumps(f, ensure_ascii=False) + "\n")
-        # Файл добора помечается сведённым: повторный запуск не должен записать то же дважды.
-        src.rename(src.with_suffix(".jsonl.merged"))
+        # Номера вписываются обратно в файл блока — как при штатном импорте. Повторный
+        # запуск их узнает и ничего не допишет; переименовывать файл «сведённым» не нужно,
+        # а это переименование уносило файл блока целиком.
+        src.write_text(
+            "\n".join(json.dumps(f, ensure_ascii=False) for f in incoming) + "\n",
+            encoding="utf-8",
+        )
         print(f"{args.block}: дописано {len(added)} находок (добор)")
         print(f"не забудь: {CLI} findings && {CLI} check")
         return 0
