@@ -264,7 +264,7 @@ review.py                         инструмент: version, init, status, c
                                   set-status, set-finding, hypotheses, roots, restamp,
                                   backfill, findings, check, log
 install.py                        установка в проект: ставит и настраивает CLI
-tests/test_review.py              тесты инструмента и установщика: 60 сценариев
+tests/test_review.py              тесты инструмента и установщика: 62 сценария
 prompts/hunter.md                 охотник: читает файлы блока и выдвигает находки
 prompts/verify.md                 проверяющий: свой независимый проход, три вердикта
 prompts/fix.md                    исполнитель: чинит, доказывает тестом, гоняет ворота
