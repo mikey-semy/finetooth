@@ -700,6 +700,7 @@ def cmd_import(args) -> int:
         )
 
     kept = [f for f in existing if f.get("block") != args.block]
+    before = {f["id"]: f for f in mine if f.get("id")}
     width = 3
     for i, f in enumerate(incoming, 1):
         f.setdefault("block", args.block)
@@ -713,7 +714,16 @@ def cmd_import(args) -> int:
         # находку чинят, статус не переводят, и следующий проход спорит с описанием кода,
         # которого уже нет. Так и вышло — два проверяющих независимо «опровергли» две
         # находки, закрытые накануне. Отпечаток превращает это из спора в вопрос.
-        f["code_sha"] = file_sha(f.get("file", ""))
+        #
+        # Повторный импорт отпечаток уже известной находки НЕ переснимает: иначе он молча
+        # признавал бы текущий код совпадающим с описанием, и устаревшая находка пропадала
+        # из `check` без перепроверки. Подтвердить её на новом коде — `restamp <ID>`.
+        # Находка, переехавшая в другой файл, — новое утверждение, и отпечаток новый.
+        prev = before.get(f["id"])
+        if prev and prev.get("code_sha") and prev.get("file") == f.get("file"):
+            f["code_sha"] = prev["code_sha"]
+        else:
+            f["code_sha"] = file_sha(f.get("file", ""))
         if f.get("confidence") == "rejected":
             f["status"] = "rejected"
     merged = kept + incoming

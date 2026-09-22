@@ -860,6 +860,35 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("изменился с момента импорта", out.stdout)
         self.assertIn("set-finding", out.stdout, "отказ обязан говорить, что делать")
 
+    def test_повторный_импорт_не_переснимает_отпечаток_находки(self):
+        """Иначе устаревшая находка пропадала из check без всякой перепроверки."""
+        self.s.write("src/one.ts", "было\n")
+        self.s.write("src/two.ts", "другое\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "тут дефект",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/one.ts", "стало\n")
+        self.s.commit("правка под находкой")
+        self.assertIn("изменился с момента импорта", self.s.run("check").stdout)
+
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        self.assertIn("изменился с момента импорта", self.s.run("check").stdout,
+                      "повторный импорт не перепроверка")
+
+        src = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        row = json.loads(src.read_text(encoding="utf-8").splitlines()[0])
+        row["file"] = "src/two.ts"
+        src.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.s.run("import", "H1")
+        self.assertNotIn("изменился с момента импорта", self.s.run("check").stdout,
+                         "находка про другой файл — новое утверждение, отпечаток новый")
+
     def test_несуществующая_строка_в_находке_роняет_проверку(self):
         self.s.write("src/one.ts", "одна\nдве\n")
         self.s.blocks(paths=["src/one.ts"])
