@@ -186,6 +186,30 @@ def block_sha(b: dict) -> str:
     return h.hexdigest()[:16]
 
 
+def manifest_path(b: dict) -> Path:
+    return REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+
+
+def hypotheses_sha(b: dict) -> str:
+    """Отпечаток ТЕКСТА гипотез, а не их числа.
+
+    Идентификатор гипотезы — её порядковый номер, и номер переживает правку: переставь
+    пункты или замени вопрос другим того же количества — вердикт «H1.2 проверена», данный
+    старому вопросу, молча засчитается новому. Отпечаток текста снимается там же, где
+    отпечаток файлов, и правка манифеста после проверки ловится так же, как правка кода.
+    """
+    m = manifest_path(b)
+    items = section_items(m.read_text(encoding="utf-8"), HYPOTHESIS_HEADING) if m.exists() else []
+    norm = [re.sub(r"\s+", " ", LIST_MARK.sub("", t)).strip() for t in items]
+    return hashlib.sha256("\n".join(norm).encode("utf-8")).hexdigest()[:16]
+
+
+def stamp(b: dict, s: dict) -> None:
+    """Записать, ЧТО просмотрено: файлы блока и вопросы, на которые отвечали."""
+    s["reviewed_sha"] = block_sha(b)
+    s["hypotheses_sha"] = hypotheses_sha(b)
+
+
 def changed_since_review(b: dict, seen: str) -> bool:
     return block_sha(b) != seen
 
@@ -523,7 +547,7 @@ def cmd_prompt(args) -> int:
     if args.block not in idx:
         die(f"unknown block {args.block}; known: {', '.join(idx)}")
     b = idx[args.block]
-    manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+    manifest = manifest_path(b)
     if not manifest.exists():
         die(f"manifest missing: {manifest.relative_to(ROOT)}")
     template = REVIEW / "prompts" / f"{args.role}.md"
@@ -724,7 +748,7 @@ def cmd_set_status(args) -> int:
     # и любая смена статуса молча признавала бы изменённый код просмотренным, обходя
     # `restamp`, который существует ровно для того, чтобы это говорилось под запись.
     if args.status in ("verified", "closed"):
-        s["reviewed_sha"] = block_sha(block_index(defn)[args.block])
+        stamp(block_index(defn)[args.block], s)
     if args.report:
         for r in args.report:
             if r not in s["reports"]:
@@ -762,6 +786,8 @@ def cmd_set_finding(args) -> int:
         die("`rejected` без причины отказа — следующее ревью найдёт то же самое (--reason)")
     if args.status == "duplicate" and not (args.dup_of or f.get("dup_of")):
         die("`duplicate` без указания, чего именно это дубль (--dup-of)")
+    if args.rule and (why := rule_problem(args.rule)):
+        die(why)
 
     f["status"] = args.status
     if args.commit:
@@ -904,7 +930,7 @@ def cmd_restamp(args) -> int:
     s = st["blocks"].get(args.block, {})
     if s.get("status") not in POST_VERIFY:
         die(f"{args.block} в статусе {s.get('status', 'todo')} — штамповать нечего")
-    s["reviewed_sha"] = block_sha(idx[args.block])
+    stamp(idx[args.block], s)
     s["restamped_at"] = now()
     st["updated_at"] = now()
     save_json(STATE_FILE, st)
@@ -956,6 +982,29 @@ def cmd_roots(args) -> int:
     return 0
 
 
+def rule_problem(rule: str) -> str | None:
+    """Узда обязана существовать: опечатка в пути делала класс «закрытым» без правила.
+
+    Форма `репозиторий:путь/к/файлу` — узда в соседнем репозитории; проверяется только
+    форма, как у внешнего коммита починки. Суффиксы `::тест`, `#якорь` и `:строка`
+    отрезаются. Правило линтера указывается файлом, где оно включено.
+    """
+    rule = (rule or "").strip()
+    head, sep, tail = rule.partition(":")
+    # Внешняя форма узнаётся строго: путь сразу после двоеточия и похожий на файл. Иначе
+    # «eslint: no-x» — имя правила без файла — проходило бы как репозиторий «eslint».
+    if sep and re.fullmatch(r"[\w-]+", head) and re.fullmatch(r"[^\s:]*[./][^\s]*", tail):
+        return None
+    path = re.split(r"::|#", rule)[0]
+    path = re.sub(r":\d+$", "", path).strip().rstrip("/")
+    if not path:
+        return "узда пустая"
+    if not git_files([path]):
+        return (f"узда «{rule}»: в репозитории нет такого файла — опечатка в пути или "
+                f"узду удалили; укажите путь к тесту, правилу линтера или гейту CI")
+    return None
+
+
 def cmd_backfill(args) -> int:
     """Проставить отпечатки там, где их нет: блокам после проверки и открытым находкам.
 
@@ -971,8 +1020,11 @@ def cmd_backfill(args) -> int:
                           capture_output=True, text=True).stdout.strip() or "?"
     stamped_blocks, stamped_findings = [], []
     for bid, s in st["blocks"].items():
-        if s.get("status") in POST_VERIFY and not s.get("reviewed_sha") and bid in idx:
-            s["reviewed_sha"] = block_sha(idx[bid])
+        if (s.get("status") in POST_VERIFY and bid in idx
+                and not (s.get("reviewed_sha") and s.get("hypotheses_sha"))):
+            b = idx[bid]
+            s.setdefault("reviewed_sha", block_sha(b))
+            s.setdefault("hypotheses_sha", hypotheses_sha(b))
             s["restamped_at"] = now()
             stamped_blocks.append(bid)
     for f in rows:
@@ -1019,6 +1071,7 @@ LIMITS_HEADING = re.compile(
     re.IGNORECASE,
 )
 LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)\S")
+LIST_MARK = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 # Порядок важен и словарь шире трёх слов: в живом отчёте пишут «гипотеза 2 опровергнута»
 # и «не подтвердилась», и это тоже проверка — просто с отрицательным исходом, который в
 # ревью ценен не меньше. Гейт обязан понимать язык, которым отчёты пишутся на самом деле,
@@ -1053,8 +1106,12 @@ def section_items(md: str, heading: re.Pattern) -> list[str]:
                 break
             continue
         if depth is not None and LIST_ITEM.match(line):
-            items.append(line.strip())
-    return items
+            items.append((len(line) - len(line.lstrip()), line.strip()))
+    # Считаются пункты ВЕРХНЕГО уровня: вложенный список под гипотезой — её детали, а не
+    # новая гипотеза. Иначе подпункт получал свой номер, промпт о нём не спрашивал, и
+    # проверка требовала вердикт вопросу, которого никто не задавал.
+    top = min((ind for ind, _ in items), default=0)
+    return [text for ind, text in items if ind == top]
 
 
 def hypotheses(block_id: str, manifest: Path) -> list[str]:
@@ -1123,7 +1180,7 @@ def cmd_hypotheses(args) -> int:
     if args.block not in idx:
         die(f"unknown block {args.block}")
     b = idx[args.block]
-    manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+    manifest = manifest_path(b)
     ids = hypotheses(b["id"], manifest)
     if not ids:
         print(f"{b['id']}: в манифесте нет раздела «Гипотезы» или он пуст")
@@ -1163,7 +1220,7 @@ def cmd_check(args) -> int:
     for bid, b in idx.items():
         if st["blocks"].get(bid, {}).get("status", "todo") == "todo":
             continue
-        manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+        manifest = manifest_path(b)
         if not manifest.exists():
             problems.append(f"{bid}: нет манифеста {manifest.relative_to(ROOT)}")
         elif len(manifest.read_text(encoding="utf-8").strip()) < 200:
@@ -1370,7 +1427,7 @@ def cmd_check(args) -> int:
         stt = st["blocks"].get(b["id"], {}).get("status", "todo")
         if stt in ("todo", "blocked"):
             continue
-        manifest = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+        manifest = manifest_path(b)
         ids = hypotheses(b["id"], manifest)
         if not ids:
             problems.append(
@@ -1411,6 +1468,17 @@ def cmd_check(args) -> int:
                 f"версии кода; перепройдите либо, если правки к предмету блока не относятся, "
                 f"перештампуйте: `{CLI} restamp {b['id']}`"
             )
+        if not s.get("hypotheses_sha"):
+            problems.append(
+                f"{b['id']}: нет отпечатка гипотез — правка манифеста после проверки не "
+                f"отслеживается; `{CLI} backfill`"
+            )
+        elif s["hypotheses_sha"] != hypotheses_sha(b):
+            problems.append(
+                f"{b['id']}: гипотезы манифеста изменились после проверки — вердикты по "
+                f"номерам даны прежним вопросам; перепроверьте новые либо, если смысл не "
+                f"менялся, перештампуйте: `{CLI} restamp {b['id']}`"
+            )
 
     # Раздел про ограничения охвата обязателен: полноту доказывают перечислением
     # НЕпросмотренного, и в аудиторских отчётах это отдельная глава. «Находок нет»
@@ -1433,7 +1501,11 @@ def cmd_check(args) -> int:
     for root, items in roots_of(rows).items():
         if len(items) < ROOT_RULE_AT:
             continue
-        if any((f.get("rule") or "").strip() for f in items):
+        rules = {(f.get("rule") or "").strip() for f in items} - {""}
+        if rules:
+            for r in sorted(rules):
+                if why := rule_problem(r):
+                    problems.append(f"корень «{root}»: {why}")
             continue
         ids = ", ".join(f.get("id", "?") for f in items[:4])
         problems.append(

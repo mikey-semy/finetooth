@@ -470,6 +470,42 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("изменились после просмотра", out)
         self.assertIn("изменился с момента импорта", out)
 
+    def test_правка_гипотез_после_проверки_роняет_проверку(self):
+        """Вердикт по номеру, данный старому вопросу, не должен засчитываться новому."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=2)
+        self.s.reports(hunter=FULL_HUNTER.replace("не проверена: стенд не поднимается",
+                                                  "проверена: да"),
+                       verify="# проверяющий\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+
+        m = self.s.root / "docs/review/blocks/H1-demo.md"
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "2. Гипотеза номер 2:", "2. Совсем другой вопрос:"), encoding="utf-8")
+        out = self.s.run("check").stdout
+        self.assertIn("гипотезы манифеста изменились", out)
+        self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
+        self.assertNotIn("гипотезы манифеста изменились", self.s.run("check").stdout)
+
+    def test_подпункт_гипотезы_не_становится_гипотезой(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=2)
+        m = self.s.root / "docs/review/blocks/H1-demo.md"
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "на граничных значениях.\n2.",
+            "на граничных значениях.\n   - подпункт: пустая строка\n   - [ ] ноль\n2.", 1),
+            encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("hypotheses", "H1")
+        self.assertIn("закрыто 0/2", out.stdout, out.stdout)
+
     def test_штамповать_непройденный_блок_нельзя(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -732,8 +768,10 @@ class ReviewToolTest(unittest.TestCase):
     def test_узда_записывается_на_весь_корень_сразу(self):
         """Класс закрыт целиком или не закрыт: узда проставляется всем экземплярам."""
         self._three_of_one_root()
+        self.s.write("eslint.config.mjs", "export default [];\n")
+        self.s.commit("узда")
         out = self.s.run("set-finding", "H1-001", "fixed", "--commit", "abc1234",
-                         "--rule", "eslint: no-handwritten-predicate")
+                         "--rule", "eslint.config.mjs")
         self.assertEqual(out.returncode, 0, out.stderr)
         rows = [json.loads(l) for l in
                 (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8").splitlines()
@@ -741,6 +779,30 @@ class ReviewToolTest(unittest.TestCase):
         self.assertTrue(all(r.get("rule") for r in rows), "узда должна стоять у всех трёх")
         self.s.run("findings")
         self.assertNotIn("ни одной узды", self.s.run("check").stdout)
+
+    def test_узда_обязана_существовать(self):
+        """Опечатка в пути делала класс «закрытым» без всякого правила."""
+        self._three_of_one_root()
+        for bogus in ("tests/нет-такого.test.ts", "eslint: no-handwritten-predicate",
+                      "eslint:no-handwritten-predicate"):
+            out = self.s.run("set-finding", "H1-001", "open", "--rule", bogus)
+            self.assertNotEqual(out.returncode, 0, bogus)
+        self.assertEqual(self.s.run("set-finding", "H1-001", "open", "--rule",
+                                    "ядро:tests/predicate.rs").returncode, 0,
+                         "узда в соседнем репозитории проверяется только на форму")
+
+        self.s.write("tests/predicate.test.ts", "it('x', () => {});\n")
+        self.s.commit("узда")
+        out = self.s.run("set-finding", "H1-001", "open", "--rule",
+                         "tests/predicate.test.ts::канон один")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.s.run("findings")
+        self.assertNotIn("узда «", self.s.run("check").stdout)
+
+        self.s.git("rm", "-q", "tests/predicate.test.ts")
+        self.s.commit("узду удалили")
+        self.assertIn("нет такого файла", self.s.run("check").stdout,
+                      "удалённая узда не должна держать класс закрытым")
 
     def test_два_экземпляра_узду_ещё_не_требуют(self):
         """Два повтора могут быть совпадением — гейт не должен шуметь раньше времени."""
