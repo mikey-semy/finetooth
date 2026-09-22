@@ -162,8 +162,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.assertNotIn("coverage.tsv устарел", self.s.run("check").stdout)
 
-    def test_подмодули_и_симлинки_не_считаются_файлами(self):
-        """`ls-files` печатает и то, и другое; открыть нельзя, а симлинк считается дважды."""
+    def test_подмодуль_не_файл_а_симлинк_файл_без_двойного_счёта(self):
+        """Подмодуль не открыть; симлинк — правка, которую надо видеть, но считать один раз."""
         self.s.write("src/real.ts", "одна\nдве\nтри\n")
         (self.s.root / "src" / "link.ts").symlink_to("real.ts")
         sub = self.s.root / "vendor"
@@ -182,13 +182,33 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         out = self.s.run("coverage")
-        self.assertNotIn("link.ts", out.stdout, "симлинк — не файл блока")
         self.assertNotIn("lib", out.stdout.replace("библиотек", ""), "подмодуль — не файл")
+        cov = (self.s.root / "docs/review/coverage.tsv").read_text(encoding="utf-8")
+        self.assertIn("src/link.ts\tH1", cov, "симлинк принадлежит блоку: его можно перенаправить")
 
-        # и главное: счётчик не падает и не считает содержимое цели дважды
+        # счётчик не падает и не считает содержимое цели дважды: у ссылки одна строка — её текст
         prompt = self.s.run("prompt", "H1", "--role", "hunter")
         self.assertEqual(prompt.returncode, 0, prompt.stderr)
-        self.assertIn("Строк: 3", prompt.stdout, "три строки одного файла, а не шесть")
+        self.assertIn("Строк: 4", prompt.stdout, "три строки файла и одна строка ссылки, а не шесть")
+
+    def test_перенаправленный_симлинк_меняет_отпечаток(self):
+        """Цель с тем же содержимым: хеш по ссылке прошёл бы мимо."""
+        self.s.write("src/a.ts", "одно и то же\n")
+        self.s.write("src/b.ts", "одно и то же\n")
+        (self.s.root / "src" / "link.ts").symlink_to("a.ts")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+        (self.s.root / "src" / "link.ts").unlink()
+        (self.s.root / "src" / "link.ts").symlink_to("b.ts")
+        self.s.commit("перенаправили ссылку")
+        self.assertIn("изменились после просмотра", self.s.run("check").stdout)
 
     def test_файл_удалённый_с_диска_но_живой_в_индексе_не_роняет_счёт(self):
         self.s.write("src/one.ts", "одна\nдве\n")
@@ -1025,13 +1045,12 @@ class ReviewToolTest(unittest.TestCase):
         fix = self.s.git("rev-parse", "HEAD").stdout.strip()
         self.s.run("set-finding", "H1-001", "fixed", "--commit", fix)
 
-        # добор: агент нашёл новое поверх уже починенного
-        (self.s.root / "docs/review/reports/H1-dobor.jsonl").write_text(json.dumps({
-            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
-            "file": "src/two.ts", "claim": "находка добора", "scenario": "сценарий"},
-            ensure_ascii=False) + "\n", encoding="utf-8")
-        src.write_text((self.s.root / "docs/review/reports/H1-dobor.jsonl").read_text(
-            encoding="utf-8"), encoding="utf-8")
+        # добор: агент дописал новое в тот же файл блока, поверх уже импортированного
+        with src.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/two.ts", "claim": "находка добора", "scenario": "сценарий"},
+                ensure_ascii=False) + "\n")
         out = self.s.run("import", "H1", "--append")
         self.assertEqual(out.returncode, 0, out.stderr)
 
@@ -1042,7 +1061,11 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(len(rows), 2, "починенная находка должна остаться")
         self.assertEqual(by_id["H1-001"]["status"], "fixed", "отметка о починке затёрта")
         self.assertEqual(by_id["H1-002"]["claim"], "находка добора")
-        self.assertFalse(src.exists(), "файл добора обязан помечаться сведённым")
+        self.assertEqual([json.loads(l)["id"] for l in src.read_text(encoding="utf-8").splitlines()],
+                         ["H1-001", "H1-002"], "номера вписаны обратно в файл блока")
+        again = self.s.run("import", "H1", "--append")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("дописано 0", again.stdout, "повторный добор ничего не дописывает")
 
     def test_порог_читаемости_задаётся_проектом(self):
         """6000 строк выведены из TypeScript; в другом языке плотность смысла другая."""
