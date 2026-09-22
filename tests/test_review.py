@@ -293,6 +293,25 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("check")
         self.assertIn("ограничени", out.stdout.lower())
 
+    def test_пустой_раздел_ограничений_роняет_проверку(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        for limits in ("## Ограничения охвата\n\n",
+                       "## Ограничения охвата\n**Обязательный раздел, даже если он короткий.**\n"):
+            self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n" + limits
+                                  + "## Прочее\nтекст другого раздела\n", verify=FULL_VERIFY)
+            self.assertIn("раздел об ограничениях охвата в отчёте охотника пуст",
+                          self.s.run("check").stdout, limits)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\n### Не дошёл\nдо почтовых шаблонов\n",
+                       verify=FULL_VERIFY)
+        self.assertNotIn("ограничениях охвата", self.s.run("check").stdout)
+
     def test_живой_язык_отчёта_понимается(self):
         """«Гипотеза 2 не подтвердилась» и таблица «| 1 | … | опровергнута |» — тоже вердикты."""
         self.s.write("src/one.ts", "a\n")
@@ -515,6 +534,27 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("гипотезы манифеста изменились", out)
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
         self.assertNotIn("гипотезы манифеста изменились", self.s.run("check").stdout)
+
+    def test_правка_продолжения_гипотезы_ловится(self):
+        """Сценарий и ожидание пишутся под гипотезой с отступом — это тоже её текст."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        m = self.s.root / "docs/review/blocks/H1-demo.md"
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "на граничных значениях.\n",
+            "на граничных значениях.\n   Ожидание: пустая строка отвергается.\n", 1),
+            encoding="utf-8")
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "пустая строка отвергается", "пустая строка принимается"), encoding="utf-8")
+        self.assertIn("гипотезы манифеста изменились", self.s.run("check").stdout)
 
     def test_подпункт_гипотезы_не_становится_гипотезой(self):
         self.s.write("src/one.ts", "a\n")
