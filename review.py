@@ -88,6 +88,11 @@ ROLES = ["hunter", "verify", "fix"]
 # died mid-flight rather than that an agent is still reading.
 STALE_RUNNING_HOURS = 24
 
+# Блок, прошедший проверку, не перестаёт быть проверенным при переходе дальше. Пока
+# условие было «verified или closed», перевод в triaged зеленил гейт гипотез и гейт
+# ограничений охвата, ничего не добавив: статус менялся, пробел оставался.
+POST_VERIFY = ("verified", "triaged", "fixing", "closed")
+
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -381,7 +386,13 @@ def stale_tree() -> tuple[float, str] | None:
                              capture_output=True, text=True)
         return int(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
 
-    mine, theirs = stamp("HEAD"), stamp(ref)
+    # Считаем от ТОЧКИ РАСХОЖДЕНИЯ, а не от своей вершины: свежий коммит в давно
+    # отведённой ветке делает её вершину новее удалённой и прячет то, что ветка не
+    # содержит ни одного чужого исправления за всё это время.
+    base = subprocess.run(["git", "-C", str(ROOT), "merge-base", "HEAD", ref],
+                          capture_output=True, text=True)
+    anchor = base.stdout.strip() if base.returncode == 0 and base.stdout.strip() else "HEAD"
+    mine, theirs = stamp(anchor), stamp(ref)
     if mine is None or theirs is None:
         return None
     days = (theirs - mine) / 86400
@@ -407,7 +418,7 @@ def head_commit() -> str:
 def cmd_coverage(args) -> int:
     owned, excluded, unassigned = coverage_map()
     commit = head_commit()
-    lines = [f"# коммит {commit}", "file\tblocks"]
+    lines = [f"# собрано от {commit}; состав файлов сверяется при проверке", "file\tblocks"]
     for f in sorted(owned):
         lines.append(f"{f}\t{','.join(owned[f])}")
     COVERAGE_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -726,7 +737,7 @@ def cmd_set_status(args) -> int:
     # вечно: файлы блока перепишут, а блок так и будет числиться закрытым — просмотренным
     # оказался другой текст. Форма взята у doorstop, где у требования стоит поле `reviewed`
     # с хешем содержимого, и правка текста сама переводит его в «непросмотренные изменения».
-    if args.status in ("verified", "closed"):
+    if args.status in POST_VERIFY:
         s["reviewed_sha"] = block_sha(block_index(defn)[args.block])
     if args.report:
         for r in args.report:
@@ -905,7 +916,7 @@ def cmd_restamp(args) -> int:
     if args.block not in idx:
         die(f"unknown block {args.block}")
     s = st["blocks"].get(args.block, {})
-    if s.get("status") not in ("verified", "closed"):
+    if s.get("status") not in POST_VERIFY:
         die(f"{args.block} в статусе {s.get('status', 'todo')} — штамповать нечего")
     s["reviewed_sha"] = block_sha(idx[args.block])
     s["restamped_at"] = now()
@@ -1025,13 +1036,19 @@ def verdicts_in(text: str, block_id: str = "") -> dict[str, str]:
     """Вердикты по гипотезам: «H1.3 — не проверена: …» или «гипотеза 3 опровергнута»."""
     out: dict[str, str] = {}
     plain = re.compile(r"гипотез\w*\s*№?\s*(\d+)", re.IGNORECASE)
+    # Идентификатор берётся из НАСТОЯЩЕГО имени блока, а не угадывается по форме: у больше
+    # чем половины блоков реального ревью имя с буквенным суффиксом (`V1d`, `H13e`), и
+    # регулярка «буквы, цифры, точка» их не ловила — вердикты таких блоков считались
+    # отсутствующими, а проходили они только через запасные формы записи.
+    tagged = re.compile(rf"\b({re.escape(block_id)}\.\d+)\b") if block_id else None
     for line in text.split("\n"):
         low = line.lower()
         verdict = next((v for w, v in VERDICT_WORDS if w in low), None)
         if not verdict:
             continue
-        for token in re.findall(r"\b([A-Za-z]+\d*\.\d+)\b", line):
-            out.setdefault(token, verdict)
+        if tagged:
+            for token in tagged.findall(line):
+                out[token] = verdict
         if not block_id:
             continue
         # Свободная форма привязывается к блоку, чей отчёт мы читаем: «гипотеза 2» в
@@ -1125,7 +1142,7 @@ def cmd_check(args) -> int:
     # охотника, и непроверенные находки исчезают из остатка работ.
     for b in defn["blocks"]:
         stt = st["blocks"].get(b["id"], {}).get("status", "todo")
-        if stt in ("verified", "closed"):
+        if stt in POST_VERIFY:
             rep = REVIEW / "reports" / f"{b['id']}-{b['slug']}.verify.md"
             if not rep.exists():
                 problems.append(
@@ -1242,11 +1259,19 @@ def cmd_check(args) -> int:
                 problems.append(
                     f"находка {fid}: указана строка {f['line']}, а в {f.get('file')} их {n}"
                 )
-        if f.get("status") == "rejected" and not (f.get("reject_reason") or "").strip():
-            problems.append(
-                f"находка {fid}: отвергнута, но причина отказа не записана — "
-                f"`{CLI} set-finding {fid} rejected --reason '...'`"
-            )
+        if f.get("status") == "rejected":
+            # Причина отказа пишется либо отдельным полем, либо — как велит шаблон роли —
+            # прямо в заголовке находки («Отвергнуто: …»). Требовать только поле значило бы
+            # ронять проверку на каждой находке, оформленной ровно по инструкции.
+            claim = (f.get("claim") or "").strip()
+            said = (f.get("reject_reason") or "").strip() or (
+                claim if re.match(r"отвергнут|отклонен|отклонён|не подтверд", claim, re.I) else "")
+            if not said:
+                problems.append(
+                    f"находка {fid}: отвергнута, но причина отказа не записана — "
+                    f"`{CLI} set-finding {fid} rejected --reason '...'` либо строкой "
+                    f"«Отвергнуто: …» в начале заголовка"
+                )
         if len(f.get("claim") or "") > CLAIM_MAX:
             problems.append(
                 f"находка {fid}: claim длиной {len(f['claim'])} символов при пределе {CLAIM_MAX} — "
@@ -1303,8 +1328,8 @@ def cmd_check(args) -> int:
         # значит завести вторую надпись, которая врёт молча. Сверяем, что снимок собран
         # на этой линии истории, а не в чужой ветке; расхождение по СОСТАВУ ловится выше.
         stamp = next(
-            (ln.split()[-1] for ln in cov.read_text(encoding="utf-8").splitlines()[:3]
-             if ln.startswith("#") and "коммит" in ln),
+            (m.group(1) for ln in cov.read_text(encoding="utf-8").splitlines()[:3]
+             if (m := re.match(r"#\s*собрано от\s+([0-9a-fA-F]+)", ln))),
             None,
         )
         if stamp and not stamp.startswith("("):
@@ -1333,7 +1358,7 @@ def cmd_check(args) -> int:
                 f"«по общим соображениям»; раздел «Гипотезы», по пункту на гипотезу"
             )
             continue
-        if stt not in ("verified", "closed"):
+        if stt not in POST_VERIFY:
             continue
         seen = verdicts_for(b)
         missing = [h for h in ids if h not in seen]
@@ -1349,7 +1374,7 @@ def cmd_check(args) -> int:
     # файлы блока изменились после просмотра.
     for b in defn["blocks"]:
         s = st["blocks"].get(b["id"], {})
-        if s.get("status") not in ("verified", "closed") or not s.get("reviewed_sha"):
+        if s.get("status") not in POST_VERIFY or not s.get("reviewed_sha"):
             continue
         if changed_since_review(b, s["reviewed_sha"]):
             problems.append(
@@ -1362,7 +1387,7 @@ def cmd_check(args) -> int:
     # НЕпросмотренного, и в аудиторских отчётах это отдельная глава. «Находок нет»
     # без него неотличимо от «посмотрел по диагонали».
     for b in defn["blocks"]:
-        if st["blocks"].get(b["id"], {}).get("status", "todo") not in ("verified", "closed"):
+        if st["blocks"].get(b["id"], {}).get("status", "todo") not in POST_VERIFY:
             continue
         hunter = REVIEW / "reports" / f"{b['id']}-{b['slug']}.hunter.md"
         if hunter.exists():
