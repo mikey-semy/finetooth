@@ -132,7 +132,8 @@
 - **отпечаток кода под находкой** — оттуда же (suspect links) и из
   [claude-review-all](https://github.com/ncoevoet/claude-review-all), где ключ находки
   включает хеш кода. У нас: открытая находка, под которой код уехал, роняет проверку — либо
-  её уже починили, либо описание устарело;
+  её уже починили, либо описание устарело, либо дефект на месте и это подтверждают
+  `restamp <ID-находки>`;
 - **дешёвый фильтр выдумки** — у [mergejury](https://github.com/iamEtornam/mergejury):
   ссылка на строку, которой в файле нет, ловится без всякой модели;
 - **бюджет в самом задании** — у [repomix](https://github.com/yamadashy/repomix) (превышение
@@ -263,7 +264,7 @@ review.py                         инструмент: version, init, status, c
                                   set-status, set-finding, hypotheses, roots, restamp,
                                   backfill, findings, check, log
 install.py                        установка в проект: ставит и настраивает CLI
-tests/test_review.py              тесты инструмента и установщика: 51 сценарий
+tests/test_review.py              тесты инструмента и установщика: 54 сценария
 prompts/hunter.md                 охотник: читает файлы блока и выдвигает находки
 prompts/verify.md                 проверяющий: свой независимый проход, три вердикта
 prompts/fix.md                    исполнитель: чинит, доказывает тестом, гоняет ворота
