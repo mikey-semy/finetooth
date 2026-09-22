@@ -810,6 +810,14 @@ def cmd_set_finding(args) -> int:
         if not git_files([path]):
             die(f"--fixed-in {path}: такого файла в репозитории нет")
 
+    # Отказ — это вердикт, и он живёт в двух полях: статус говорит, что с находкой делают,
+    # уверенность — что о ней решили. Меняя одно без другого, реестр утверждал бы разом
+    # «отвергнута» и «подтверждена». Вернуть отвергнутую в работу — значит снять вердикт:
+    # она снова ждёт проверки, а не наследует «rejected».
+    if args.status == "rejected":
+        f["confidence"] = "rejected"
+    elif f.get("status") == "rejected" and f.get("confidence") == "rejected":
+        f["confidence"] = "plausible"
     f["status"] = args.status
     if args.commit:
         f["fix_commit"] = args.commit
@@ -1199,6 +1207,19 @@ def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
     return None
 
 
+def line_verdict(line: str) -> str | None:
+    """Вердикт строки — слово, стоящее в ней РАНЬШЕ, а не первое по словарю.
+
+    «Проверена по коду все девять … Живым запросом не проверял» — это «проверена» с
+    оговоркой. Поиск по порядку словаря находил «не проверял» где угодно в строке и
+    объявлял гипотезу непроверенной. Отрицание при этом не теряется: «не проверена»
+    начинается на три символа раньше вложенного в него «проверена».
+    """
+    low = line.lower()
+    hits = [(i, v) for w, v in VERDICT_WORDS if (i := low.find(w)) >= 0]
+    return min(hits)[1] if hits else None
+
+
 def section_items(md: str, heading: re.Pattern) -> list[str]:
     """Пункты списка в разделе, чей заголовок совпал с образцом."""
     lines = md.split("\n")
@@ -1256,8 +1277,7 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     # отсутствующими, а проходили они только через запасные формы записи.
     tagged = re.compile(rf"\b({re.escape(block_id)}\.\d+)\b") if block_id else None
     for line in text.split("\n"):
-        low = line.lower()
-        verdict = next((v for w, v in VERDICT_WORDS if w in low), None)
+        verdict = line_verdict(line)
         if not verdict:
             continue
         if tagged:
@@ -1459,6 +1479,11 @@ def cmd_check(args) -> int:
             problems.append(why)
         if f.get("confidence") == "rejected" and f.get("status") == "open":
             problems.append(f"находка {fid}: отвергнута верификатором, но всё ещё open")
+        if f.get("status") == "rejected" and f.get("confidence") != "rejected":
+            problems.append(
+                f"находка {fid}: статус rejected, а уверенность {f.get('confidence')} — "
+                f"реестр утверждает разом «отвергнута» и «не отвергнута»"
+            )
         # Отвергнутая находка остаётся в реестре ради причины отказа — без неё
         # запись бесполезна: следующее ревью найдёт то же самое и потратит время
         # заново. Условие завершения ревью требовало причину у каждой отвергнутой

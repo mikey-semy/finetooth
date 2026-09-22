@@ -311,6 +311,21 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
         self.assertIn("закрыто 3/3", self.s.run("hypotheses", "H1").stdout)
 
+    def test_оговорка_в_строке_не_переворачивает_вердикт(self):
+        """«Проверена по коду … живым запросом не проверял» — проверена, с оговоркой."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=2)
+        self.s.reports(hunter="# охотник\n## Итог\n"
+                              "| 1 | пути | **Проверена по коду**, живым запросом не проверял |\n"
+                              "| 2 | ник | не проверена: стенда нет, хотя код проверена-подобен |\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("hypotheses", "H1").stdout
+        self.assertRegex(out, r"H1\.1\s+проверена")
+        self.assertRegex(out, r"H1\.2\s+не проверена")
+
     def test_идентификатор_блока_с_буквенным_суффиксом(self):
         """У больше чем половины блоков реального ревью имя вида V1d — их вердикты терялись."""
         self.s.block_id = "V1d"
@@ -715,6 +730,31 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(self.s.run("set-finding", "H1-001", "duplicate").returncode, 2)
         self.assertEqual(
             self.s.run("set-finding", "H1-001", "fixed", "--commit", "abc1234").returncode, 0)
+
+    def test_отказ_меняет_и_уверенность(self):
+        """«Отвергнута» и «подтверждена» разом — противоречие в реестре."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        f_path = self.s.root / "docs/review/findings.jsonl"
+        row = lambda: json.loads(f_path.read_text(encoding="utf-8").splitlines()[0])
+
+        self.s.run("set-finding", "H1-001", "rejected", "--reason", "код так и задуман")
+        self.assertEqual(row()["confidence"], "rejected")
+        self.s.run("set-finding", "H1-001", "open")
+        self.assertEqual(row()["confidence"], "plausible", "возвращённая ждёт новой проверки")
+
+        r = row()
+        r.update(status="rejected", reject_reason="вписано руками", confidence="confirmed")
+        f_path.write_text(json.dumps(r, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertIn("статус rejected, а уверенность confirmed", self.s.run("check").stdout)
 
     def test_отвергнутая_находка_без_причины_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
