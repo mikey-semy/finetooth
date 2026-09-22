@@ -546,6 +546,12 @@ class ReviewToolTest(unittest.TestCase):
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n| H1-001 | confirmed | прогнал тест, падает |\n")
+        self.assertIn("нет вердикта об охвате", self.s.run("check").stdout,
+                      "вердикты по находкам не говорят, что осталось непросмотренным")
+
+        self.s.write("docs/review/reports/H1-demo.verify.md",
+                     "# проверяющий\n| H1-001 | confirmed | прогнал тест, падает |\n"
+                     "## Состояние охвата\nПолный.\n")
         self.assertNotIn("отчёте верификатора", self.s.run("check").stdout)
 
     def test_без_находок_проверяющий_говорит_об_охвате(self):
@@ -562,6 +568,50 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("нет вердикта об охвате", self.s.run("check").stdout)
         self.s.reports(verify=FULL_VERIFY)
         self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+
+    def test_противоречивые_вердикты_в_одном_отчёте_роняют_проверку(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Итог\n| 1 | предикат | не проверена |\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check").stdout
+        self.assertIn("разные вердикты", out)
+        self.assertIn("H1.1", out)
+
+    def test_дубль_указывает_на_живую_находку(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": f"дефект {i}",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n"
+            for i in (1, 2, 3)))
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        for bogus in ("H1-999", "H1-002"):
+            self.assertNotEqual(
+                self.s.run("set-finding", "H1-002", "duplicate", "--dup-of", bogus).returncode,
+                0, bogus)
+        self.assertEqual(self.s.run("set-finding", "H1-002", "duplicate",
+                                    "--dup-of", "H1-001").returncode, 0)
+        self.assertNotEqual(self.s.run("set-finding", "H1-003", "duplicate",
+                                       "--dup-of", "H1-002").returncode, 0,
+                            "дубль дубля не несёт дефект ни в одной живой записи")
+
+        f_path = self.s.root / "docs/review/findings.jsonl"
+        rows = [json.loads(x) for x in f_path.read_text(encoding="utf-8").splitlines() if x]
+        rows[1]["dup_of"] = "H1-777"  # вписано руками мимо set-finding
+        f_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                          encoding="utf-8")
+        self.assertIn("дубль несуществующей H1-777", self.s.run("check").stdout)
 
     def test_живая_находка_на_изменённом_файле_перештамповывается(self):
         """Файл меняют и соседней починкой — подтвердить живой дефект должно быть чем."""
