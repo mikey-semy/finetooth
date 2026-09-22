@@ -926,7 +926,7 @@ def cmd_restamp(args) -> int:
     defn, st = blocks(), state()
     idx = block_index(defn)
     if args.block not in idx:
-        die(f"unknown block {args.block}")
+        return restamp_finding(args.block)
     s = st["blocks"].get(args.block, {})
     if s.get("status") not in POST_VERIFY:
         die(f"{args.block} в статусе {s.get('status', 'todo')} — штамповать нечего")
@@ -935,6 +935,34 @@ def cmd_restamp(args) -> int:
     st["updated_at"] = now()
     save_json(STATE_FILE, st)
     print(f"{args.block}: отпечаток переснят — изменения в файлах блока считаются просмотренными")
+    return 0
+
+
+def restamp_finding(fid: str) -> int:
+    """Подтвердить, что открытая находка жива на изменившемся файле.
+
+    Файл под находкой меняется не только её починкой: в нём чинят соседнюю находку, правят
+    строку рядом. Без этой команды выхода было два, и оба ложные — закрыть живой дефект или
+    править реестр руками. Штамп ставится поимённо, как у блока: «перепроверил, дефект на
+    месте» говорится под запись, а не выключает проверку.
+    """
+    rows = findings()
+    hit = [f for f in rows if f.get("id") == fid]
+    if not hit:
+        die(f"нет ни блока, ни находки {fid}")
+    f = hit[0]
+    if f.get("status") not in ("open", "deferred"):
+        die(f"находка {fid} в статусе {f.get('status')} — штампуют только открытые и отложенные")
+    sha = file_sha(f.get("file", ""))
+    if not sha:
+        die(f"файла {f.get('file')} нет — находку переводят (`{CLI} set-finding`), а не штампуют")
+    f["code_sha"] = sha
+    f["restamped_at"] = now()
+    with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
+    print(f"{fid}: отпечаток кода переснят — дефект подтверждён на текущей версии {f.get('file')}")
     return 0
 
 
@@ -1090,6 +1118,36 @@ VERDICT_WORDS = (
 )
 
 
+# Вердикт проверяющего по находке — словарём шаблона роли (confirmed / plausible /
+# rejected / duplicate) или живым языком отчёта. Форму таблицы не требуем: отчёты пишутся
+# по-разному, и гейт, воюющий с разметкой, перестают читать. Требуем содержание.
+FINDING_VERDICT = re.compile(
+    r"\b(confirmed|plausible|rejected|duplicate)\b|подтвержд|отверг|опроверг|дубл",
+    re.IGNORECASE)
+COVERAGE_VERDICT = re.compile(r"охват|полн(ый|ое|ая)\b|неполн", re.IGNORECASE)
+
+
+def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
+    """Отчёт проверяющего, которого по сути нет: пустой, одни заголовки, ни одного вердикта.
+
+    Существование файла доказывало только то, что файл создан: пустой `*.verify.md` при
+    полном отчёте охотника проводил блок в `verified` без независимой проверки.
+    """
+    body = [ln for ln in rep.read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+    if not body:
+        return (f"отчёт верификатора {rep.name} пуст — есть файл, нет проверки; "
+                f"по каждой находке нужен вердикт, по блоку — состояние охвата")
+    text = "\n".join(body)
+    if has_findings and not FINDING_VERDICT.search(text):
+        return (f"в отчёте верификатора {rep.name} нет ни одного вердикта по находкам — "
+                f"confirmed / plausible / rejected / duplicate с обоснованием")
+    if not has_findings and not COVERAGE_VERDICT.search(text):
+        return (f"в отчёте верификатора {rep.name} нет вердикта об охвате — находок нет, "
+                f"значит, нужно сказать, полон ли охват и что осталось")
+    return None
+
+
 def section_items(md: str, heading: re.Pattern) -> list[str]:
     """Пункты списка в разделе, чей заголовок совпал с образцом."""
     lines = md.split("\n")
@@ -1239,6 +1297,8 @@ def cmd_check(args) -> int:
                     f"{b['id']}: статус {stt}, но отчёта верификатора нет — "
                     f"проверка держится на честном слове"
                 )
+            elif why := verify_report_problem(rep, any(f.get("block") == b["id"] for f in rows)):
+                problems.append(f"{b['id']}: {why}")
 
     # 3. declared reports exist
     for bid, s in st["blocks"].items():
@@ -1346,7 +1406,8 @@ def cmd_check(args) -> int:
                 problems.append(
                     f"находка {fid}: код в {f.get('file')} изменился с момента импорта — "
                     f"перепроверьте: либо она уже закрыта (`{CLI} set-finding {fid} fixed "
-                    f"--commit <sha>`), либо описание устарело"
+                    f"--commit <sha>`), либо описание устарело, либо дефект на месте "
+                    f"(`{CLI} restamp {fid}`)"
                 )
         # Номер строки, которого в файле нет, — самый дешёвый признак выдумки.
         if f.get("line") and isinstance(f["line"], int):
@@ -1608,8 +1669,8 @@ def main() -> int:
     c = sub.add_parser("hypotheses", help="гипотезы блока и их вердикты")
     c.add_argument("block")
 
-    c = sub.add_parser("restamp", help="подтвердить, что изменения в файлах блока просмотрены")
-    c.add_argument("block")
+    c = sub.add_parser("restamp", help="подтвердить просмотр правок: блока или файла под находкой")
+    c.add_argument("block", help="блок (H1) или находка (H1-003)")
 
     sub.add_parser("backfill", help="проставить отпечатки старым блокам и находкам (с записью в журнал)")
 

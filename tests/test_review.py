@@ -106,6 +106,15 @@ FULL_HUNTER = """# отчёт охотника
 Живым запросом не проверял ничего.
 """
 
+FULL_VERIFY = """# отчёт проверяющего
+
+## Вердикты по находкам охотника
+Находок нет.
+
+## Состояние охвата блока
+Охват полный: оба файла прочитаны, гипотезы прогнаны.
+"""
+
 
 class ReviewToolTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -251,7 +260,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=2)
-        self.s.reports(hunter="# отчёт\n\n## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+        self.s.reports(hunter="# отчёт\n\n## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -276,7 +285,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.reports(hunter="# отчёт\n\n## Гипотезы\n- H1.1 — проверена: да\n",
-                       verify="# проверяющий\n")
+                       verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -294,7 +303,7 @@ class ReviewToolTest(unittest.TestCase):
             "| 1 | первая | **Проверена — опровергнута.** Узда есть в другом месте |\n\n"
             "Гипотеза 2 не подтвердилась: разбор доверен конструктору URL.\n"
             "- H1.3 — неприменима: этого пути в коде нет.\n\n"
-            "## Ограничения охвата\nстенда нет\n"), verify="# проверяющий\n")
+            "## Ограничения охвата\nстенда нет\n"), verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -313,7 +322,7 @@ class ReviewToolTest(unittest.TestCase):
         (self.s.root / "docs/review/blocks/H1-demo.md").unlink()
         self.s.reports(hunter="# охотник\n## Гипотезы\n- V1d.1 — проверена: вызвал на матрице\n"
                               "- V1d.2 — неприменима: этого пути нет\n"
-                              "## Ограничения охвата\nстенда нет\n", verify="# проверяющий\n")
+                              "## Ограничения охвата\nстенда нет\n", verify=FULL_VERIFY)
         for role in ("hunter", "verify"):
             src = self.s.root / f"docs/review/reports/H1-demo.{role}.md"
             if src.exists():
@@ -331,7 +340,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=2)
-        self.s.reports(hunter="# охотник\n## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+        self.s.reports(hunter="# охотник\n## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -375,7 +384,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
-                              "## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -398,7 +407,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
-                              "## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -415,7 +424,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n",
-                       verify="# проверяющий\n")
+                       verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -429,7 +438,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
-                              "## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
         self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
             "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
             "file": "src/one.ts", "claim": "тут дефект",
@@ -477,7 +486,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.manifest(hypotheses=2)
         self.s.reports(hunter=FULL_HUNTER.replace("не проверена: стенд не поднимается",
                                                   "проверена: да"),
-                       verify="# проверяющий\n")
+                       verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
         self.s.run("coverage")
@@ -505,6 +514,82 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         out = self.s.run("hypotheses", "H1")
         self.assertIn("закрыто 0/2", out.stdout, out.stdout)
+
+    def test_пустой_отчёт_проверяющего_не_проводит_блок(self):
+        """Файл есть — проверки нет: существование `*.verify.md` ничего не доказывало."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "тут дефект",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify="")
+        self.s.write("docs/review/reports/H1-demo.verify.md", "")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.s.run("set-status", "H1", "verified")
+        self.assertIn("пуст — есть файл, нет проверки", self.s.run("check").stdout)
+
+        self.s.write("docs/review/reports/H1-demo.verify.md",
+                     "# проверяющий\n## Вердикты\n## Охват\n")
+        self.assertIn("пуст — есть файл, нет проверки", self.s.run("check").stdout,
+                      "одни заголовки — тоже пустой отчёт")
+
+        self.s.write("docs/review/reports/H1-demo.verify.md",
+                     "# проверяющий\nПосмотрел, всё хорошо, охват полный.\n")
+        self.assertIn("ни одного вердикта по находкам", self.s.run("check").stdout)
+
+        self.s.write("docs/review/reports/H1-demo.verify.md",
+                     "# проверяющий\n| H1-001 | confirmed | прогнал тест, падает |\n")
+        self.assertNotIn("отчёте верификатора", self.s.run("check").stdout)
+
+    def test_без_находок_проверяющий_говорит_об_охвате(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n",
+                       verify="# проверяющий\nВсё посмотрел, претензий нет.\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertIn("нет вердикта об охвате", self.s.run("check").stdout)
+        self.s.reports(verify=FULL_VERIFY)
+        self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+
+    def test_живая_находка_на_изменённом_файле_перештамповывается(self):
+        """Файл меняют и соседней починкой — подтвердить живой дефект должно быть чем."""
+        self.s.write("src/one.ts", "было\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": f"дефект {i}",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n"
+            for i in (1, 2)))
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.s.write("src/one.ts", "первый починен, второй жив\n")
+        self.s.commit("починка первого")
+        self.s.run("set-finding", "H1-001", "fixed", "--commit",
+                   self.s.git("rev-parse", "--short", "HEAD").stdout.strip())
+        out = self.s.run("check").stdout
+        self.assertIn("H1-002: код в src/one.ts изменился", out)
+        self.assertIn("restamp H1-002", out, "отказ обязан говорить, что делать")
+
+        self.assertEqual(self.s.run("restamp", "H1-002").returncode, 0)
+        self.assertNotIn("изменился с момента импорта", self.s.run("check").stdout)
+        self.assertNotEqual(self.s.run("restamp", "H1-001").returncode, 0,
+                            "починенную находку штамповать нечего")
+        self.assertNotEqual(self.s.run("restamp", "H1-999").returncode, 0)
 
     def test_штамповать_непройденный_блок_нельзя(self):
         self.s.write("src/one.ts", "a\n")
