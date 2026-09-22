@@ -26,6 +26,8 @@ KIT = Path(__file__).resolve().parents[1]
 class Stand:
     """Временный репозиторий с установленным набором."""
 
+    block_id = "H1"
+
     def __init__(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="review-kit-test-"))
         self.tool = self.root / "scripts" / "review" / "review.py"
@@ -64,7 +66,7 @@ class Stand:
                 {"pattern": "docs/review", "reason": "аппарат ревью"},
                 {"pattern": "scripts/review", "reason": "аппарат ревью"},
             ],
-            "blocks": [{"id": "H1", "slug": "demo", "phase": 1, "title": "Демоблок",
+            "blocks": [{"id": self.block_id, "slug": "demo", "phase": 1, "title": "Демоблок",
                         "role": "demo", "goal": "проверить оснастку",
                         "paths": paths, "ref_paths": ref_paths or []}],
         }, ensure_ascii=False, indent=2), )
@@ -299,6 +301,61 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-status", "H1", "verified")
         self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
         self.assertIn("закрыто 3/3", self.s.run("hypotheses", "H1").stdout)
+
+    def test_идентификатор_блока_с_буквенным_суффиксом(self):
+        """У больше чем половины блоков реального ревью имя вида V1d — их вердикты терялись."""
+        self.s.block_id = "V1d"
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=2)
+        self.s.write("docs/review/blocks/V1d-demo.md",
+                     (self.s.root / "docs/review/blocks/H1-demo.md").read_text(encoding="utf-8"))
+        (self.s.root / "docs/review/blocks/H1-demo.md").unlink()
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- V1d.1 — проверена: вызвал на матрице\n"
+                              "- V1d.2 — неприменима: этого пути нет\n"
+                              "## Ограничения охвата\nстенда нет\n", verify="# проверяющий\n")
+        for role in ("hunter", "verify"):
+            src = self.s.root / f"docs/review/reports/H1-demo.{role}.md"
+            if src.exists():
+                src.rename(self.s.root / f"docs/review/reports/V1d-demo.{role}.md")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "V1d", "verified")
+        out = self.s.run("hypotheses", "V1d")
+        self.assertIn("закрыто 2/2", out.stdout)
+        self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+
+    def test_проверки_не_выключаются_переводом_в_следующий_статус(self):
+        """`set-status triaged` не должен зеленить гейт, ничего не добавив."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=2)
+        self.s.reports(hunter="# охотник\n## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertIn("без вердикта", self.s.run("check").stdout)
+        self.s.run("set-status", "H1", "triaged")
+        self.assertIn("без вердикта", self.s.run("check").stdout,
+                      "смена статуса не добавила вердиктов — гейт обязан остаться красным")
+
+    def test_причина_отказа_принимается_там_где_её_велит_писать_шаблон(self):
+        """Шаблон роли кладёт причину в заголовок — требовать иное поле значит ронять всё."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "rejected", "status": "rejected",
+            "file": "src/one.ts",
+            "claim": "Отвергнуто: поведение корректно, проверено вызовом на матрице",
+            "scenario": "проверено"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.assertNotIn("причина отказа не записана", self.s.run("check").stdout)
 
     def test_вердикт_проверяющего_перебивает_охотника(self):
         self.s.write("src/one.ts", "a\n")
@@ -734,6 +791,44 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("старше", out.stdout)
         self.assertIn("суток", out.stdout)
         self.assertIn("fetch", out.stdout, "отказ обязан говорить, что делать")
+
+    def test_свежий_коммит_в_давней_ветке_не_прячет_устаревание(self):
+        """Своя вершина новее чужой — а ветка всё равно без единого чужого исправления."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+
+        bare = self.s.root.parent / (self.s.root.name + "-origin2.git")
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        self.addCleanup(shutil.rmtree, bare, True)
+        self.s.git("remote", "add", "origin", str(bare))
+
+        # общий предок — двухнедельной давности
+        long_ago = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14)).isoformat()
+        env = dict(os.environ, GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
+        subprocess.run(["git", "-C", str(self.s.root), "commit", "-q", "--amend", "--no-edit",
+                        f"--date={long_ago}"], env=env, check=True, capture_output=True)
+        self.s.git("push", "-q", "origin", "HEAD:refs/heads/master")
+        self.s.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+
+        # на сервере появилось чужое исправление, а у нас — свой свежий коммит рядом
+        self.s.git("branch", "-q", "work")
+        self.s.write("src/one.ts", "a\nчужое исправление\n")
+        self.s.git("add", "src/one.ts")
+        self.s.git("commit", "-qm", "чужое исправление")
+        self.s.git("push", "-q", "origin", "HEAD:refs/heads/master")
+        self.s.git("reset", "-q", "--hard", "work")
+        self.s.write("src/one.ts", "a\nсвоя свежая правка\n")
+        self.s.git("add", "src/one.ts")
+        self.s.git("commit", "-qm", "своя свежая правка")
+        self.s.git("fetch", "-q", "origin")
+
+        self.s.run("init")
+        self.s.run("coverage")
+        out = self.s.run("check")
+        self.assertIn("старше", out.stdout,
+                      "ветка отведена две недели назад и не содержит чужих правок")
 
     # ---------------------------------------------------------------- размещение
 
