@@ -204,9 +204,22 @@ def hypotheses_sha(b: dict) -> str:
     return hashlib.sha256("\n".join(norm).encode("utf-8")).hexdigest()[:16]
 
 
+def refs_sha(b: dict) -> str:
+    """Отпечаток КОНТЕКСТА: файлов `ref_paths`, которые промпт даёт блоку для справки."""
+    defn = blocks()
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    own = git_files(b.get("paths", []))
+    h = hashlib.sha256()
+    for rel in sorted(git_files(b.get("ref_paths", [])) - excluded - own):
+        h.update(rel.encode("utf-8"))
+        h.update((file_sha(rel) or "").encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
 def stamp(b: dict, s: dict) -> None:
-    """Записать, ЧТО просмотрено: файлы блока и вопросы, на которые отвечали."""
+    """Записать, ЧТО просмотрено: файлы блока, контекст и вопросы, на которые отвечали."""
     s["reviewed_sha"] = block_sha(b)
+    s["refs_sha"] = refs_sha(b)
     s["hypotheses_sha"] = hypotheses_sha(b)
 
 
@@ -790,6 +803,12 @@ def cmd_set_finding(args) -> int:
         die(why)
     if args.rule and (why := rule_problem(args.rule)):
         die(why)
+    # Починка не обязана трогать файл, где дефект виден: маршрут чинят в общем стороже.
+    # Место правки называется явно, а не подразумевается, — иначе проверка «коммит
+    # касается файла находки» перестаёт отличать правку в другом месте от чужой отметки.
+    for path in args.fixed_in or []:
+        if not git_files([path]):
+            die(f"--fixed-in {path}: такого файла в репозитории нет")
 
     f["status"] = args.status
     if args.commit:
@@ -798,6 +817,8 @@ def cmd_set_finding(args) -> int:
         f["reject_reason"] = args.reason
     if args.dup_of:
         f["dup_of"] = args.dup_of
+    if args.fixed_in:
+        f["fixed_in"] = sorted(set(f.get("fixed_in", [])) | set(args.fixed_in))
     if args.rule:
         # Узда записывается на ВСЕ находки этого корня: класс закрыт целиком или не закрыт.
         for row in rows:
@@ -1068,9 +1089,10 @@ def cmd_backfill(args) -> int:
     stamped_blocks, stamped_findings = [], []
     for bid, s in st["blocks"].items():
         if (s.get("status") in POST_VERIFY and bid in idx
-                and not (s.get("reviewed_sha") and s.get("hypotheses_sha"))):
+                and not all(s.get(k) for k in ("reviewed_sha", "refs_sha", "hypotheses_sha"))):
             b = idx[bid]
             s.setdefault("reviewed_sha", block_sha(b))
+            s.setdefault("refs_sha", refs_sha(b))
             s.setdefault("hypotheses_sha", hypotheses_sha(b))
             s["restamped_at"] = now()
             stamped_blocks.append(bid)
@@ -1144,6 +1166,8 @@ FINDING_VERDICT = re.compile(
     r"\b(confirmed|plausible|rejected|duplicate)\b|подтвержд|отверг|опроверг|дубл",
     re.IGNORECASE)
 COVERAGE_VERDICT = re.compile(r"охват|полн(ый|ое|ая)\b|неполн", re.IGNORECASE)
+# Строка шаблона «Полный / неполный — …», оставленная как есть, — не решение, а вопрос.
+COVERAGE_PLACEHOLDER = re.compile(r"полн\w*\s*/\s*неполн", re.IGNORECASE)
 
 
 def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
@@ -1168,7 +1192,8 @@ def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
                 f"confirmed / plausible / rejected / duplicate с обоснованием")
     # Охват — отдельный вопрос, не заменяемый вердиктами: найденное ничего не говорит о
     # том, что осталось непросмотренным.
-    if not COVERAGE_VERDICT.search(text):
+    if not COVERAGE_VERDICT.search(
+            "\n".join(ln for ln in body if not COVERAGE_PLACEHOLDER.search(ln))):
         return (f"в отчёте верификатора {rep.name} нет вердикта об охвате — полон ли он и "
                 f"что осталось")
     return None
@@ -1300,6 +1325,7 @@ def cmd_check(args) -> int:
     defn, st, rows = blocks(), state(), findings()
     idx = block_index(defn)
     problems: list[str] = []
+    warnings: list[str] = []
 
     # 1. state and definition agree
     for bid in idx:
@@ -1417,10 +1443,13 @@ def cmd_check(args) -> int:
             )
             if touched.returncode != 0:
                 problems.append(f"находка {fid}: коммита {f['fix_commit']} нет в репозитории")
-            elif f.get("file") and f["file"] not in touched.stdout.split():
+            elif f.get("file") and not ({f["file"], *f.get("fixed_in", [])}
+                                        & set(touched.stdout.split())):
                 problems.append(
                     f"находка {fid}: коммит {f['fix_commit']} не трогает {f['file']} — "
-                    f"либо отметка не от той находки, либо чинили не там"
+                    f"либо отметка не от той находки, либо чинили в другом месте: тогда "
+                    f"назовите его (`{CLI} set-finding {fid} fixed --commit <sha> "
+                    f"--fixed-in <путь>`)"
                 )
         if f.get("status") == "fixed" and not f.get("fix_commit"):
             problems.append(f"находка {fid}: помечена fixed, но не указан коммит правки")
@@ -1580,6 +1609,19 @@ def cmd_check(args) -> int:
                 f"версии кода; перепройдите либо, если правки к предмету блока не относятся, "
                 f"перештампуйте: `{CLI} restamp {b['id']}`"
             )
+        # Контекст — предупреждение, а не отказ, как «suspect link» у doorstop: изменился не
+        # предмет блока, а то, на что он опирался. Каталоги справки широкие (в первом же
+        # проекте — 229 файлов и дюжина коммитов за две недели), и отказ на каждую их правку
+        # краснел бы ежедневно, приучая жать `restamp` не глядя, — тогда не работает и
+        # отпечаток собственных файлов.
+        if b.get("ref_paths"):
+            if not s.get("refs_sha"):
+                warnings.append(f"{b['id']}: нет отпечатка контекста (ref_paths) — `{CLI} backfill`")
+            elif s["refs_sha"] != refs_sha(b):
+                warnings.append(
+                    f"{b['id']}: файлы контекста (ref_paths) изменились после проверки — "
+                    f"если выводы блока на них опирались, перепроверьте; иначе `{CLI} restamp {b['id']}`"
+                )
         if not s.get("hypotheses_sha"):
             problems.append(
                 f"{b['id']}: нет отпечатка гипотез — правка манифеста после проверки не "
@@ -1650,6 +1692,11 @@ def cmd_check(args) -> int:
                 f"(порог {limit}). Разрежьте блок, иначе отчёт соврёт про охват"
             )
 
+    if warnings:
+        print("ПРЕДУПРЕЖДЕНИЯ (проверку не роняют):\n")
+        for w in warnings:
+            print(f"  · {w}")
+        print()
     if problems:
         print("ПРОВЕРКА НЕ ПРОЙДЕНА:\n")
         for p in problems:
@@ -1716,6 +1763,8 @@ def main() -> int:
     c.add_argument("--reason", help="причина отказа; обязательна для rejected")
     c.add_argument("--dup-of", dest="dup_of", help="id находки, дублем которой она является")
     c.add_argument("--rule", help="чем закрыт класс: путь к узде, тесту или правилу линтера")
+    c.add_argument("--fixed-in", dest="fixed_in", action="append",
+                   help="где чинили, если не в файле находки (можно несколько раз)")
 
     c = sub.add_parser("hypotheses", help="гипотезы блока и их вердикты")
     c.add_argument("block")

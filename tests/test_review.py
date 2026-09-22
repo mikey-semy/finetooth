@@ -641,6 +641,53 @@ class ReviewToolTest(unittest.TestCase):
                             "починенную находку штамповать нечего")
         self.assertNotEqual(self.s.run("restamp", "H1-999").returncode, 0)
 
+    def test_правка_контекста_предупреждает_но_не_роняет(self):
+        """Изменился не предмет блока, а то, на что он опирался, — «suspect link» doorstop."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("lib/guard.ts", "было\n")
+        self.s.blocks(paths=["src/one.ts", "lib/guard.ts"])
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"][0]["paths"] = ["src/one.ts"]
+        d["blocks"][0]["ref_paths"] = ["lib"]
+        d["blocks"].append({"id": "Z9", "slug": "lib", "phase": 2, "title": "Библиотека",
+                            "role": "lib", "goal": "владелец lib", "paths": ["lib"],
+                            "ref_paths": []})
+        bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("контекста", out.stdout)
+
+        self.s.write("lib/guard.ts", "стало\n")
+        self.s.commit("правка общего модуля")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, "правка контекста не отказ: " + out.stdout)
+        self.assertIn("файлы контекста (ref_paths) изменились", out.stdout)
+        self.s.run("restamp", "H1")
+        self.assertNotIn("контекста", self.s.run("check").stdout)
+
+    def test_нетронутая_строка_шаблона_не_оценка_охвата(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n",
+                       verify="# отчёт верификатора\n## Вердикты по находкам охотника\n"
+                              "Находок нет.\n## Состояние охвата блока\n"
+                              "Полный / неполный — и что именно осталось.\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertIn("нет вердикта об охвате", self.s.run("check").stdout)
+
     def test_штамповать_непройденный_блок_нельзя(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -775,6 +822,33 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
         self.s.run("findings")
         self.assertIn("нет в репозитории", self.s.run("check").stdout)
+
+    def test_починка_в_общем_модуле_называется_явно(self):
+        """Маршрут чинят в общем стороже — проверка не должна требовать правки не там."""
+        self.s.write("src/route.ts", "a\n")
+        self.s.write("src/guard.ts", "b\n")
+        self.s.blocks(paths=["src/route.ts", "src/guard.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/route.ts", "claim": "маршрут без проверки прав", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/guard.ts", "b\nсторож проверяет права\n")
+        self.s.commit("починка в стороже")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+
+        self.assertNotEqual(self.s.run("set-finding", "H1-001", "fixed", "--commit", sha,
+                                       "--fixed-in", "src/нет-такого.ts").returncode, 0)
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
+        out = self.s.run("check").stdout
+        self.assertIn("не трогает src/route.ts", out)
+        self.assertIn("--fixed-in", out, "отказ обязан говорить, что делать")
+        self.assertEqual(self.s.run("set-finding", "H1-001", "fixed", "--commit", sha,
+                                    "--fixed-in", "src/guard.ts").returncode, 0)
+        self.assertNotIn("не трогает", self.s.run("check").stdout)
 
     def test_починка_в_соседнем_репозитории_помечается_явно(self):
         """Коммит чужого репозитория здесь не найти — но пометка обязана быть явной."""
