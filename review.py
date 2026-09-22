@@ -786,6 +786,8 @@ def cmd_set_finding(args) -> int:
         die("`rejected` без причины отказа — следующее ревью найдёт то же самое (--reason)")
     if args.status == "duplicate" and not (args.dup_of or f.get("dup_of")):
         die("`duplicate` без указания, чего именно это дубль (--dup-of)")
+    if args.dup_of and (why := dup_problem(args.finding, args.dup_of, rows)):
+        die(why)
     if args.rule and (why := rule_problem(args.rule)):
         die(why)
 
@@ -1010,6 +1012,23 @@ def cmd_roots(args) -> int:
     return 0
 
 
+def dup_problem(fid: str, target: str, rows: list[dict]) -> str | None:
+    """Дубль обязан указывать на ДРУГУЮ СУЩЕСТВУЮЩУЮ находку, которая сама не выбыла.
+
+    Иначе опечатка в `--dup-of` убирает живой дефект из остатка работ, не оставив в
+    реестре ни одной записи, которая его несёт.
+    """
+    if target == fid:
+        return f"находка {fid} указана дублем самой себя"
+    hit = next((r for r in rows if r.get("id") == target), None)
+    if hit is None:
+        return f"находка {fid}: дубль несуществующей {target} — опечатка в номере?"
+    if hit.get("status") in ("duplicate", "rejected"):
+        return (f"находка {fid}: дубль {target}, а та сама {hit.get('status')} — "
+                f"дефект не остаётся ни в одной живой записи; укажите основную")
+    return None
+
+
 def rule_problem(rule: str) -> str | None:
     """Узда обязана существовать: опечатка в пути делала класс «закрытым» без правила.
 
@@ -1130,6 +1149,11 @@ COVERAGE_VERDICT = re.compile(r"охват|полн(ый|ое|ая)\b|непол
 def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
     """Отчёт проверяющего, которого по сути нет: пустой, одни заголовки, ни одного вердикта.
 
+    Вердикт по КАЖДОЙ находке здесь не сверяется, и это не упущение: номера в реестре
+    (H1-003) выдаёт `import` уже после проверки, в отчёте их нет и быть не может.
+    Вердикт по каждой находке — поле `confidence` её записи, которое проверяющий
+    переписывает в итоговом файле находок, и `check` требует его у каждой.
+
     Существование файла доказывало только то, что файл создан: пустой `*.verify.md` при
     полном отчёте охотника проводил блок в `verified` без независимой проверки.
     """
@@ -1142,9 +1166,11 @@ def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
     if has_findings and not FINDING_VERDICT.search(text):
         return (f"в отчёте верификатора {rep.name} нет ни одного вердикта по находкам — "
                 f"confirmed / plausible / rejected / duplicate с обоснованием")
-    if not has_findings and not COVERAGE_VERDICT.search(text):
-        return (f"в отчёте верификатора {rep.name} нет вердикта об охвате — находок нет, "
-                f"значит, нужно сказать, полон ли охват и что осталось")
+    # Охват — отдельный вопрос, не заменяемый вердиктами: найденное ничего не говорит о
+    # том, что осталось непросмотренным.
+    if not COVERAGE_VERDICT.search(text):
+        return (f"в отчёте верификатора {rep.name} нет вердикта об охвате — полон ли он и "
+                f"что осталось")
     return None
 
 
@@ -1181,8 +1207,23 @@ def hypotheses(block_id: str, manifest: Path) -> list[str]:
 
 
 def verdicts_in(text: str, block_id: str = "") -> dict[str, str]:
-    """Вердикты по гипотезам: «H1.3 — не проверена: …» или «гипотеза 3 опровергнута»."""
-    out: dict[str, str] = {}
+    """Вердикты по гипотезам: «H1.3 — не проверена: …» или «гипотеза 3 опровергнута».
+
+    Берётся ПЕРВОЕ упоминание — одно правило для всех форм записи. Противоречие внутри
+    отчёта не разрешается порядком строк, а ловится `verdict_conflicts`.
+    """
+    return {h: vs[0] for h, vs in verdict_mentions(text, block_id).items()}
+
+
+def verdict_conflicts(text: str, block_id: str) -> dict[str, list[str]]:
+    """Гипотезы, которым один и тот же отчёт выносит разные вердикты."""
+    return {h: sorted(set(vs)) for h, vs in verdict_mentions(text, block_id).items()
+            if len(set(vs)) > 1}
+
+
+def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
+    """Все вердикты по каждой гипотезе в порядке появления."""
+    out: dict[str, list[str]] = {}
     plain = re.compile(r"гипотез\w*\s*№?\s*(\d+)", re.IGNORECASE)
     # Идентификатор берётся из НАСТОЯЩЕГО имени блока, а не угадывается по форме: у больше
     # чем половины блоков реального ревью имя с буквенным суффиксом (`V1d`, `H13e`), и
@@ -1196,13 +1237,13 @@ def verdicts_in(text: str, block_id: str = "") -> dict[str, str]:
             continue
         if tagged:
             for token in tagged.findall(line):
-                out[token] = verdict
+                out.setdefault(token, []).append(verdict)
         if not block_id:
             continue
         # Свободная форма привязывается к блоку, чей отчёт мы читаем: «гипотеза 2» в
         # отчёте H15 — это H15.2, и требовать от автора переписать её как ID незачем.
         for n in plain.findall(line):
-            out.setdefault(f"{block_id}.{n}", verdict)
+            out.setdefault(f"{block_id}.{n}", []).append(verdict)
         # Сводная таблица «| # | гипотеза | итог |» — как отчёт по гипотезам пишется
         # чаще всего: номер стоит в первой ячейке, а вердикт в последней, и слова
         # «гипотеза» в строке нет вовсе. Без разбора таблицы гейт требовал бы
@@ -1210,7 +1251,7 @@ def verdicts_in(text: str, block_id: str = "") -> dict[str, str]:
         if line.lstrip().startswith("|"):
             first = line.strip().strip("|").split("|")[0].strip()
             if first.isdigit():
-                out.setdefault(f"{block_id}.{first}", verdict)
+                out.setdefault(f"{block_id}.{first}", []).append(verdict)
     return out
 
 
@@ -1385,6 +1426,8 @@ def cmd_check(args) -> int:
             problems.append(f"находка {fid}: помечена fixed, но не указан коммит правки")
         if f.get("status") == "duplicate" and not f.get("dup_of"):
             problems.append(f"находка {fid}: помечена duplicate, но не указано, чего именно")
+        elif f.get("status") == "duplicate" and (why := dup_problem(fid, f["dup_of"], rows)):
+            problems.append(why)
         if f.get("confidence") == "rejected" and f.get("status") == "open":
             problems.append(f"находка {fid}: отвергнута верификатором, но всё ещё open")
         # Отвергнутая находка остаётся в реестре ради причины отказа — без неё
@@ -1498,6 +1541,14 @@ def cmd_check(args) -> int:
             continue
         if stt not in POST_VERIFY:
             continue
+        for role in ("hunter", "fix", "verify"):
+            rp = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
+            if rp.exists():
+                for h, vs in verdict_conflicts(rp.read_text(encoding="utf-8"), b["id"]).items():
+                    problems.append(
+                        f"{b['id']}: {rp.name} выносит гипотезе {h} разные вердикты "
+                        f"({' / '.join(vs)}) — итог зависел бы от порядка строк; оставьте один"
+                    )
         seen = verdicts_for(b)
         missing = [h for h in ids if h not in seen]
         if missing:
