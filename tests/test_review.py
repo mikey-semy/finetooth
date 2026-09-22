@@ -470,6 +470,31 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("findings")
         self.assertIn("нет в репозитории", self.s.run("check").stdout)
 
+    def test_починка_в_соседнем_репозитории_помечается_явно(self):
+        """Коммит чужого репозитория здесь не найти — но пометка обязана быть явной."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект в стыке с соседним сервисом",
+            "scenario": "сценарий"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+
+        # без пометки репозитория проверка честно говорит, что коммита нет
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
+        self.s.run("findings")
+        self.assertIn("нет в репозитории", self.s.run("check").stdout)
+
+        # с пометкой — принимается
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", "ядро:0123456789abcdef")
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertNotIn("нет в репозитории", out.stdout)
+        self.assertNotIn("H1-001", out.stdout)
+
     def test_статус_блока_вписанный_руками_роняет_проверку(self):
         """set-status словарь проверял, а правку state.json руками — никто."""
         self.s.write("src/one.ts", "a\n")

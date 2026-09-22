@@ -1188,7 +1188,17 @@ def cmd_check(args) -> int:
             problems.append(f"находка {fid}: status={f.get('status')} вне словаря")
         if f.get("file") and f["file"] not in tracked and not f["file"].startswith("("):
             problems.append(f"находка {fid}: файла {f['file']} нет в репозитории")
-        if f.get("status") == "fixed" and f.get("fix_commit"):
+        if f.get("status") == "fixed" and f.get("fix_commit") and ":" in str(f["fix_commit"]):
+            # Починка в СОСЕДНЕМ репозитории: `<репозиторий>:<коммит>`. Здесь его нет и быть
+            # не может, проверять нечего — но пометка обязана быть явной. Без неё такой
+            # коммит выглядит как свой, и проверка честно сообщает, что его не существует;
+            # так и случилось с находкой про чужое ядро.
+            repo, _, sha = str(f["fix_commit"]).partition(":")
+            if not repo or not sha:
+                problems.append(
+                    f"находка {fid}: внешняя починка пишется как `<репозиторий>:<коммит>`"
+                )
+        elif f.get("status") == "fixed" and f.get("fix_commit"):
             # Коммит правки обязан существовать и касаться файла находки. Две отметки
             # в соседнем проекте указывали на коммит, который названного файла не трогал
             # вовсе: правку сделали в другом модуле, а запись осталась прежней. Руками
