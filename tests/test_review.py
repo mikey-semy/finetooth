@@ -137,21 +137,21 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("forgotten", out.stdout)
         self.assertIn("Что делать", out.stdout, "отказ обязан говорить, что делать")
 
-    def test_карта_называет_коммит_и_ловит_чужую_ветку(self):
+    def test_устаревшая_карта_покрытия_роняет_проверку(self):
+        """Карта сверяется содержимым, а не именем коммита в шапке: имя ничего не доказывает."""
         self.s.write("src/one.ts", "a\n")
-        self.s.blocks(paths=["src/one.ts"])
+        self.s.blocks(paths=["src"])
         self.s.manifest()
         self.s.commit()
         self.s.run("init")
         self.assertEqual(self.s.run("coverage").returncode, 0)
-        head = self.s.git("rev-parse", "--short", "HEAD").stdout.strip()
-        cov = (self.s.root / "docs/review/coverage.tsv").read_text(encoding="utf-8")
-        self.assertIn(head, cov.splitlines()[0])
+        self.assertNotIn("устарел", self.s.run("check").stdout)
 
-        cov_path = self.s.root / "docs/review/coverage.tsv"
-        cov_path.write_text(cov.replace(head, "deadbee"), encoding="utf-8")
-        out = self.s.run("check")
-        self.assertIn("другой линии", out.stdout)
+        self.s.write("src/two.ts", "b\n")
+        self.s.commit("новый файл после карты")
+        self.assertIn("coverage.tsv устарел", self.s.run("check").stdout)
+        self.s.run("coverage")
+        self.assertNotIn("coverage.tsv устарел", self.s.run("check").stdout)
 
     def test_подмодули_и_симлинки_не_считаются_файлами(self):
         """`ls-files` печатает и то, и другое; открыть нельзя, а симлинк считается дважды."""
@@ -391,6 +391,84 @@ class ReviewToolTest(unittest.TestCase):
 
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
         self.assertNotIn("изменились после просмотра", self.s.run("check").stdout)
+
+    def test_промежуточный_статус_не_перештамповывает_блок(self):
+        """`set-status triaged` — не подтверждение просмотра; перештамповка только через restamp."""
+        self.s.write("src/one.ts", "было\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.s.write("src/one.ts", "переписали целиком\n")
+        self.s.commit("правка после ревью")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "triaged")
+        self.assertIn("изменились после просмотра", self.s.run("check").stdout,
+                      "смена статуса не смотрела код — отпечаток обязан остаться старым")
+
+    def test_ограничения_охвата_требуются_и_после_проверки(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n",
+                       verify="# проверяющий\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        for status in ("verified", "triaged", "fixing", "closed"):
+            self.s.run("set-status", "H1", status)
+            self.assertIn("нет раздела об ограничениях охвата", self.s.run("check").stdout, status)
+
+    def test_старые_записи_без_отпечатков_ловятся_и_дописываются(self):
+        """Блок и находка из времён до отпечатков не должны молча выпадать из проверки."""
+        self.s.write("src/one.ts", "было\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify="# проверяющий\n")
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "тут дефект",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.s.run("set-status", "H1", "verified")
+        # Состояние, каким его оставила версия набора без отпечатков.
+        st_path = self.s.root / "docs/review/state.json"
+        st = json.loads(st_path.read_text(encoding="utf-8"))
+        st["blocks"]["H1"].pop("reviewed_sha")
+        st_path.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        f_path = self.s.root / "docs/review/findings.jsonl"
+        rows = [json.loads(x) for x in f_path.read_text(encoding="utf-8").splitlines() if x]
+        for r in rows:
+            r.pop("code_sha")
+        f_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                          encoding="utf-8")
+
+        out = self.s.run("check").stdout
+        self.assertIn("без отпечатка просмотренного", out)
+        self.assertIn("нет отпечатка кода", out)
+
+        self.assertEqual(self.s.run("backfill").returncode, 0)
+        out = self.s.run("check").stdout
+        self.assertNotIn("без отпечатка", out)
+        self.assertNotIn("нет отпечатка", out)
+        journal = (self.s.root / "docs/review/journal.md").read_text(encoding="utf-8")
+        self.assertIn("задним числом", journal, "проставление обязано остаться в журнале")
+
+        self.s.write("src/one.ts", "стало\n")
+        self.s.commit("правка после проставления")
+        self.s.run("coverage")
+        out = self.s.run("check").stdout
+        self.assertIn("изменились после просмотра", out)
+        self.assertIn("изменился с момента импорта", out)
 
     def test_штамповать_непройденный_блок_нельзя(self):
         self.s.write("src/one.ts", "a\n")
