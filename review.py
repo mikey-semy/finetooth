@@ -399,32 +399,14 @@ def stale_tree() -> tuple[float, str] | None:
     return (days, ref) if days > STALE_TREE_DAYS else None
 
 
-def head_commit() -> str:
-    """Коммит, про который карта покрытия что-то утверждает.
-
-    Аудиторский отчёт всегда называет версию, которую смотрел («Version c243e427»,
-    «at commit f508108»), и без этого «покрыто 1691 из 1691» — число без знаменателя:
-    репозиторий уехал, а карта осталась и выглядит как прежде.
-    """
-    try:
-        return subprocess.run(
-            ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip() or "(нет коммитов)"
-    except (OSError, subprocess.CalledProcessError):
-        return "(коммит неизвестен)"
-
-
 def cmd_coverage(args) -> int:
     owned, excluded, unassigned = coverage_map()
-    commit = head_commit()
-    lines = [f"# собрано от {commit}; состав файлов сверяется при проверке", "file\tblocks"]
+    lines = ["file\tblocks"]
     for f in sorted(owned):
         lines.append(f"{f}\t{','.join(owned[f])}")
     COVERAGE_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     total = len(owned) + len(unassigned)
-    print(f"коммит:      {commit}")
     print(f"покрыто:     {len(owned)}/{total} файлов")
     print(f"исключено:   {len(excluded)} (с обоснованием в blocks.json)")
     print(f"карта:       docs/review/coverage.tsv")
@@ -737,7 +719,11 @@ def cmd_set_status(args) -> int:
     # вечно: файлы блока перепишут, а блок так и будет числиться закрытым — просмотренным
     # оказался другой текст. Форма взята у doorstop, где у требования стоит поле `reviewed`
     # с хешем содержимого, и правка текста сама переводит его в «непросмотренные изменения».
-    if args.status in POST_VERIFY:
+    # Только в точках, где просмотр ЗАВЕРШЁН: проверка (verified) и закрытие после ревью
+    # диффа (closed). Переход в triaged или fixing — не просмотр; пересними отпечаток там,
+    # и любая смена статуса молча признавала бы изменённый код просмотренным, обходя
+    # `restamp`, который существует ровно для того, чтобы это говорилось под запись.
+    if args.status in ("verified", "closed"):
         s["reviewed_sha"] = block_sha(block_index(defn)[args.block])
     if args.report:
         for r in args.report:
@@ -967,6 +953,53 @@ def cmd_roots(args) -> int:
             if f.get("line"):
                 where += f":{f['line']}"
             print(f"       {f.get('id','?'):<10} {f.get('status','?'):<9} {where}")
+    return 0
+
+
+def cmd_backfill(args) -> int:
+    """Проставить отпечатки там, где их нет: блокам после проверки и открытым находкам.
+
+    Отпечатки появились в наборе позже, чем часть ревью была пройдена, и у старых записей
+    их нет. Без них проверка свежести молча пропускает ровно то, что старше всего. Снимок
+    делается с ТЕКУЩЕГО кода, а не с того, на котором блок проходили, — поэтому каждое
+    проставление пишется в журнал с коммитом: изменения до этого момента не отслежены, и
+    это должно быть видно, а не подразумеваться.
+    """
+    defn, st, rows = blocks(), state(), findings()
+    idx = block_index(defn)
+    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip() or "?"
+    stamped_blocks, stamped_findings = [], []
+    for bid, s in st["blocks"].items():
+        if s.get("status") in POST_VERIFY and not s.get("reviewed_sha") and bid in idx:
+            s["reviewed_sha"] = block_sha(idx[bid])
+            s["restamped_at"] = now()
+            stamped_blocks.append(bid)
+    for f in rows:
+        if f.get("status") in ("open", "deferred") and not f.get("code_sha"):
+            sha = file_sha(f.get("file", ""))
+            if sha:
+                f["code_sha"] = sha
+                stamped_findings.append(f.get("id", "?"))
+    if not stamped_blocks and not stamped_findings:
+        print("отпечатки на месте — проставлять нечего")
+        return 0
+    if stamped_blocks:
+        st["updated_at"] = now()
+        save_json(STATE_FILE, st)
+    if stamped_findings:
+        with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
+            for f in rows:
+                fh.write(json.dumps(f, ensure_ascii=False) + "\n")
+        FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
+    note = (f"Отпечатки проставлены задним числом на коммите {head}: блоки "
+            f"{', '.join(stamped_blocks) or '—'}; находок {len(stamped_findings)}. "
+            f"Изменения до этого коммита не отслежены.")
+    if not JOURNAL_FILE.exists():
+        JOURNAL_FILE.write_text("# Дневник ревью\n\n", encoding="utf-8")
+    with JOURNAL_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(f"- **{now()}** · `backfill` — {note}\n")
+    print(note)
     return 0
 
 
@@ -1244,6 +1277,12 @@ def cmd_check(args) -> int:
         # Код под находкой уехал — значит либо её уже починили, либо описание устарело.
         # И то и другое требует действия, а не молчания: непереведённая находка заставляет
         # следующий проход спорить с несуществующим кодом.
+        if (f.get("status") in ("open", "deferred") and not f.get("code_sha")
+                and file_sha(f.get("file", ""))):
+            problems.append(
+                f"находка {fid}: нет отпечатка кода — изменения в {f.get('file')} под ней не "
+                f"отслеживаются; `{CLI} backfill`"
+            )
         if f.get("status") in ("open", "deferred") and f.get("code_sha"):
             fresh = file_sha(f.get("file", ""))
             if fresh and fresh != f["code_sha"]:
@@ -1323,25 +1362,6 @@ def cmd_check(args) -> int:
                 f"coverage.tsv устарел: на диске {len(on_disk)} строк, "
                 f"пересчёт даёт {len(fresh)} — выполните `{CLI} coverage`"
             )
-        # Коммит в шапке — утверждение, а не украшение: «покрыто 1671 из 1671» имеет
-        # смысл только рядом с тем, про что это сказано. Записать его и не проверять
-        # значит завести вторую надпись, которая врёт молча. Сверяем, что снимок собран
-        # на этой линии истории, а не в чужой ветке; расхождение по СОСТАВУ ловится выше.
-        stamp = next(
-            (m.group(1) for ln in cov.read_text(encoding="utf-8").splitlines()[:3]
-             if (m := re.match(r"#\s*собрано от\s+([0-9a-fA-F]+)", ln))),
-            None,
-        )
-        if stamp and not stamp.startswith("("):
-            ok = subprocess.run(
-                ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", stamp, "HEAD"],
-                capture_output=True, text=True,
-            ).returncode == 0
-            if not ok:
-                problems.append(
-                    f"coverage.tsv собрана от коммита {stamp}, которого нет в истории этой "
-                    f"ветки — снимок из другой линии; выполните `{CLI} coverage`"
-                )
 
     # Гипотезы — второй знаменатель покрытия, рядом с картой файлов. Манифест без
     # гипотез даёт ревью «по общим соображениям», а гипотеза без вердикта теряется
@@ -1374,7 +1394,16 @@ def cmd_check(args) -> int:
     # файлы блока изменились после просмотра.
     for b in defn["blocks"]:
         s = st["blocks"].get(b["id"], {})
-        if s.get("status") not in POST_VERIFY or not s.get("reviewed_sha"):
+        if s.get("status") not in POST_VERIFY:
+            continue
+        if not s.get("reviewed_sha"):
+            # Молча пропускать нельзя: тогда любая правка файлов такого блока проходит
+            # незамеченной, а проверка зелёная. Так и было у всех блоков, прошедших
+            # проверку до появления отпечатка.
+            problems.append(
+                f"{b['id']}: блок в статусе {s.get('status')} без отпечатка просмотренного — "
+                f"правки его файлов не отслеживаются; `{CLI} backfill` или `{CLI} restamp {b['id']}`"
+            )
             continue
         if changed_since_review(b, s["reviewed_sha"]):
             problems.append(
@@ -1510,6 +1539,8 @@ def main() -> int:
     c = sub.add_parser("restamp", help="подтвердить, что изменения в файлах блока просмотрены")
     c.add_argument("block")
 
+    sub.add_parser("backfill", help="проставить отпечатки старым блокам и находкам (с записью в журнал)")
+
     c = sub.add_parser("roots", help="корни находок: сколько экземпляров и чем закрыт класс")
     c.add_argument("block", nargs="?")
 
@@ -1526,7 +1557,7 @@ def main() -> int:
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
-        "restamp": cmd_restamp, "roots": cmd_roots,
+        "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
     }[args.cmd](args)
 
 
