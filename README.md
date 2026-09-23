@@ -286,12 +286,14 @@ python3 .claude/skills/review-kit/scripts/review.py setup --project "Имя"
 skills/review-kit/                СКИЛЛ — это и ставится агенту
   SKILL.md                        когда применять и порядок работы (читает агент)
   LICENSE                         условия — едут вместе со скиллом
-  scripts/review.py               инструмент: version, setup, init, status, next, coverage,
-                                  prompt, import, set-status, set-finding, hypotheses,
-                                  roots, restamp, backfill, findings, check, log
+  scripts/review.py               инструмент: version, setup, init, inventory, sizes, status,
+                                  next, coverage, prompt, import, set-status, set-finding,
+                                  hypotheses, roots, restamp, backfill, findings, check, log
   references/hunter.md            охотник: читает файлы блока и выдвигает находки
   references/verify.md            проверяющий: свой независимый проход, три вердикта
   references/fix.md               исполнитель: чинит, доказывает тестом, гоняет ворота
+  references/fixreview.md         ревьюер правок: читает дифф целиком, круги, вердикт о следующем
+  references/lessons.md           уроки двух ревью, из которых выросли правила
   assets/entry-point.md           шаблон docs/review/README.md для проекта
   assets/blocks.example.json      три блока разных типов + исключения с обоснованием
   assets/manifest.example.md      манифест блока: гипотезы и критерий приёмки
@@ -301,9 +303,10 @@ skills/review-kit/                СКИЛЛ — это и ставится аг
   assets/package-json-snippet.json то же для проекта на npm
   assets/guard-grep.sh            движок греп-ворот: разрешение по номеру строки
   assets/agent-banner.md          баннер в корневой файл инструкций проекта
-tests/test_review.py              тесты инструмента и формата скилла: 76 сценариев
+tests/test_review.py              тесты инструмента и формата скилла: 91 сценарий
 docs/how-it-works.md              описание автора набора, как есть
 docs/comparison-with-practice.md  сверка метода с аудитом, индустрией и наукой
+docs/token-economy.md             куда уходят токены и что с этим делать
 docs/measurements.md              замеры: сколько стоит блок, что проверено, что нет
 docs/prior-art.md                 кто уже решал задачи из плана и чем это кончилось
 AGENTS.md                         правила для того, кто правит сам набор

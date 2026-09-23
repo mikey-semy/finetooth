@@ -71,7 +71,8 @@
         "db/migrations",
         "web/src/lib/permission-categories.ts",
         "shared/src/user-roles.ts"
-      ]
+      ],
+      "proof": "read"
     },
     {
       "id": "V1a",
@@ -106,6 +107,22 @@
       "ref_paths": [
         "server/internal/infrastructure/repository/order_repo.go",
         "db/seeds/002_statuses_transitions.sql"
+      ]
+    },
+    {
+      "id": "H13",
+      "slug": "test-quality",
+      "phase": 1,
+      "title": "Качество тестов: ловят ли они дефект",
+      "role": "test-auditor",
+      "proof": "measured",
+      "goal": "Не читать 180 тысяч строк тестов, а измерить: набор патчей-мутантов в места максимальной цены ошибки и results.tsv (патч → команда → убит/выжил); таблица покрытия критичных путей; поиск моков мягче системы и односторонних проверок прав.",
+      "paths": [
+        "src/**/*.test.ts",
+        "tests"
+      ],
+      "ref_paths": [
+        "src"
       ]
     },
     {
