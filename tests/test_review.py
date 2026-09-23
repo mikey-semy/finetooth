@@ -555,6 +555,20 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
         self.assertNotIn("гипотезы манифеста изменились", self.s.run("check").stdout)
 
+    def test_блок_кода_в_гипотезах_не_обрывает_раздел(self):
+        """`# комментарий` в примере кода — не заголовок, `- x` в нём — не гипотеза."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=2)
+        m = self.s.root / "docs/review/blocks/H1-demo.md"
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "на граничных значениях.\n2.",
+            "на граничных значениях.\n   ```sh\n# так воспроизводится\n- не пункт\n   ```\n2.", 1),
+            encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        self.assertIn("закрыто 0/2", self.s.run("hypotheses", "H1").stdout)
+
     def test_правка_продолжения_гипотезы_ловится(self):
         """Сценарий и ожидание пишутся под гипотезой с отступом — это тоже её текст."""
         self.s.write("src/one.ts", "a\n")
@@ -951,6 +965,23 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
         self.s.run("findings")
         self.assertIn("нет в репозитории", self.s.run("check").stdout)
+
+    def test_путь_с_пробелом_не_ломает_проверку_коммита(self):
+        self.s.write("src/my file.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/my file.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/my file.ts", "a\nпочинено\n")
+        self.s.commit("починка")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
+        self.assertNotIn("не трогает", self.s.run("check").stdout)
 
     def test_починка_в_общем_модуле_называется_явно(self):
         """Маршрут чинят в общем стороже — проверка не должна требовать правки не там."""
@@ -1362,6 +1393,13 @@ class InstallTest(unittest.TestCase):
         cov = subprocess.run(["python3", str(tool), "coverage"], capture_output=True, text=True)
         self.assertEqual(cov.returncode, 1, "непокрытый файл обязан ронять карту")
         self.assertIn("npm run review --", cov.stdout, "советует команду проекта, а не свою")
+
+    def test_установщик_предупреждает_про_байткод(self):
+        out = self.install("--cli", "python3 scripts/review/review.py")
+        self.assertIn("__pycache__", out.stdout, "без правила байткод уезжает в коммит")
+        (self.root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+        out = self.install("--cli", "python3 scripts/review/review.py")
+        self.assertNotIn("В .gitignore нет", out.stdout)
 
     def test_повторная_установка_не_затирает_работу(self):
         self.install("--cli", "npm run review --")

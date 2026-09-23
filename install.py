@@ -154,6 +154,15 @@ def main() -> int:
     for line in skipped:
         print(f"  · {Path(line).relative_to(root)} — уже есть, не трогаю")
 
+    # Байткод появляется, стоит кому-то импортировать инструмент как модуль (тест,
+    # профилировщик), и уезжает в коммит. В первом же проекте так и вышло. Чужой
+    # .gitignore не правим — говорим.
+    ignore = root / ".gitignore"
+    known = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+    if "__pycache__" not in known and "*.pyc" not in known and "*.py[cod]" not in known:
+        print("\n⚠️ В .gitignore нет __pycache__/ — добавьте, иначе байткод инструмента "
+              "попадёт в коммит")
+
     print(f"""
 Дальше — руками, и это не формальность:
 

@@ -1278,7 +1278,15 @@ def section_items_full(md: str, heading: re.Pattern) -> list[str]:
     отступом. Отпечаток по одной первой строке не замечал правки ровно этой части.
     """
     lines = section_body(md, heading) or []
-    marks = [(i, len(ln) - len(ln.lstrip())) for i, ln in enumerate(lines) if LIST_ITEM.match(ln)]
+    marks = []
+    fenced = False
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced and LIST_ITEM.match(ln):
+            # Считаются пункты ВЕРХНЕГО уровня: вложенный список под гипотезой — её
+            # детали, а не новая гипотеза, и строка списка внутри блока кода — пример.
+            marks.append((i, len(ln) - len(ln.lstrip())))
     if not marks:
         return []
     top = min(ind for _, ind in marks)
@@ -1288,27 +1296,13 @@ def section_items_full(md: str, heading: re.Pattern) -> list[str]:
 
 
 def section_items(md: str, heading: re.Pattern) -> list[str]:
-    """Пункты списка в разделе, чей заголовок совпал с образцом."""
-    lines = md.split("\n")
-    items: list[str] = []
-    depth = None
-    for line in lines:
-        if line.startswith("#"):
-            level = len(line) - len(line.lstrip("#"))
-            if depth is None:
-                if heading.match(line):
-                    depth = level
-                continue
-            if level <= depth:  # раздел кончился
-                break
-            continue
-        if depth is not None and LIST_ITEM.match(line):
-            items.append((len(line) - len(line.lstrip()), line.strip()))
-    # Считаются пункты ВЕРХНЕГО уровня: вложенный список под гипотезой — её детали, а не
-    # новая гипотеза. Иначе подпункт получал свой номер, промпт о нём не спрашивал, и
-    # проверка требовала вердикт вопросу, которого никто не задавал.
-    top = min((ind for ind, _ in items), default=0)
-    return [text for ind, text in items if ind == top]
+    """Первые строки пунктов верхнего уровня — по тому же разбору, что и отпечаток.
+
+    Два разбора одного раздела расходились: считавший не знал про блоки кода, и строка
+    `# комментарий` внутри них обрывала раздел — гипотезы ниже терялись из счёта, хотя
+    в отпечаток попадали.
+    """
+    return [item.split("\n", 1)[0].strip() for item in section_items_full(md, heading)]
 
 
 def hypotheses(block_id: str, manifest: Path) -> list[str]:
@@ -1531,7 +1525,7 @@ def cmd_check(args) -> int:
             if touched.returncode != 0:
                 problems.append(f"находка {fid}: коммита {f['fix_commit']} нет в репозитории")
             elif f.get("file") and not ({f["file"], *f.get("fixed_in", [])}
-                                        & set(touched.stdout.split())):
+                                        & set(touched.stdout.splitlines())):
                 problems.append(
                     f"находка {fid}: коммит {f['fix_commit']} не трогает {f['file']} — "
                     f"либо отметка не от той находки, либо чинили в другом месте: тогда "
@@ -1551,10 +1545,6 @@ def cmd_check(args) -> int:
                 f"находка {fid}: статус rejected, а уверенность {f.get('confidence')} — "
                 f"реестр утверждает разом «отвергнута» и «не отвергнута»"
             )
-        # Отвергнутая находка остаётся в реестре ради причины отказа — без неё
-        # запись бесполезна: следующее ревью найдёт то же самое и потратит время
-        # заново. Условие завершения ревью требовало причину у каждой отвергнутой
-        # с самого начала, а проверки на это не было, и поле оставалось пустым.
         # Код под находкой уехал — значит либо её уже починили, либо описание устарело.
         # И то и другое требует действия, а не молчания: непереведённая находка заставляет
         # следующий проход спорить с несуществующим кодом.
@@ -1580,6 +1570,10 @@ def cmd_check(args) -> int:
                 problems.append(
                     f"находка {fid}: указана строка {f['line']}, а в {f.get('file')} их {n}"
                 )
+        # Отвергнутая находка остаётся в реестре ради причины отказа — без неё
+        # запись бесполезна: следующее ревью найдёт то же самое и потратит время
+        # заново. Условие завершения ревью требовало причину у каждой отвергнутой
+        # с самого начала, а проверки на это не было, и поле оставалось пустым.
         if f.get("status") == "rejected":
             # Причина отказа пишется либо отдельным полем, либо — как велит шаблон роли —
             # прямо в заголовке находки («Отвергнуто: …»). Требовать только поле значило бы
