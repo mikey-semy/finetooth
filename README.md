@@ -331,6 +331,7 @@ docs/how-it-works.md              описание автора набора, к
 docs/comparison-with-practice.md  сверка метода с аудитом, индустрией и наукой
 docs/token-economy.md             куда уходят токены и что с этим делать
 docs/review-methods.md            восемь методов ревью в сравнении: охват, время, продуктивность
+docs/open-source.md               как открыть проект и кто рядом на GitHub
 docs/measurements.md              замеры: сколько стоит блок, что проверено, что нет
 docs/prior-art.md                 кто уже решал задачи из плана и чем это кончилось
 AGENTS.md                         правила для того, кто правит сам набор
