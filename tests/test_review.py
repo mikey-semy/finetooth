@@ -63,8 +63,12 @@ class Stand:
                               capture_output=True, text=True, check=False, env=env)
 
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
-               ref_paths: list[str] | None = None, readable_lines: int | None = None) -> None:
+               ref_paths: list[str] | None = None, readable_lines: int | None = None,
+               named_files: bool = False, proof: str | None = None) -> None:
+        # Гейт «каждый файл назван в отчёте» в стенде выключен: стендовые отчёты — заглушки.
+        # Тесты самого гейта включают его явно.
         extra = {"readable_lines": readable_lines} if readable_lines else {}
+        extra["named_files"] = named_files
         self.write("docs/review/blocks.json", json.dumps({
             "review_id": "test", "project": "Тестовый проект", "gates": ["npm test"], **extra,
             "exclusions": (exclusions or []) + [
@@ -73,6 +77,7 @@ class Stand:
             ],
             "blocks": [{"id": self.block_id, "slug": "demo", "phase": 1, "title": "Демоблок",
                         "role": "demo", "goal": "проверить оснастку",
+                        **({"proof": proof} if proof else {}),
                         "paths": paths, "ref_paths": ref_paths or []}],
         }, ensure_ascii=False, indent=2), )
 
@@ -1401,6 +1406,273 @@ class ReviewToolTest(unittest.TestCase):
         d["cli"] = "npm run review --"
         bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
         self.assertIn("npm run review --", self.s.run("coverage").stdout)
+
+
+class ParallelKitLessonsTest(unittest.TestCase):
+    """Уроки второй версии набора у его автора (23.09.2026): пять дефектов нашей копии,
+    род доказательства, названные файлы, ревьюер правок."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _finding(self, file="src/one.ts", status="open", **extra) -> None:
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": status,
+            "file": file, "claim": "дефект", "scenario": "сценарий", **extra},
+            ensure_ascii=False) + "\n")
+
+    def _rows(self) -> list[dict]:
+        p = self.s.root / "docs/review/findings.jsonl"
+        return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x]
+
+    def _write_rows(self, rows: list[dict]) -> None:
+        (self.s.root / "docs/review/findings.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+    def test_починенная_находка_на_удалённом_файле_не_роняет_проверку(self):
+        """Починенная находка — история; переименование файла после починки её не ломает."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/keep.ts", "b\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self._finding()
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/one.ts", "починено\n")
+        self.s.commit("починка")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
+        self.s.git("mv", "src/one.ts", "src/renamed.ts")
+        self.s.commit("переименовали после починки")
+        self.s.run("coverage")
+        self.assertNotIn("нет в репозитории", self.s.run("check").stdout)
+        rows = self._rows(); rows[0]["status"] = "open"; rows[0].pop("code_sha", None)
+        self._write_rows(rows)
+        self.assertIn("нет в репозитории", self.s.run("check").stdout,
+                      "а открытая находка на пропавший файл — по-прежнему отказ")
+
+    def test_отложенная_находка_требует_причину(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self._finding()
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.assertNotEqual(self.s.run("set-finding", "H1-001", "deferred").returncode, 0)
+        out = self.s.run("set-finding", "H1-001", "deferred", "--reason", "ждёт блок H2")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self._rows()[0]["defer_reason"], "ждёт блок H2")
+        self.s.run("findings")
+        self.assertNotIn("отложена без причины", self.s.run("check").stdout)
+        rows = self._rows(); rows[0].pop("defer_reason"); self._write_rows(rows)
+        self.assertIn("отложена без причины", self.s.run("check").stdout)
+
+    def test_фазы_в_массиве_не_убывают(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/two.ts", "b\n")
+        self.s.blocks(paths=["src/one.ts"])
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"].insert(0, {"id": "V2", "slug": "late", "phase": 2, "title": "Поздний",
+                                "role": "r", "goal": "g", "paths": ["src/two.ts"], "ref_paths": []})
+        bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        self.assertIn("фаза 1 стоит после фазы 2", self.s.run("check").stdout)
+
+    def test_заблокированный_блок_не_значит_закончено(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("set-status", "H1", "blocked")
+        self.assertIn("в blocked без записки", self.s.run("check").stdout)
+        self.s.run("set-status", "H1", "blocked", "--note", "ждёт стенда")
+        self.assertNotIn("в blocked без записки", self.s.run("check").stdout)
+        out = self.s.run("status").stdout
+        self.assertIn("ревью НЕ закончено", out)
+        self.assertNotIn("все блоки закрыты", out)
+        self.assertIn("ждёт стенда", out)
+
+    def test_время_running_считается_от_последнего_старта(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("set-status", "H1", "running")
+        st_path = self.s.root / "docs/review/state.json"
+        st = json.loads(st_path.read_text(encoding="utf-8"))
+        st["blocks"]["H1"]["started"] = "2026-01-01T00:00:00Z"
+        st_path.write_text(json.dumps(st), encoding="utf-8")
+        self.s.write("docs/review/reports/H1-demo.hunter.md", "# охотник\n")
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "running")
+        self.assertNotIn("висит в running", self.s.run("check").stdout,
+                         "блок, возвращённый в работу, не завис")
+
+    def test_измеряемый_блок_не_подчиняется_порогу_и_получает_своё_правило(self):
+        self.s.write("src/big.ts", "x\n" * 150)
+        self.s.blocks(paths=["src/big.ts"], readable_lines=100, proof="measured")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.assertNotIn("за сеанс не прочитать", self.s.run("check").stdout)
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("измеряется", out.stdout)
+        self.assertIn("артефактами, а не чтением", self.s.run("prompt", "H1", "--role", "hunter").stdout)
+        self.assertIn("пересобери", self.s.run("prompt", "H1", "--role", "verify").stdout)
+        self.assertNotIn("прочитать все", self.s.run("prompt", "H1", "--role", "hunter").stdout)
+
+    def test_читаемый_блок_выше_порога_виден_в_sizes(self):
+        self.s.write("src/big.ts", "x\n" * 150)
+        self.s.blocks(paths=["src/big.ts"], readable_lines=100)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("выше порога", out.stdout)
+
+    def test_блок_без_файлов_получает_правило_живого_стенда(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=[])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("запущенной системе", out)
+        self.assertNotIn("(0 шт.)", out)
+
+    def test_каждый_файл_блока_назван_полным_путём(self):
+        """«Прочитано 25 из 25» — слово агента; проверяется список полных путей."""
+        self.s.write("src/a/page.tsx", "a\n")
+        self.s.write("src/b/page.tsx", "b\n")
+        self.s.write("src/vendor.min.js", "m\n")
+        self.s.blocks(paths=["src"], named_files=True,
+                      exclusions=[{"pattern": "src/vendor.min.js", "reason": "сборка"}])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Прочитано\n- page.tsx\n## Ограничения охвата\nнет\n",
+                       verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check").stdout
+        self.assertIn("не названы полным путём", out)
+        self.assertIn("src/a/page.tsx", out, "базового имени мало — одноимённых файлов много")
+        self.assertNotIn("vendor.min.js", out, "исключённое называть не требуется")
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Прочитано\n- src/a/page.tsx\n## Ограничения охвата\n"
+                              "не дочитал src/b/page.tsx\n")
+        self.assertNotIn("не названы полным путём", self.s.run("check").stdout,
+                         "названное в ограничениях охвата — тоже названное")
+
+    def test_ревьюер_правок_получает_дифф_и_своё_имя_отчёта(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "fixreview")
+        self.assertEqual(out.returncode, 2, "без диффа — отказ, а не трассировка: " + out.stderr)
+        self.assertIn("--diff", out.stderr, "отказ обязан говорить, что делать")
+        base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\nпочинено\n")
+        self.s.commit("починка")
+        out = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD",
+                         "--round", "2", "--scope", "backend")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("+починено", out.stdout, "дифф вклеен целиком")
+        self.assertIn("H1-demo.fixreview-2-backend.md", out.stdout)
+        self.assertIn("H1-demo.fix-2.md", out.stdout, "отчёт исполнителя того же круга")
+        self.assertIn("**backend**", out.stdout)
+        self.assertNotIn("{{", out.stdout.split("````diff")[0], "все подстановки заполнены")
+
+    def test_закрытие_с_починками_требует_ревью_правок(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self._finding()
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        self.s.write("src/one.ts", "починено\n")
+        self.s.commit("починка")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "closed")
+        self.assertIn("отчёта ревьюера правок нет", self.s.run("check").stdout)
+        self.s.write("docs/review/reports/H1-demo.fixreview-1.md", "# ревью правок\nнаходок нет\n")
+        self.assertNotIn("отчёта ревьюера правок нет", self.s.run("check").stdout)
+
+    def test_незаполненная_подстановка_в_шаблоне_роняет_prompt(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/prompts/hunter.md", "Блок {{BLOCK_ID}}, ещё {{NOPE}}\n")
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("{{NOPE}}", out.stderr)
+
+    def test_inventory_показывает_дерево_и_ничьих(self):
+        self.s.write("src/a/one.ts", "1\n2\n")
+        self.s.write("src/b/two.ts", "1\n")
+        self.s.write("lib/x.ts", "1\n")
+        (self.s.root / "src/a/pic.png").write_bytes(b"\x89PNG\0\0binary\n\n")
+        self.s.blocks(paths=["src/a"])
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("inventory", "--depth", "2").stdout
+        self.assertRegex(out, r"src/a\s+2\s+2\s+1\s+0\s+H1", "бинарник в счёт строк не идёт")
+        self.assertRegex(out, r"lib\s+1\s+1\s+0\s+1\s+—")
+        self.assertIn("ничьих: 2", out)
+
+    def test_coverage_без_записи_не_трогает_карту(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        cov = self.s.root / "docs/review/coverage.tsv"
+        before = cov.read_text(encoding="utf-8")
+        self.s.write("src/two.ts", "b\n")
+        self.s.commit("новый файл блока")
+        out = self.s.run("coverage", "--no-write")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertEqual(cov.read_text(encoding="utf-8"), before,
+                         "новый файл блока не должен попасть в карту без записи")
+        self.s.write("lib/orphan.ts", "c\n")
+        self.s.commit("ничей файл")
+        self.assertEqual(self.s.run("coverage", "--no-write").returncode, 1,
+                         "ворота обязаны краснеть на ничьем файле")
+
+    def test_set_finding_переводит_несколько_находок(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": f"дефект {i}", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n" for i in (1, 2)))
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        out = self.s.run("set-finding", "H1-001", "H1-002", "deferred", "--reason", "ждёт H2")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual([r["status"] for r in self._rows()], ["deferred", "deferred"])
 
 
 class SkillFormatTest(unittest.TestCase):
