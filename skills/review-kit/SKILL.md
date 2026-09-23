@@ -4,7 +4,7 @@ description: Сплошное ревью всего репозитория бл�
 license: MIT для доработок; основа передана автором без лицензии — полные условия в LICENSE
 compatibility: Нужны git и Python 3 (только стандартная библиотека; проверено на 3.12 и 3.14). Запускать из каталога ревьюируемого репозитория.
 metadata:
-  version: "0.4.0"
+  version: "0.4.1"
   original-author: "Георгий Худобандаев (https://github.com/Georgiy-Khudobandaev)"
   source: "https://github.com/mikey-semy/review-kit"
 ---
