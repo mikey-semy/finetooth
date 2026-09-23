@@ -10,7 +10,7 @@
 # существовала. Отсюда правило: команды, записанные в инструкции, выполняются
 # при первой же установке, иначе инструкция описывает намерение, а не работу.
 
-REVIEW := python3 scripts/review/review.py
+REVIEW := python3 .claude/skills/review-kit/scripts/review.py
 
 .PHONY: review-init review-status review-next review-coverage review-check \
         review-prompt review-import review-findings

@@ -25,41 +25,66 @@ import subprocess
 import sys
 from pathlib import Path
 
-def repo_root() -> Path:
-    """Корень репозитория, в котором лежит инструмент.
+# Каталог скилла: инструмент лежит в `<скилл>/scripts/`, шаблоны ролей — в
+# `<скилл>/references/`, заготовки — в `<скилл>/assets/`.
+SKILL_DIR = Path(__file__).resolve().parent.parent
 
-    Исходно корень вычислялся как `parents[2]` — «на два каталога выше файла»,
-    то есть инструмент обязан был лежать ровно в `scripts/review/`. Положенный
-    иначе, он не падал: он молча начинал искать `docs/review/` в чужом месте,
-    сообщая, что состояние «отсутствует — запусти init», и init создавал второй
-    комплект. Корень спрашиваем у git — тогда инструмент можно класть куда
-    удобно проекту.
+
+def repo_root() -> Path | None:
+    """Корень репозитория, КОТОРЫЙ РЕВЬЮИРУЕМ, — от рабочего каталога, а не от файла.
+
+    Пока инструмент копировался в проект, корень спрашивали у git от его собственного
+    расположения. Скилл лежит где угодно — в `~/.claude/skills/`, в `.agents/skills/`
+    чужого клона, — и корень «от файла» указывал бы на каталог скилла или вовсе на
+    `~/.claude`, если тот под git: инструмент молча писал бы состояние туда. Ревьюируют
+    репозиторий, в котором работают, — его и спрашиваем.
     """
     try:
         out = subprocess.run(
-            ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--show-toplevel"],
+            ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
-        if out:
-            return Path(out)
+        return Path(out) if out else None
     except (OSError, subprocess.CalledProcessError):
-        pass
-    return Path(__file__).resolve().parents[2]
+        return None
 
 
-ROOT = repo_root()
+IN_REPO = repo_root()
+ROOT = IN_REPO or Path.cwd()
 REVIEW = ROOT / "docs" / "review"
 
-# Как проект зовёт этот инструмент. Строка идёт только в подсказки: отказ обязан
-# говорить, что набрать, а набирают в каждом проекте своё — `make review-check`,
-# `npm run review:check`, `just review check`. Поменяйте здесь одну строку, а не
-# в десятке сообщений по файлу, где они и разъехались у предыдущей версии:
-# часть подсказок звала `make`, которого в проекте уже не было.
-# Версия набора. Инструмент копируется В проект, а не подключается зависимостью,
-# поэтому спросить «что у меня стоит» больше не у кого: только у него самого.
-VERSION = "0.3.0"
+# Версия набора. Скилл ставится копией (в проект или в домашний каталог), и спросить
+# «что у меня стоит» больше не у кого — только у него самого.
+VERSION = "0.4.0"
 
-CLI = "python3 scripts/review/review.py"
+
+def default_cli() -> str:
+    """Как звать ЭТОТ экземпляр инструмента — из его настоящего пути.
+
+    Строка идёт только в подсказки: отказ обязан говорить, что набрать. Раньше её
+    вписывал установщик, и копия, поставленная руками, советовала несуществующую
+    команду. Теперь путь известен сам: внутри проекта — относительный, в домашнем
+    каталоге — через `~`, иначе абсолютный. Проект, который зовёт инструмент по-своему
+    (`npm run review --`, `make review`), пишет это полем `cli` в `blocks.json`.
+    """
+    here = Path(__file__).resolve()
+    for base, prefix in ((ROOT, ""), (Path.home(), "~/")):
+        try:
+            return f"python3 {prefix}{here.relative_to(base).as_posix()}"
+        except ValueError:
+            continue
+    return f"python3 {here}"
+
+
+def project_cli() -> str:
+    try:
+        cli = json.loads((REVIEW / "blocks.json").read_text(encoding="utf-8")).get("cli")
+    except (OSError, ValueError, AttributeError):
+        cli = None
+    return cli.strip() if isinstance(cli, str) and cli.strip() else default_cli()
+
+
+CLI = project_cli()
 BLOCKS_FILE = REVIEW / "blocks.json"
 STATE_FILE = REVIEW / "state.json"
 FINDINGS_FILE = REVIEW / "findings.jsonl"
@@ -570,9 +595,13 @@ def cmd_prompt(args) -> int:
     manifest = manifest_path(b)
     if not manifest.exists():
         die(f"manifest missing: {manifest.relative_to(ROOT)}")
+    # Проект может держать свою версию шаблона роли в `docs/review/prompts/` — тогда
+    # берётся она. Нет — шаблон скилла: своя копия не обязательна и не отстаёт от него.
     template = REVIEW / "prompts" / f"{args.role}.md"
     if not template.exists():
-        die(f"prompt template missing: {template.relative_to(ROOT)}")
+        template = SKILL_DIR / "references" / f"{args.role}.md"
+    if not template.exists():
+        die(f"нет шаблона роли {args.role}: ни docs/review/prompts/{args.role}.md, ни {template}")
 
     # ⚠️ Исключения вычитаются и здесь. Карта покрытия и порог читаемости их вычитают,
     # а промпт — нет, и блок получал в работу то, чего в его размере не числилось:
@@ -1813,6 +1842,107 @@ def cmd_log(args) -> int:
     return 0
 
 
+INVARIANTS_SKELETON = """# Инварианты {project}
+
+Этот файл вклеивается в промпт КАЖДОМУ агенту, и от него зависит, что агент сочтёт
+дефектом. Общие слова здесь бесполезны — пишите то, за что уже заплатили.
+
+## Контекст, меняющий оценку находок
+
+<Есть ли продакшен? Есть ли legacy-данные? Какой целевой масштаб? Что можно ломать, а что
+нельзя ни при каких условиях?>
+
+## Правила, которые нарушать нельзя
+
+<По пункту на правило, каждое — из своей истории. «Лимиты считают успехи, за наши сбои
+пользователь не платит» лучше, чем «код должен быть корректным».>
+
+## Что НЕ является находкой
+
+<Стилистика? Числа лимитов, живущие в env? Известные и осознанные компромиссы? Перечислите,
+иначе агент принесёт придирки.>
+"""
+
+
+def cmd_setup(args) -> int:
+    """Завести ревью в проекте: скелет определения, инварианты, точку входа.
+
+    Раньше это делал отдельный установщик, копировавший в проект и сам инструмент.
+    Скилл копировать некуда и незачем — он ставится стандартным способом, а в проекте
+    остаётся только то, что принадлежит проекту: его блоки, его правила, его
+    состояние. Существующие файлы не трогаются: команду запускают в живом проекте.
+    """
+    project = args.project or ROOT.name
+    done: list[str] = []
+    skipped: list[str] = []
+
+    def put(path: Path, text: str) -> None:
+        rel = path.relative_to(ROOT).as_posix()
+        if path.exists():
+            skipped.append(rel)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        done.append(rel)
+
+    skel = {
+        "review_id": f"{ROOT.name}-review",
+        "kit_version": VERSION,
+        "project": project,
+        **({"cli": args.cli} if args.cli else {}),
+        "gates": [],
+        "note": "Статическое определение блоков. Прогресс живёт в state.json, находки — "
+                "в findings.jsonl. Порядок массива = порядок исполнения.",
+        "exclusions": [{"pattern": "docs/review/**", "reason": "аппарат ревью, а не его предмет"}],
+        "blocks": [],
+    }
+    # Скилл, поставленный в проект (ради того, чтобы CI гонял ту же версию), — тоже
+    # аппарат: без исключения его два десятка файлов с первого же коммита краснят карту
+    # покрытия. Путь — фактический: `.claude/skills/`, `.agents/skills/`, какой поставили.
+    try:
+        own = SKILL_DIR.relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        own = None
+    if own:
+        skel["exclusions"].append({"pattern": f"{own}/**",
+                                   "reason": "скилл ревью — оснастка, а не предмет ревью"})
+    put(BLOCKS_FILE, json.dumps(skel, ensure_ascii=False, indent=2) + "\n")
+    put(INVARIANTS_FILE, INVARIANTS_SKELETON.format(project=project))
+    cli = args.cli or default_cli()
+    entry = (SKILL_DIR / "assets" / "entry-point.md").read_text(encoding="utf-8")
+    put(REVIEW / "README.md", entry.replace("{{PROJECT}}", project).replace("{{CLI}}", cli))
+    for d in ("blocks", "reports"):
+        (REVIEW / d).mkdir(parents=True, exist_ok=True)
+
+    for rel in done:
+        print(f"  + {rel}")
+    for rel in skipped:
+        print(f"  · {rel} — уже есть, не трогаю")
+    # Байткод появляется, стоит кому-то импортировать инструмент как модуль, и уезжает
+    # в коммит, если скилл лежит в проекте. В первом же проекте так и вышло. Чужой
+    # .gitignore не правим — говорим.
+    ignore = ROOT / ".gitignore"
+    known = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+    if not any(k in known for k in ("__pycache__", "*.pyc", "*.py[cod]")):
+        print("\n⚠️ В .gitignore нет __pycache__/ — добавьте, иначе байткод инструмента "
+              "попадёт в коммит")
+    assets = SKILL_DIR / "assets"
+    print(f"""
+Дальше — руками, и это не формальность:
+
+1. docs/review/invariants.md — правила ВАШЕГО проекта. Самый важный файл: он вклеивается
+   каждому агенту и решает, что тот сочтёт дефектом. Образец: {assets / 'invariants.example.md'}
+2. docs/review/blocks.json — `gates` (команды ворот проекта) и блоки: сквозные сначала,
+   доменные потом, стендовые последними. Образец: {assets / 'blocks.example.json'}
+3. Манифест первого блока — docs/review/blocks/<ID>-<слаг>.md: 10–15 гипотез про свой проект
+   и критерий приёмки. Образец: {assets / 'manifest.example.md'}
+4. `{cli} init`, затем `{cli} coverage` — и разбирайтесь с непокрытыми файлами, пока их не
+   станет ноль. Здесь всплывает всё забытое.
+5. Баннер в корневой файл инструкций ({assets / 'agent-banner.md'}), иначе новая сессия не
+   узнает, что ревью идёт, и начнёт своё параллельное.""")
+    return 0
+
+
 def main() -> int:
     # `review.py prompt H1 --role hunter | head` is the obvious way to look
     # at a prompt before handing it to an agent; without this, python answers a
@@ -1827,6 +1957,11 @@ def main() -> int:
         "--force", action="store_true", help="перезаписать состояние с нуля"
     )
     sub.add_parser("version", help="версия набора, стоящего в этом проекте")
+    c = sub.add_parser("setup", help="завести ревью в проекте: скелет blocks.json, инварианты, точка входа")
+    c.add_argument("--project", default="", help="имя проекта для промптов и заготовок")
+    c.add_argument("--cli", default="",
+                   help="как проект зовёт инструмент, если не напрямую (например 'npm run review --'); "
+                        "пишется в blocks.json и идёт во все подсказки")
     sub.add_parser("status", help="где мы сейчас")
     sub.add_parser("next", help="id следующего незакрытого блока")
 
@@ -1878,12 +2013,16 @@ def main() -> int:
     c.add_argument("text")
 
     args = p.parse_args()
+    if IN_REPO is None and args.cmd != "version":
+        die("не внутри git-репозитория — запускайте из каталога проекта, который ревьюируете: "
+            "покрытие считается по `git ls-files`")
     return {
         "init": cmd_init, "version": cmd_version, "status": cmd_status, "next": cmd_next, "coverage": cmd_coverage,
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
+        "setup": cmd_setup,
     }[args.cmd](args)
 
 

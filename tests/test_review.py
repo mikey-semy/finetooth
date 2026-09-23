@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Тесты инструмента ревью.
 
-Каждый тест ставит набор в свежий временный репозиторий и проверяет ПОВЕДЕНИЕ через
-командную строку — так же, как его увидит проект. Внутренности не импортируются:
+Каждый тест заводит свежий временный репозиторий и зовёт инструмент ИЗ СКИЛЛА, с рабочим
+каталогом в этом репозитории, — так, как его зовёт агент: скилл лежит отдельно от проекта.
+Поведение проверяется через командную строку. Внутренности не импортируются:
 инструмент переживает переезд между проектами ровно настолько, насколько устойчив его
 внешний договор.
 
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -21,6 +23,8 @@ import unittest
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
+SKILL = KIT / "skills" / "review-kit"
+TOOL = SKILL / "scripts" / "review.py"
 
 
 class Stand:
@@ -30,11 +34,12 @@ class Stand:
 
     def __init__(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="review-kit-test-"))
-        self.tool = self.root / "scripts" / "review" / "review.py"
-        for d in ("scripts/review", "docs/review/blocks", "docs/review/reports", "src"):
+        # Инструмент НЕ копируется в проект: он лежит в скилле, а скилл сам — в чужом
+        # git-репозитории (этом). Так каждый тест заодно проверяет, что корень берётся
+        # по рабочему каталогу, а не по месту, где лежит файл.
+        self.tool = TOOL
+        for d in ("docs/review/blocks", "docs/review/reports", "src"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
-        shutil.copy(KIT / "review.py", self.tool)
-        shutil.copytree(KIT / "prompts", self.root / "docs" / "review" / "prompts")
         self.git("init", "-q", ".")
         self.git("config", "user.email", "test@example.com")
         self.git("config", "user.name", "test")
@@ -54,7 +59,7 @@ class Stand:
 
     def run(self, *args: str) -> subprocess.CompletedProcess:
         env = dict(os.environ, LC_ALL="C.UTF-8")
-        return subprocess.run(["python3", str(self.tool), *args],
+        return subprocess.run(["python3", str(self.tool), *args], cwd=self.root,
                               capture_output=True, text=True, check=False, env=env)
 
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
@@ -1344,24 +1349,103 @@ class ReviewToolTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- размещение
 
-    def test_инструмент_работает_из_любого_каталога(self):
-        """Корень спрашивается у git, а не отсчитывается от файла."""
+    def test_корень_берётся_по_рабочему_каталогу(self):
+        """Скилл лежит вне проекта — ревьюируется тот репозиторий, где запустили."""
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.commit()
         self.s.run("init")
-        moved = self.s.root / "tools" / "review.py"
-        moved.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(self.s.tool, moved)
-        out = subprocess.run(["python3", str(moved), "status"],
+        out = subprocess.run(["python3", str(TOOL), "status"], cwd=self.s.root / "src",
                              capture_output=True, text=True, check=False)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("H1", out.stdout)
+        self.assertIn("H1", out.stdout, "из подкаталога — тот же корень")
+        self.assertFalse((KIT / "docs" / "review" / "state.json").exists(),
+                         "состояние не должно уехать в репозиторий, где лежит скилл")
+
+    def test_вне_репозитория_инструмент_отказывает(self):
+        plain = Path(tempfile.mkdtemp(prefix="review-kit-plain-"))
+        self.addCleanup(shutil.rmtree, plain, True)
+        out = subprocess.run(["python3", str(TOOL), "status"], cwd=plain,
+                             capture_output=True, text=True, check=False)
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("git", out.stderr)
+        self.assertEqual(subprocess.run(["python3", str(TOOL), "version"], cwd=plain,
+                                        capture_output=True, text=True).returncode, 0,
+                         "версию можно спросить откуда угодно")
+
+    def test_шаблон_роли_из_скилла_и_проектная_замена(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ревьюер-охотник", out.stdout, "без своей копии — шаблон скилла")
+        self.s.write("docs/review/prompts/hunter.md", "СВОЙ ШАБЛОН для {{BLOCK_ID}}\n")
+        self.assertIn("СВОЙ ШАБЛОН для H1", self.s.run("prompt", "H1", "--role", "hunter").stdout)
+
+    def test_подсказки_зовут_инструмент_как_его_зовёт_проект(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/lost.ts", "b\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("coverage").stdout
+        self.assertIn(f"python3 {TOOL}", out.replace("~/", str(Path.home()) + "/"),
+                      "без поля cli подсказка называет настоящий путь к инструменту")
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["cli"] = "npm run review --"
+        bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        self.assertIn("npm run review --", self.s.run("coverage").stdout)
 
 
-class InstallTest(unittest.TestCase):
-    """Установщик: набор должен работать сразу после него, без ручных правок."""
+class SkillFormatTest(unittest.TestCase):
+    """Скилл по спецификации agentskills.io — то, что проверяет `skills-ref validate`,
+    плюс то, чего он не проверяет, но что ломает установку."""
+
+    def frontmatter(self) -> dict[str, str]:
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---\n"), "SKILL.md начинается с YAML-шапки")
+        head = text.split("---\n", 2)[1]
+        return {k.strip(): v.strip() for k, _, v in
+                (ln.partition(":") for ln in head.splitlines() if ln and not ln.startswith(" "))}
+
+    def test_имя_по_правилам_и_равно_каталогу(self):
+        name = self.frontmatter()["name"]
+        self.assertRegex(name, r"^[a-z0-9]+(-[a-z0-9]+)*$")
+        self.assertLessEqual(len(name), 64)
+        self.assertEqual(name, SKILL.name, "имя обязано совпадать с каталогом скилла")
+
+    def test_описание_в_пределах(self):
+        desc = self.frontmatter()["description"]
+        self.assertTrue(0 < len(desc) <= 1024, len(desc))
+
+    def test_тело_короче_пятисот_строк(self):
+        self.assertLess(len((SKILL / "SKILL.md").read_text(encoding="utf-8").splitlines()), 500)
+
+    def test_ссылки_из_skill_md_ведут_на_файлы_скилла(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        for target in re.findall(r"\]\(([^)#]+)\)", text):
+            if "://" in target:
+                continue
+            self.assertTrue((SKILL / target).exists(), target)
+
+    def test_версия_в_шапке_равна_версии_инструмента(self):
+        tool = TOOL.read_text(encoding="utf-8")
+        ver = re.search(r'^VERSION = "([^"]+)"', tool, re.M).group(1)
+        self.assertIn(f'version: "{ver}"', (SKILL / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_лицензия_в_скилле_та_же_что_в_репозитории(self):
+        """При установке уезжает только папка скилла — условия обязаны ехать с ней."""
+        self.assertEqual((SKILL / "LICENSE").read_bytes(), (KIT / "LICENSE").read_bytes())
+
+
+class SetupTest(unittest.TestCase):
+    """`setup` заводит ревью в проекте; инструмент при этом остаётся в скилле."""
 
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="review-kit-install-"))
@@ -1374,57 +1458,69 @@ class InstallTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True)
 
     def install(self, *extra: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["python3", str(KIT / "install.py"), str(self.root), *extra],
+        return subprocess.run(["python3", str(TOOL), "setup", *extra], cwd=self.root,
                               capture_output=True, text=True, check=False)
 
-    def test_после_установки_инструмент_работает_и_советует_свои_команды(self):
+    def test_после_setup_инструмент_работает_и_советует_команду_проекта(self):
         out = self.install("--cli", "npm run review --", "--project", "Демо")
         self.assertEqual(out.returncode, 0, out.stderr)
-        tool = self.root / "scripts" / "review" / "review.py"
-        self.assertTrue(tool.exists())
-        self.assertIn('CLI = "npm run review --"', tool.read_text(encoding="utf-8"),
-                      "подсказки собираются из CLI — установщик обязан её прописать")
-        for rel in ("docs/review/prompts/hunter.md", "docs/review/README.md",
-                    "docs/review/blocks.json", "docs/review/invariants.md"):
+        for rel in ("docs/review/README.md", "docs/review/blocks.json", "docs/review/invariants.md"):
             self.assertTrue((self.root / rel).exists(), rel)
+        self.assertFalse((self.root / "scripts" / "review").exists(),
+                         "инструмент живёт в скилле, в проект он не копируется")
+        self.assertFalse((self.root / "docs" / "review" / "prompts").exists(),
+                         "шаблоны ролей берутся из скилла, своя копия — только по желанию")
+        readme = (self.root / "docs/review/README.md").read_text(encoding="utf-8")
+        self.assertIn("npm run review -- status", readme)
+        self.assertNotIn("{{", readme, "в точке входа не осталось подстановок")
+        bj = json.loads((self.root / "docs/review/blocks.json").read_text(encoding="utf-8"))
+        self.assertEqual(bj["cli"], "npm run review --")
+        ver = re.search(r'^VERSION = "([^"]+)"', TOOL.read_text(encoding="utf-8"), re.M).group(1)
+        self.assertEqual(bj["kit_version"], ver)
 
-        init = subprocess.run(["python3", str(tool), "init"], capture_output=True, text=True)
-        self.assertEqual(init.returncode, 0, init.stderr)
-        cov = subprocess.run(["python3", str(tool), "coverage"], capture_output=True, text=True)
+        run = lambda *a: subprocess.run(["python3", str(TOOL), *a], cwd=self.root,
+                                        capture_output=True, text=True)
+        self.assertEqual(run("init").returncode, 0)
+        cov = run("coverage")
         self.assertEqual(cov.returncode, 1, "непокрытый файл обязан ронять карту")
         self.assertIn("npm run review --", cov.stdout, "советует команду проекта, а не свою")
 
-    def test_установщик_предупреждает_про_байткод(self):
-        out = self.install("--cli", "python3 scripts/review/review.py")
+    def test_скилл_внутри_проекта_не_роняет_покрытие(self):
+        """Скилл коммитят в проект ради CI — его файлы не предмет ревью."""
+        inside = self.root / ".claude" / "skills" / "review-kit"
+        shutil.copytree(SKILL, inside, ignore=shutil.ignore_patterns("__pycache__"))
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "скилл в проекте"], check=True)
+        tool = inside / "scripts" / "review.py"
+        run = lambda *a: subprocess.run(["python3", str(tool), *a], cwd=self.root,
+                                        capture_output=True, text=True)
+        self.assertEqual(run("setup").returncode, 0)
+        run("init")
+        out = run("coverage").stdout
+        self.assertIn("НЕ ПОКРЫТО: 1 файлов", out,
+                      "непокрыт только предмет ревью, а не два десятка файлов скилла: " + out)
+        self.assertIn("\n  app.ts\n", out)
+        self.assertIn("python3 .claude/skills/review-kit/scripts/review.py", out,
+                      "подсказка — относительным путём внутри проекта")
+
+    def test_setup_предупреждает_про_байткод(self):
+        out = self.install()
         self.assertIn("__pycache__", out.stdout, "без правила байткод уезжает в коммит")
         (self.root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
-        out = self.install("--cli", "python3 scripts/review/review.py")
+        out = self.install()
         self.assertNotIn("В .gitignore нет", out.stdout)
 
-    def test_повторная_установка_не_затирает_работу(self):
+    def test_повторный_setup_не_затирает_работу(self):
         self.install("--cli", "npm run review --")
         marker = "# правила именно этого проекта\n"
         inv = self.root / "docs" / "review" / "invariants.md"
         inv.write_text(marker, encoding="utf-8")
-        # Промпт правят под проект чаще всего, и ставится он общей дорогой копирования —
-        # проверять надо именно её, иначе тест сторожит одну ветку из двух.
-        prompt = self.root / "docs" / "review" / "prompts" / "hunter.md"
-        prompt.write_text(marker, encoding="utf-8")
         out = self.install("--cli", "make review")
         self.assertEqual(inv.read_text(encoding="utf-8"), marker, "инварианты затёрты")
-        self.assertEqual(prompt.read_text(encoding="utf-8"), marker, "правленый промпт затёрт")
         self.assertIn("уже есть", out.stdout)
-        self.assertIn('CLI = "npm run review --"',
-                      (self.root / "scripts" / "review" / "review.py").read_text(encoding="utf-8"),
-                      "повторный запуск не должен менять уже настроенный инструмент")
-
-    def test_вне_репозитория_установка_отказывает(self):
-        plain = Path(tempfile.mkdtemp(prefix="review-kit-plain-"))
-        self.addCleanup(shutil.rmtree, plain, True)
-        out = subprocess.run(["python3", str(KIT / "install.py"), str(plain)],
-                             capture_output=True, text=True)
-        self.assertEqual(out.returncode, 2)
-        self.assertIn("git", out.stderr)
+        bj = json.loads((self.root / "docs/review/blocks.json").read_text(encoding="utf-8"))
+        self.assertEqual(bj["cli"], "npm run review --",
+                         "повторный запуск не должен менять уже настроенное определение")
 
 
 if __name__ == "__main__":
