@@ -1,0 +1,42 @@
+MIT License
+
+Copyright (c) 2026 Mikhail Toshkin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------
+
+ПРОИСХОЖДЕНИЕ И ГРАНИЦЫ ЭТОЙ ЛИЦЕНЗИИ
+
+Основа набора — работа **Георгия Худобандаева**
+(https://github.com/Georgiy-Khudobandaev), переданная автором архивом
+`review-kit.zip` 16.09.2026. **Лицензии в архиве не было.**
+
+Поэтому лицензия выше распространяется только на изменения, внесённые в этом
+репозитории: первый коммит — исходный архив как получен, всё последующее —
+правки, тесты, установщик, документы и замеры. Права на исходную работу
+принадлежат её автору, и условия её использования и распространения
+согласуются с ним, а не определяются этим файлом.
+
+Практическое следствие: **репозиторий приватный, и публиковать его целиком
+нельзя, пока автор не дал на это согласия.** Причина не только в правах:
+в `docs/how-it-works.md` и `example/invariants.example.md` названы внутренние
+детали чужих проектов, включая найденные в них дефекты прав доступа. Это
+чужие внутренности, и решение об их раскрытии тоже принимает не тот, кто
+получил архив.
