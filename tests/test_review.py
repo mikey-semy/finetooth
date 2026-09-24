@@ -64,11 +64,13 @@ class Stand:
 
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
                ref_paths: list[str] | None = None, readable_lines: int | None = None,
-               named_files: bool = False, proof: str | None = None) -> None:
+               named_files: bool = False, proof: str | None = None, lang: str = "ru") -> None:
         # Гейт «каждый файл назван в отчёте» в стенде выключен: стендовые отчёты — заглушки.
         # Тесты самого гейта включают его явно.
         extra = {"readable_lines": readable_lines} if readable_lines else {}
         extra["named_files"] = named_files
+        # Стенд ведёт ревью по-русски: шаблоны ролей и заглушки отчётов в тестах русские.
+        extra["lang"] = lang
         self.write("docs/review/blocks.json", json.dumps({
             "review_id": "test", "project": "Тестовый проект", "gates": ["npm test"], **extra,
             "exclusions": (exclusions or []) + [
@@ -154,7 +156,7 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("coverage")
         self.assertEqual(out.returncode, 1)
         self.assertIn("forgotten", out.stdout)
-        self.assertIn("Что делать", out.stdout, "отказ обязан говорить, что делать")
+        self.assertIn("What to do", out.stdout, "отказ обязан говорить, что делать")
 
     def test_устаревшая_карта_покрытия_роняет_проверку(self):
         """Карта сверяется содержимым, а не именем коммита в шапке: имя ничего не доказывает."""
@@ -164,13 +166,13 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         self.assertEqual(self.s.run("coverage").returncode, 0)
-        self.assertNotIn("устарел", self.s.run("check").stdout)
+        self.assertNotIn("is stale", self.s.run("check").stdout)
 
         self.s.write("src/two.ts", "b\n")
         self.s.commit("новый файл после карты")
-        self.assertIn("coverage.tsv устарел", self.s.run("check").stdout)
+        self.assertIn("coverage.tsv is stale", self.s.run("check").stdout)
         self.s.run("coverage")
-        self.assertNotIn("coverage.tsv устарел", self.s.run("check").stdout)
+        self.assertNotIn("coverage.tsv is stale", self.s.run("check").stdout)
 
     def test_подмодуль_не_файл_а_симлинк_файл_без_двойного_счёта(self):
         """Подмодуль не открыть; симлинк — правка, которую надо видеть, но считать один раз."""
@@ -218,7 +220,7 @@ class ReviewToolTest(unittest.TestCase):
         (self.s.root / "src" / "link.ts").unlink()
         (self.s.root / "src" / "link.ts").symlink_to("b.ts")
         self.s.commit("перенаправили ссылку")
-        self.assertIn("изменились после просмотра", self.s.run("check").stdout)
+        self.assertIn("changed after the review", self.s.run("check").stdout)
 
     def test_файл_удалённый_с_диска_но_живой_в_индексе_не_роняет_счёт(self):
         self.s.write("src/one.ts", "одна\nдве\n")
@@ -297,7 +299,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-status", "H1", "verified")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("без вердикта", out.stdout)
+        self.assertIn("without a verdict", out.stdout)
 
     def test_манифест_без_гипотез_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -308,7 +310,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "running")
         out = self.s.run("check")
-        self.assertIn("нет гипотез", out.stdout)
+        self.assertIn("has no hypotheses", out.stdout)
 
     def test_отчёт_без_раздела_про_непросмотренное_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -321,7 +323,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
         out = self.s.run("check")
-        self.assertIn("ограничени", out.stdout.lower())
+        self.assertIn("coverage limits", out.stdout.lower())
 
     def test_пустой_раздел_ограничений_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -335,12 +337,12 @@ class ReviewToolTest(unittest.TestCase):
                        "## Ограничения охвата\n**Обязательный раздел, даже если он короткий.**\n"):
             self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n" + limits
                                   + "## Прочее\nтекст другого раздела\n", verify=FULL_VERIFY)
-            self.assertIn("раздел об ограничениях охвата в отчёте охотника пуст",
+            self.assertIn("'Coverage limits' section of the hunter report is empty",
                           self.s.run("check").stdout, limits)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
                               "## Ограничения охвата\n### Не дошёл\nдо почтовых шаблонов\n",
                        verify=FULL_VERIFY)
-        self.assertNotIn("ограничениях охвата", self.s.run("check").stdout)
+        self.assertNotIn("Coverage limits", self.s.run("check").stdout)
 
     def test_живой_язык_отчёта_понимается(self):
         """«Гипотеза 2 не подтвердилась» и таблица «| 1 | … | опровергнута |» — тоже вердикты."""
@@ -358,7 +360,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
         self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
-        self.assertIn("закрыто 3/3", self.s.run("hypotheses", "H1").stdout)
+        self.assertIn("closed 3/3", self.s.run("hypotheses", "H1").stdout)
 
     def test_оговорка_в_строке_не_переворачивает_вердикт(self):
         """«Проверена по коду … живым запросом не проверял» — проверена, с оговоркой."""
@@ -372,8 +374,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         out = self.s.run("hypotheses", "H1").stdout
-        self.assertRegex(out, r"H1\.1\s+проверена")
-        self.assertRegex(out, r"H1\.2\s+не проверена")
+        self.assertRegex(out, r"H1\.1\s+checked")
+        self.assertRegex(out, r"H1\.2\s+not checked")
 
     def test_идентификатор_блока_с_буквенным_суффиксом(self):
         """У больше чем половины блоков реального ревью имя вида V1d — их вердикты терялись."""
@@ -396,7 +398,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "V1d", "verified")
         out = self.s.run("hypotheses", "V1d")
-        self.assertIn("закрыто 2/2", out.stdout)
+        self.assertIn("closed 2/2", out.stdout)
         self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
 
     def test_проверки_не_выключаются_переводом_в_следующий_статус(self):
@@ -409,9 +411,9 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
-        self.assertIn("без вердикта", self.s.run("check").stdout)
+        self.assertIn("without a verdict", self.s.run("check").stdout)
         self.s.run("set-status", "H1", "triaged")
-        self.assertIn("без вердикта", self.s.run("check").stdout,
+        self.assertIn("without a verdict", self.s.run("check").stdout,
                       "смена статуса не добавила вердиктов — гейт обязан остаться красным")
 
     def test_причина_отказа_принимается_там_где_её_велит_писать_шаблон(self):
@@ -428,7 +430,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("import", "H1")
         self.s.run("findings")
-        self.assertNotIn("причина отказа не записана", self.s.run("check").stdout)
+        self.assertNotIn("reject reason is not recorded", self.s.run("check").stdout)
 
     def test_вердикт_проверяющего_перебивает_охотника(self):
         self.s.write("src/one.ts", "a\n")
@@ -440,7 +442,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         out = self.s.run("hypotheses", "H1")
-        self.assertIn("не проверена", out.stdout)
+        self.assertIn("not checked", out.stdout)
 
     def test_блок_просмотренный_на_другой_версии_файлов_роняет_проверку(self):
         """Статус «пройден» держится вечно, а файлы меняются — отпечаток это ловит."""
@@ -459,11 +461,11 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit("правка после ревью")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("изменились после просмотра", out.stdout)
+        self.assertIn("changed after the review", out.stdout)
         self.assertIn("restamp", out.stdout, "отказ обязан говорить, что делать")
 
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
-        self.assertNotIn("изменились после просмотра", self.s.run("check").stdout)
+        self.assertNotIn("changed after the review", self.s.run("check").stdout)
 
     def test_промежуточный_статус_не_перештамповывает_блок(self):
         """`set-status triaged` — не подтверждение просмотра; перештамповка только через restamp."""
@@ -480,7 +482,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit("правка после ревью")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "triaged")
-        self.assertIn("изменились после просмотра", self.s.run("check").stdout,
+        self.assertIn("changed after the review", self.s.run("check").stdout,
                       "смена статуса не смотрела код — отпечаток обязан остаться старым")
 
     def test_ограничения_охвата_требуются_и_после_проверки(self):
@@ -494,7 +496,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         for status in ("verified", "triaged", "fixing", "closed"):
             self.s.run("set-status", "H1", status)
-            self.assertIn("нет раздела об ограничениях охвата", self.s.run("check").stdout, status)
+            self.assertIn("has no 'Coverage limits' section", self.s.run("check").stdout, status)
 
     def test_старые_записи_без_отпечатков_ловятся_и_дописываются(self):
         """Блок и находка из времён до отпечатков не должны молча выпадать из проверки."""
@@ -526,13 +528,13 @@ class ReviewToolTest(unittest.TestCase):
                           encoding="utf-8")
 
         out = self.s.run("check").stdout
-        self.assertIn("без отпечатка просмотренного", out)
-        self.assertIn("нет отпечатка кода", out)
+        self.assertIn("without a fingerprint of what was reviewed", out)
+        self.assertIn("no code fingerprint", out)
 
         self.assertEqual(self.s.run("backfill").returncode, 0)
         out = self.s.run("check").stdout
-        self.assertNotIn("без отпечатка", out)
-        self.assertNotIn("нет отпечатка", out)
+        self.assertNotIn("without a fingerprint", out)
+        self.assertNotIn("fingerprint", out)
         journal = (self.s.root / "docs/review/journal.md").read_text(encoding="utf-8")
         self.assertIn("задним числом", journal, "проставление обязано остаться в журнале")
 
@@ -540,8 +542,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit("правка после проставления")
         self.s.run("coverage")
         out = self.s.run("check").stdout
-        self.assertIn("изменились после просмотра", out)
-        self.assertIn("изменился с момента импорта", out)
+        self.assertIn("changed after the review", out)
+        self.assertIn("changed since import", out)
 
     def test_правка_гипотез_после_проверки_роняет_проверку(self):
         """Вердикт по номеру, данный старому вопросу, не должен засчитываться новому."""
@@ -561,9 +563,9 @@ class ReviewToolTest(unittest.TestCase):
         m.write_text(m.read_text(encoding="utf-8").replace(
             "2. Гипотеза номер 2:", "2. Совсем другой вопрос:"), encoding="utf-8")
         out = self.s.run("check").stdout
-        self.assertIn("гипотезы манифеста изменились", out)
+        self.assertIn("manifest hypotheses changed", out)
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
-        self.assertNotIn("гипотезы манифеста изменились", self.s.run("check").stdout)
+        self.assertNotIn("manifest hypotheses changed", self.s.run("check").stdout)
 
     def test_блок_кода_в_гипотезах_не_обрывает_раздел(self):
         """`# комментарий` в примере кода — не заголовок, `- x` в нём — не гипотеза."""
@@ -577,7 +579,7 @@ class ReviewToolTest(unittest.TestCase):
             encoding="utf-8")
         self.s.commit()
         self.s.run("init")
-        self.assertIn("закрыто 0/2", self.s.run("hypotheses", "H1").stdout)
+        self.assertIn("closed 0/2", self.s.run("hypotheses", "H1").stdout)
 
     def test_правка_продолжения_гипотезы_ловится(self):
         """Сценарий и ожидание пишутся под гипотезой с отступом — это тоже её текст."""
@@ -598,7 +600,7 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
         m.write_text(m.read_text(encoding="utf-8").replace(
             "пустая строка отвергается", "пустая строка принимается"), encoding="utf-8")
-        self.assertIn("гипотезы манифеста изменились", self.s.run("check").stdout)
+        self.assertIn("manifest hypotheses changed", self.s.run("check").stdout)
 
     def test_подпункт_гипотезы_не_становится_гипотезой(self):
         self.s.write("src/one.ts", "a\n")
@@ -612,7 +614,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         out = self.s.run("hypotheses", "H1")
-        self.assertIn("закрыто 0/2", out.stdout, out.stdout)
+        self.assertIn("closed 0/2", out.stdout, out.stdout)
 
     def test_пустой_отчёт_проверяющего_не_проводит_блок(self):
         """Файл есть — проверки нет: существование `*.verify.md` ничего не доказывало."""
@@ -632,26 +634,26 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         self.s.run("set-status", "H1", "verified")
-        self.assertIn("пуст — есть файл, нет проверки", self.s.run("check").stdout)
+        self.assertIn("is empty — there is a file, there is no verification", self.s.run("check").stdout)
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n## Вердикты\n## Охват\n")
-        self.assertIn("пуст — есть файл, нет проверки", self.s.run("check").stdout,
+        self.assertIn("is empty — there is a file, there is no verification", self.s.run("check").stdout,
                       "одни заголовки — тоже пустой отчёт")
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\nПосмотрел, всё хорошо, охват полный.\n")
-        self.assertIn("ни одного вердикта по находкам", self.s.run("check").stdout)
+        self.assertIn("no verdict on any finding", self.s.run("check").stdout)
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n| H1-001 | confirmed | прогнал тест, падает |\n")
-        self.assertIn("нет вердикта об охвате", self.s.run("check").stdout,
+        self.assertIn("no coverage verdict", self.s.run("check").stdout,
                       "вердикты по находкам не говорят, что осталось непросмотренным")
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n| H1-001 | confirmed | прогнал тест, падает |\n"
                      "## Состояние охвата\nПолный.\n")
-        self.assertNotIn("отчёте верификатора", self.s.run("check").stdout)
+        self.assertNotIn("verifier report", self.s.run("check").stdout)
 
     def test_без_находок_проверяющий_говорит_об_охвате(self):
         self.s.write("src/one.ts", "a\n")
@@ -664,7 +666,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
-        self.assertIn("нет вердикта об охвате", self.s.run("check").stdout)
+        self.assertIn("no coverage verdict", self.s.run("check").stdout)
         self.s.reports(verify=FULL_VERIFY)
         self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
 
@@ -680,7 +682,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
         out = self.s.run("check").stdout
-        self.assertIn("разные вердикты", out)
+        self.assertIn("different verdicts", out)
         self.assertIn("H1.1", out)
 
     def test_дубль_указывает_на_живую_находку(self):
@@ -710,7 +712,7 @@ class ReviewToolTest(unittest.TestCase):
         rows[1]["dup_of"] = "H1-777"  # вписано руками мимо set-finding
         f_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
                           encoding="utf-8")
-        self.assertIn("дубль несуществующей H1-777", self.s.run("check").stdout)
+        self.assertIn("duplicate of nonexistent H1-777", self.s.run("check").stdout)
 
     def test_живая_находка_на_изменённом_файле_перештамповывается(self):
         """Файл меняют и соседней починкой — подтвердить живой дефект должно быть чем."""
@@ -731,11 +733,11 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit",
                    self.s.git("rev-parse", "--short", "HEAD").stdout.strip())
         out = self.s.run("check").stdout
-        self.assertIn("H1-002: код в src/one.ts изменился", out)
+        self.assertIn("H1-002: code in src/one.ts changed", out)
         self.assertIn("restamp H1-002", out, "отказ обязан говорить, что делать")
 
         self.assertEqual(self.s.run("restamp", "H1-002").returncode, 0)
-        self.assertNotIn("изменился с момента импорта", self.s.run("check").stdout)
+        self.assertNotIn("changed since import", self.s.run("check").stdout)
         self.assertNotEqual(self.s.run("restamp", "H1-001").returncode, 0,
                             "починенную находку штамповать нечего")
         self.assertNotEqual(self.s.run("restamp", "H1-999").returncode, 0)
@@ -762,15 +764,15 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-status", "H1", "verified")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 0, out.stdout)
-        self.assertNotIn("контекста", out.stdout)
+        self.assertNotIn("context", out.stdout)
 
         self.s.write("lib/guard.ts", "стало\n")
         self.s.commit("правка общего модуля")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 0, "правка контекста не отказ: " + out.stdout)
-        self.assertIn("файлы контекста (ref_paths) изменились", out.stdout)
+        self.assertIn("context files (ref_paths) changed", out.stdout)
         self.s.run("restamp", "H1")
-        self.assertNotIn("контекста", self.s.run("check").stdout)
+        self.assertNotIn("context", self.s.run("check").stdout)
 
     def test_нетронутая_строка_шаблона_не_оценка_охвата(self):
         self.s.write("src/one.ts", "a\n")
@@ -785,7 +787,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
-        self.assertIn("нет вердикта об охвате", self.s.run("check").stdout)
+        self.assertIn("no coverage verdict", self.s.run("check").stdout)
 
     def test_штамповать_непройденный_блок_нельзя(self):
         self.s.write("src/one.ts", "a\n")
@@ -838,7 +840,7 @@ class ReviewToolTest(unittest.TestCase):
         r = row()
         r.update(status="rejected", reject_reason="вписано руками", confidence="confirmed")
         f_path.write_text(json.dumps(r, ensure_ascii=False) + "\n", encoding="utf-8")
-        self.assertIn("статус rejected, а уверенность confirmed", self.s.run("check").stdout)
+        self.assertIn("status rejected but confidence confirmed", self.s.run("check").stdout)
 
     def test_отвергнутая_находка_без_причины_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -853,7 +855,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("причина отказа не записана", out.stdout)
+        self.assertIn("reject reason is not recorded", out.stdout)
 
     def test_идентификаторы_находок_не_разъезжаются_при_повторном_импорте(self):
         """Id раздаются по позиции — инструмент обязан писать их обратно в файл блока."""
@@ -896,12 +898,12 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("import", "H1")
         self.s.run("findings")
-        self.assertNotIn("изменился", self.s.run("check").stdout)
+        self.assertNotIn("changed", self.s.run("check").stdout)
 
         self.s.write("src/one.ts", "стало, починено\n")
         self.s.commit("починка")
         out = self.s.run("check")
-        self.assertIn("изменился с момента импорта", out.stdout)
+        self.assertIn("changed since import", out.stdout)
         self.assertIn("set-finding", out.stdout, "отказ обязан говорить, что делать")
 
     def test_повторный_импорт_не_переснимает_отпечаток_находки(self):
@@ -919,10 +921,10 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.write("src/one.ts", "стало\n")
         self.s.commit("правка под находкой")
-        self.assertIn("изменился с момента импорта", self.s.run("check").stdout)
+        self.assertIn("changed since import", self.s.run("check").stdout)
 
         self.assertEqual(self.s.run("import", "H1").returncode, 0)
-        self.assertIn("изменился с момента импорта", self.s.run("check").stdout,
+        self.assertIn("changed since import", self.s.run("check").stdout,
                       "повторный импорт не перепроверка")
 
         src = self.s.root / "docs/review/reports/H1-findings.jsonl"
@@ -930,7 +932,7 @@ class ReviewToolTest(unittest.TestCase):
         row["file"] = "src/two.ts"
         src.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
         self.s.run("import", "H1")
-        self.assertNotIn("изменился с момента импорта", self.s.run("check").stdout,
+        self.assertNotIn("changed since import", self.s.run("check").stdout,
                          "находка про другой файл — новое утверждение, отпечаток новый")
 
     def test_несуществующая_строка_в_находке_роняет_проверку(self):
@@ -946,7 +948,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("указана строка 900", out.stdout)
+        self.assertIn("line 900 is cited", out.stdout)
 
     def test_коммит_починки_обязан_касаться_файла_находки(self):
         """Отметка «починено» проверяется коммитом, а не словом."""
@@ -969,12 +971,12 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", wrong)
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("не трогает src/one.ts", out.stdout)
+        self.assertIn("does not touch src/one.ts", out.stdout)
 
         # а теперь коммит, которого в репозитории нет вовсе
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
         self.s.run("findings")
-        self.assertIn("нет в репозитории", self.s.run("check").stdout)
+        self.assertIn("is not in the repository", self.s.run("check").stdout)
 
     def test_путь_с_пробелом_не_ломает_проверку_коммита(self):
         self.s.write("src/my file.ts", "a\n")
@@ -991,7 +993,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit("починка")
         sha = self.s.git("rev-parse", "HEAD").stdout.strip()
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
-        self.assertNotIn("не трогает", self.s.run("check").stdout)
+        self.assertNotIn("does not touch", self.s.run("check").stdout)
 
     def test_починка_в_общем_модуле_называется_явно(self):
         """Маршрут чинят в общем стороже — проверка не должна требовать правки не там."""
@@ -1014,11 +1016,11 @@ class ReviewToolTest(unittest.TestCase):
                                        "--fixed-in", "src/нет-такого.ts").returncode, 0)
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
         out = self.s.run("check").stdout
-        self.assertIn("не трогает src/route.ts", out)
+        self.assertIn("does not touch src/route.ts", out)
         self.assertIn("--fixed-in", out, "отказ обязан говорить, что делать")
         self.assertEqual(self.s.run("set-finding", "H1-001", "fixed", "--commit", sha,
                                     "--fixed-in", "src/guard.ts").returncode, 0)
-        self.assertNotIn("не трогает", self.s.run("check").stdout)
+        self.assertNotIn("does not touch", self.s.run("check").stdout)
 
     def test_починка_в_соседнем_репозитории_помечается_явно(self):
         """Коммит чужого репозитория здесь не найти — но пометка обязана быть явной."""
@@ -1036,13 +1038,13 @@ class ReviewToolTest(unittest.TestCase):
         # без пометки репозитория проверка честно говорит, что коммита нет
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
         self.s.run("findings")
-        self.assertIn("нет в репозитории", self.s.run("check").stdout)
+        self.assertIn("is not in the repository", self.s.run("check").stdout)
 
         # с пометкой — принимается
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "ядро:0123456789abcdef")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertNotIn("нет в репозитории", out.stdout)
+        self.assertNotIn("is not in the repository", out.stdout)
         self.assertNotIn("H1-001", out.stdout)
 
     def test_статус_блока_вписанный_руками_роняет_проверку(self):
@@ -1056,7 +1058,7 @@ class ReviewToolTest(unittest.TestCase):
         data = json.loads(st.read_text(encoding="utf-8"))
         data["blocks"]["H1"]["status"] = "почти готово"
         st.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.assertIn("вне словаря", self.s.run("check").stdout)
+        self.assertIn("is not in the vocabulary", self.s.run("check").stdout)
 
     def test_куцый_манифест_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1065,7 +1067,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         self.s.run("set-status", "H1", "running")
-        self.assertIn("пуст или почти пуст", self.s.run("check").stdout)
+        self.assertIn("is empty or nearly empty", self.s.run("check").stdout)
 
     def test_добор_не_затирает_починенное(self):
         """Штатный импорт заменяет находки блока целиком — у блока в работе это потеря."""
@@ -1106,7 +1108,7 @@ class ReviewToolTest(unittest.TestCase):
                          ["H1-001", "H1-002"], "номера вписаны обратно в файл блока")
         again = self.s.run("import", "H1", "--append")
         self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertIn("дописано 0", again.stdout, "повторный добор ничего не дописывает")
+        self.assertIn("appended 0", again.stdout, "повторный добор ничего не дописывает")
 
     def test_порог_читаемости_задаётся_проектом(self):
         """6000 строк выведены из TypeScript; в другом языке плотность смысла другая."""
@@ -1117,8 +1119,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("порог 100", out.stdout, "проектный порог должен применяться")
-        self.assertIn("за сеанс не прочитать", out.stdout)
+        self.assertIn("ceiling 100", out.stdout, "проектный порог должен применяться")
+        self.assertIn("cannot be read in one session", out.stdout)
 
     # ----------------------------------------------------------------- корни и узды
 
@@ -1143,7 +1145,7 @@ class ReviewToolTest(unittest.TestCase):
         """Класс, повторившийся трижды, закрывается правилом, а не списком правок."""
         self._three_of_one_root()
         out = self.s.run("check")
-        self.assertIn("ни одной узды", out.stdout)
+        self.assertIn("and no guard", out.stdout)
         self.assertIn("рукописная копия предиката", out.stdout)
         self.assertIn("--rule", out.stdout, "отказ обязан говорить, что делать")
 
@@ -1160,7 +1162,7 @@ class ReviewToolTest(unittest.TestCase):
                 if l.strip()]
         self.assertTrue(all(r.get("rule") for r in rows), "узда должна стоять у всех трёх")
         self.s.run("findings")
-        self.assertNotIn("ни одной узды", self.s.run("check").stdout)
+        self.assertNotIn("and no guard", self.s.run("check").stdout)
 
     def test_узда_обязана_существовать(self):
         """Опечатка в пути делала класс «закрытым» без всякого правила."""
@@ -1179,11 +1181,11 @@ class ReviewToolTest(unittest.TestCase):
                          "tests/predicate.test.ts::канон один")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.s.run("findings")
-        self.assertNotIn("узда «", self.s.run("check").stdout)
+        self.assertNotIn("guard `", self.s.run("check").stdout)
 
         self.s.git("rm", "-q", "tests/predicate.test.ts")
         self.s.commit("узду удалили")
-        self.assertIn("нет такого файла", self.s.run("check").stdout,
+        self.assertIn("no such file", self.s.run("check").stdout,
                       "удалённая узда не должна держать класс закрытым")
 
     def test_два_экземпляра_узду_ещё_не_требуют(self):
@@ -1201,7 +1203,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("import", "H1")
         self.s.run("findings")
-        self.assertNotIn("ни одной узды", self.s.run("check").stdout)
+        self.assertNotIn("and no guard", self.s.run("check").stdout)
 
     def test_отвергнутые_и_дубли_не_считаются_экземплярами_класса(self):
         """Три записи — ещё не три экземпляра: отвергнутое и дубли класс не образуют."""
@@ -1226,14 +1228,14 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertNotIn("ни одной узды", out.stdout,
+        self.assertNotIn("and no guard", out.stdout,
                          "живой экземпляр один — узда ещё не требуется")
 
     def test_команда_roots_показывает_состояние_классов(self):
         self._three_of_one_root()
         out = self.s.run("roots")
         self.assertIn("3 × рукописная копия предиката", out.stdout)
-        self.assertIn("УЗДЫ НЕТ", out.stdout)
+        self.assertIn("NO GUARD", out.stdout)
 
     # --------------------------------------------------------------------- размер
 
@@ -1245,7 +1247,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("за сеанс не прочитать", out.stdout)
+        self.assertIn("cannot be read in one session", out.stdout)
 
     def test_порог_размера_не_считает_исключённое(self):
         """Исключённый кодоген не должен требовать резать блок."""
@@ -1258,7 +1260,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertNotIn("за сеанс не прочитать", out.stdout)
+        self.assertNotIn("cannot be read in one session", out.stdout)
 
     def test_шаблон_который_ничего_не_нашёл_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1267,7 +1269,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         out = self.s.run("check")
-        self.assertIn("молча сузился", out.stdout)
+        self.assertIn("silently shrank", out.stdout)
 
     # ------------------------------------------------------------- свежесть дерева
 
@@ -1288,7 +1290,7 @@ class ReviewToolTest(unittest.TestCase):
 
         self.s.run("init")
         self.s.run("coverage")
-        self.assertNotIn("старше", self.s.run("check").stdout,
+        self.assertNotIn("behind", self.s.run("check").stdout,
                          "на свежем дереве жалоб быть не должно")
 
         # Сервер ушёл вперёд и починил то, про что мы собираемся написать находку.
@@ -1310,8 +1312,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.git("fetch", "-q", "origin")
 
         out = self.s.run("check")
-        self.assertIn("старше", out.stdout)
-        self.assertIn("суток", out.stdout)
+        self.assertIn("behind", out.stdout)
+        self.assertIn("days", out.stdout)
         self.assertIn("fetch", out.stdout, "отказ обязан говорить, что делать")
 
     def test_свежий_коммит_в_давней_ветке_не_прячет_устаревание(self):
@@ -1349,7 +1351,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("старше", out.stdout,
+        self.assertIn("behind", out.stdout,
                       "ветка отведена две недели назад и не содержит чужих правок")
 
     # ---------------------------------------------------------------- размещение
@@ -1447,10 +1449,10 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.git("mv", "src/one.ts", "src/renamed.ts")
         self.s.commit("переименовали после починки")
         self.s.run("coverage")
-        self.assertNotIn("нет в репозитории", self.s.run("check").stdout)
+        self.assertNotIn("is not in the repository", self.s.run("check").stdout)
         rows = self._rows(); rows[0]["status"] = "open"; rows[0].pop("code_sha", None)
         self._write_rows(rows)
-        self.assertIn("нет в репозитории", self.s.run("check").stdout,
+        self.assertIn("is not in the repository", self.s.run("check").stdout,
                       "а открытая находка на пропавший файл — по-прежнему отказ")
 
     def test_отложенная_находка_требует_причину(self):
@@ -1466,9 +1468,9 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(self._rows()[0]["defer_reason"], "ждёт блок H2")
         self.s.run("findings")
-        self.assertNotIn("отложена без причины", self.s.run("check").stdout)
+        self.assertNotIn("deferred without a reason", self.s.run("check").stdout)
         rows = self._rows(); rows[0].pop("defer_reason"); self._write_rows(rows)
-        self.assertIn("отложена без причины", self.s.run("check").stdout)
+        self.assertIn("deferred without a reason", self.s.run("check").stdout)
 
     def test_фазы_в_массиве_не_убывают(self):
         self.s.write("src/one.ts", "a\n")
@@ -1481,7 +1483,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
         self.s.commit()
         self.s.run("init")
-        self.assertIn("фаза 1 стоит после фазы 2", self.s.run("check").stdout)
+        self.assertIn("phase 1 comes after phase 2", self.s.run("check").stdout)
 
     def test_заблокированный_блок_не_значит_закончено(self):
         self.s.write("src/one.ts", "a\n")
@@ -1490,12 +1492,12 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         self.s.run("set-status", "H1", "blocked")
-        self.assertIn("в blocked без записки", self.s.run("check").stdout)
+        self.assertIn("blocked without a note", self.s.run("check").stdout)
         self.s.run("set-status", "H1", "blocked", "--note", "ждёт стенда")
-        self.assertNotIn("в blocked без записки", self.s.run("check").stdout)
+        self.assertNotIn("blocked without a note", self.s.run("check").stdout)
         out = self.s.run("status").stdout
-        self.assertIn("ревью НЕ закончено", out)
-        self.assertNotIn("все блоки закрыты", out)
+        self.assertIn("review is NOT finished", out)
+        self.assertNotIn("all blocks closed", out)
         self.assertIn("ждёт стенда", out)
 
     def test_время_running_считается_от_последнего_старта(self):
@@ -1512,7 +1514,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.write("docs/review/reports/H1-demo.hunter.md", "# охотник\n")
         self.s.run("set-status", "H1", "hunted")
         self.s.run("set-status", "H1", "running")
-        self.assertNotIn("висит в running", self.s.run("check").stdout,
+        self.assertNotIn("stuck in running", self.s.run("check").stdout,
                          "блок, возвращённый в работу, не завис")
 
     def test_измеряемый_блок_не_подчиняется_порогу_и_получает_своё_правило(self):
@@ -1521,10 +1523,10 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.manifest(hypotheses=1)
         self.s.commit()
         self.s.run("init")
-        self.assertNotIn("за сеанс не прочитать", self.s.run("check").stdout)
+        self.assertNotIn("cannot be read in one session", self.s.run("check").stdout)
         out = self.s.run("sizes")
         self.assertEqual(out.returncode, 0, out.stdout)
-        self.assertIn("измеряется", out.stdout)
+        self.assertIn("measured", out.stdout)
         self.assertIn("артефактами, а не чтением", self.s.run("prompt", "H1", "--role", "hunter").stdout)
         self.assertIn("пересобери", self.s.run("prompt", "H1", "--role", "verify").stdout)
         self.assertNotIn("прочитать все", self.s.run("prompt", "H1", "--role", "hunter").stdout)
@@ -1537,7 +1539,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("init")
         out = self.s.run("sizes")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("выше порога", out.stdout)
+        self.assertIn("above the ceiling", out.stdout)
 
     def test_блок_без_файлов_получает_правило_живого_стенда(self):
         self.s.write("src/one.ts", "a\n")
@@ -1565,13 +1567,13 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
         out = self.s.run("check").stdout
-        self.assertIn("не названы полным путём", out)
+        self.assertIn("not named by full path", out)
         self.assertIn("src/a/page.tsx", out, "базового имени мало — одноимённых файлов много")
         self.assertNotIn("vendor.min.js", out, "исключённое называть не требуется")
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
                               "## Прочитано\n- src/a/page.tsx\n## Ограничения охвата\n"
                               "не дочитал src/b/page.tsx\n")
-        self.assertNotIn("не названы полным путём", self.s.run("check").stdout,
+        self.assertNotIn("not named by full path", self.s.run("check").stdout,
                          "названное в ограничениях охвата — тоже названное")
 
     def test_ревьюер_правок_получает_дифф_и_своё_имя_отчёта(self):
@@ -1612,9 +1614,9 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
         self.s.run("coverage")
         self.s.run("set-status", "H1", "closed")
-        self.assertIn("отчёта ревьюера правок нет", self.s.run("check").stdout)
+        self.assertIn("no fix reviewer report", self.s.run("check").stdout)
         self.s.write("docs/review/reports/H1-demo.fixreview-1.md", "# ревью правок\nнаходок нет\n")
-        self.assertNotIn("отчёта ревьюера правок нет", self.s.run("check").stdout)
+        self.assertNotIn("no fix reviewer report", self.s.run("check").stdout)
 
     def test_незаполненная_подстановка_в_шаблоне_роняет_prompt(self):
         self.s.write("src/one.ts", "a\n")
@@ -1638,7 +1640,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         out = self.s.run("inventory", "--depth", "2").stdout
         self.assertRegex(out, r"src/a\s+2\s+2\s+1\s+0\s+H1", "бинарник в счёт строк не идёт")
         self.assertRegex(out, r"lib\s+1\s+1\s+0\s+1\s+—")
-        self.assertIn("ничьих: 2", out)
+        self.assertIn("unowned: 2", out)
 
     def test_coverage_без_записи_не_трогает_карту(self):
         self.s.write("src/one.ts", "a\n")
@@ -1673,6 +1675,103 @@ class ParallelKitLessonsTest(unittest.TestCase):
         out = self.s.run("set-finding", "H1-001", "H1-002", "deferred", "--reason", "ждёт H2")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual([r["status"] for r in self._rows()], ["deferred", "deferred"])
+
+
+class LanguageTest(unittest.TestCase):
+    """Язык ревью: английский по умолчанию, русский по полю `lang`; разбор отчётов
+    понимает оба языка, сообщения инструмента — всегда английские."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _block(self, lang: str) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"], lang=lang)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+
+    def test_шаблон_роли_по_языку_проекта(self):
+        self._block("en")
+        out = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("You are a hunter reviewer", out)
+        self.assertIn("Read EVERY file", out, "правило 1 — на языке ревью")
+        self.assertNotIn("Прочитай", out)
+        self._block("ru")
+        out = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("ревьюер-охотник", out)
+        self.assertIn("Прочитай КАЖДЫЙ файл", out)
+
+    def test_без_поля_lang_язык_английский(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"], lang="en")
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8")); d.pop("lang")
+        bj.write_text(json.dumps(d), encoding="utf-8")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.assertIn("You are a hunter reviewer", self.s.run("prompt", "H1").stdout)
+
+    def test_setup_заводит_ревью_на_выбранном_языке(self):
+        self.s.write("app.ts", "x\n")
+        self.s.commit()
+        out = self.s.run("setup", "--lang", "ru", "--project", "Демо")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("# Инварианты Демо", (self.s.root / "docs/review/invariants.md").read_text(encoding="utf-8"))
+        self.assertIn("# Сплошное ревью Демо", (self.s.root / "docs/review/README.md").read_text(encoding="utf-8"))
+        self.assertEqual(json.loads((self.s.root / "docs/review/blocks.json").read_text(encoding="utf-8"))["lang"], "ru")
+        shutil.rmtree(self.s.root / "docs/review")
+        out = self.s.run("setup", "--project", "Demo")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("# Demo invariants", (self.s.root / "docs/review/invariants.md").read_text(encoding="utf-8"))
+        self.assertIn("# Whole-repository review of Demo", (self.s.root / "docs/review/README.md").read_text(encoding="utf-8"))
+        self.assertNotEqual(self.s.run("setup", "--lang", "de").returncode, 0)
+
+    def test_английский_отчёт_разбирается(self):
+        self._block("en")
+        self.s.reports(hunter="# H1 — hunter report\n## Hypotheses\n- H1.1 — checked: ran it\n"
+                              "## Coverage limits\nnothing skipped\n",
+                       verify="# verifier report\n## Verdicts on hunter findings\nno findings\n"
+                              "## Block coverage status\nComplete: both files read.\n")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertRegex(self.s.run("hypotheses", "H1").stdout, r"H1\.1\s+checked")
+
+    def test_английские_заглушки_шаблона_ловятся(self):
+        self._block("en")
+        self.s.reports(hunter="# H1 — hunter report\n## Hypotheses\n- H1.1 — not checked: no stand\n"
+                              "## Coverage limits\n**Mandatory section, even if it is short.**\n",
+                       verify="# verifier report\n## Verdicts on hunter findings\nno findings\n"
+                              "## Block coverage status\nComplete / incomplete — and what exactly remains.\n")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check").stdout
+        self.assertIn("section of the hunter report is empty", out, out)
+        self.assertIn("has no coverage verdict", out, out)
+
+    def test_findings_md_и_дневник_на_языке_ревью(self):
+        self._block("en")
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "defect", "scenario": "scenario"}) + "\n")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        md = (self.s.root / "docs/review/findings.md").read_text(encoding="utf-8")
+        self.assertIn("# Review findings", md)
+        self.assertIn("| id | block | status |", md)
+        self.s.run("log", "H1", "decided")
+        self.assertIn("# Review journal", (self.s.root / "docs/review/journal.md").read_text(encoding="utf-8"))
+
+    def test_сообщения_инструмента_английские_при_русском_ревью(self):
+        self._block("ru")
+        self.s.write("src/lost.ts", "b\n")
+        self.s.commit("unowned")
+        out = self.s.run("coverage").stdout
+        self.assertIn("NOT COVERED", out)
+        self.assertNotIn("НЕ ПОКРЫТО", out)
 
 
 class SkillFormatTest(unittest.TestCase):
@@ -1769,7 +1868,7 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(run("setup").returncode, 0)
         run("init")
         out = run("coverage").stdout
-        self.assertIn("НЕ ПОКРЫТО: 1 файлов", out,
+        self.assertIn("NOT COVERED: 1 files", out,
                       "непокрыт только предмет ревью, а не два десятка файлов скилла: " + out)
         self.assertIn("\n  app.ts\n", out)
         self.assertIn("python3 .claude/skills/finetooth/scripts/review.py", out,
@@ -1780,7 +1879,7 @@ class SetupTest(unittest.TestCase):
         self.assertIn("__pycache__", out.stdout, "без правила байткод уезжает в коммит")
         (self.root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
         out = self.install()
-        self.assertNotIn("В .gitignore нет", out.stdout)
+        self.assertNotIn(".gitignore has no", out.stdout)
 
     def test_повторный_setup_не_затирает_работу(self):
         self.install("--cli", "npm run review --")
@@ -1789,7 +1888,7 @@ class SetupTest(unittest.TestCase):
         inv.write_text(marker, encoding="utf-8")
         out = self.install("--cli", "make review")
         self.assertEqual(inv.read_text(encoding="utf-8"), marker, "инварианты затёрты")
-        self.assertIn("уже есть", out.stdout)
+        self.assertIn("already exists", out.stdout)
         bj = json.loads((self.root / "docs/review/blocks.json").read_text(encoding="utf-8"))
         self.assertEqual(bj["cli"], "npm run review --",
                          "повторный запуск не должен менять уже настроенное определение")

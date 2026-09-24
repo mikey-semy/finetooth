@@ -1,0 +1,23 @@
+{
+  "review_id": "toy-review",
+  "updated_at": "2026-09-24T07:31:52Z",
+  "blocks": {
+    "H1": {
+      "status": "verified",
+      "started": null,
+      "finished": null,
+      "reports": [],
+      "note": "",
+      "reviewed_sha": "b9029a5da964fb34",
+      "refs_sha": "de50bab6191f2402",
+      "hypotheses_sha": "ae46150a4153bf20"
+    },
+    "V1": {
+      "status": "todo",
+      "started": null,
+      "finished": null,
+      "reports": [],
+      "note": ""
+    }
+  }
+}

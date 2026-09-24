@@ -1,13 +1,13 @@
-## Что и зачем
+## What and why
 
-<!-- какую дыру закрывает или какой дефект чинит; ссылка на issue -->
+<!-- which gap it closes or which defect it fixes; link to the issue -->
 
-## Проверка
+## Verification
 
-- [ ] тест добавлен или изменён
-- [ ] мутация: сломал `…`, покраснел тест `…`
-- [ ] `python3 -m unittest discover -s tests` зелёный
-- [ ] `skills-ref validate skills/finetooth` — Valid skill (если трогал скилл)
-- [ ] запись в `CHANGELOG.md` («Не выпущено»); «Ломающее», если меняется формат на диске
-- [ ] промпт роли обновлён, если гейт стал требовать новое
-- [ ] коммиты подписаны (`git commit -s`)
+- [ ] a test added or changed
+- [ ] mutation: broke `…`, test `…` went red
+- [ ] `python3 -m unittest discover -s tests` is green
+- [ ] `skills-ref validate skills/finetooth` — Valid skill (if the skill was touched)
+- [ ] entry in `CHANGELOG.md` ("Unreleased"); "Breaking" if the on-disk format changes
+- [ ] the role prompt updated if a gate started requiring something new
+- [ ] commits signed (`git commit -s`)

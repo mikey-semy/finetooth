@@ -1,156 +1,163 @@
-# Уроки, из которых выросли правила набора
+# The lessons the kit's rules grew out of
 
-Каждое правило набора появилось после конкретного случая. Здесь они собраны с тем, что
-случилось, и тем, что из этого следует. Читать стоит до первого блока: большинство ошибок
-ниже выглядели разумно в момент, когда их совершали.
+Every rule of the kit appeared after a specific case. Here they are collected with what
+happened and what follows from it. Worth reading before the first block: most of the
+mistakes below looked reasonable at the moment they were made.
 
-Источник — два ревью. Первое — у автора метода, Георгия Худобандаева, на его проекте
-(~2000 файлов, 69 блоков; уроки переданы вместе со второй версией набора 23.09.2026,
-здесь пересказаны своими словами). Второе — первый проект, где набор ставился как скилл
-(69 блоков, 5 пройдено). Где урок наш — так и сказано.
+The source is two reviews. The first — by the author of the method, Georgiy Khudobandaev,
+on his project (~2000 files, 69 blocks; the lessons were handed over together with the second
+version of the kit on 23.09.2026 and are retold here in our own words). The second — the
+first project where the kit was installed as a skill (69 blocks, 5 completed). Where a
+lesson is ours, it says so.
 
-## Честность охвата
+## Honesty of coverage
 
-1. **«Прочитано 25 из 25» — слово агента о собственной работе.** Охотник заявил все 25
-   файлов, а назвал в отчёте пять; добор нашёл ещё 11 дефектов, среди них серьёзный.
-   → `check` требует, чтобы каждый файл читаемого блока был назван **полным путём** хотя бы
-   в одном отчёте. Базового имени мало: у 45 блоков из 59 были одноимённые файлы, и «все
-   page.tsx» закрыли бы шесть блоков разом.
-2. **Блок, который не помещается в сеанс, не падает — он пролистывается.** План
-   перекроили с 29 блоков на 59 и ввели потолок строк на читаемый блок. → `sizes`,
-   `readable_lines`.
-3. **Промпт, противоречащий своему манифесту, учит агента выбирать удобную половину.**
-   Шаблон велел блоку качества тестов «прочитать 807 файлов целиком», а манифест страницей
-   ниже объяснял, почему это невозможно; блокам живого стенда выдавалось «0 файлов —
-   прочитать все». → Правило 1 промпта и заголовок списка файлов выводятся из рода
-   доказательства блока (`proof`).
-4. **Пустой список путей — пустое множество, а не «всё».** Первая версия инструмента
-   считала, что блок без путей покрывает весь репозиторий, и покрытие сошлось фиктивно.
-5. **Опечатка в шаблоне пути сужает блок молча.** → Шаблон, не совпавший ни с одним файлом,
-   — отказ `check`.
-6. **Владение по каталогу прячет куски интерфейса.** Карточка сущности была собрана из
-   локальных компонентов маршрута; владение каталогом отдало бы комментарии и остальные
-   вкладки блоку «карточка», и профильные блоки их не увидели бы. → Владение по файлу там,
-   где каталог смешивает предметы.
-7. **Критерий приёмки — артефакт, который можно пересобрать.** Верификатор первого блока
-   пересобрал таблицу маршрутов (322 регистрации против 321 у охотника — расхождение
-   объяснилось) и переписал 48 инструкций выдачи прав в запросы к живой базе. Это
-   доказательство, а не «я всё проверил».
-8. **(наше) Раздел «Ограничения охвата» обязателен и не бывает пустым.** Полноту доказывают
-   перечислением непросмотренного; заголовок без текста — та же тишина, что без заголовка.
+1. **"Read 25 of 25" is the agent's own word about its own work.** The hunter claimed all 25
+   files and named five in the report; the top-up found 11 more defects, a serious one among
+   them. → `check` requires every file of a readable block to be named by **full path** in
+   at least one report. The base name is not enough: 45 blocks of 59 had files with the same
+   name, and "all page.tsx" would have closed six blocks at once.
+2. **A block that does not fit in a sitting does not fail — it gets skimmed.** The plan was
+   recut from 29 blocks to 59 and a line ceiling per readable block was introduced. →
+   `sizes`, `readable_lines`.
+3. **A prompt that contradicts its own manifest teaches the agent to pick the convenient
+   half.** The template told the test-quality block to "read 807 files in full", while the
+   manifest a page below explained why that was impossible; live-system blocks were given
+   "0 files — read them all". → Rule 1 of the prompt and the heading of the file list are
+   derived from the block's proof kind (`proof`).
+4. **An empty list of paths is an empty set, not "everything".** The first version of the
+   tool assumed that a block without paths covers the whole repository, and coverage added up
+   fictitiously.
+5. **A typo in a path pattern narrows a block silently.** → A pattern that matches no file
+   is a `check` refusal.
+6. **Ownership by directory hides pieces of the interface.** The entity card was assembled
+   from route-local components; ownership by directory would have given the comments and the
+   other tabs to the "card" block, and the specialized blocks would not have seen them. →
+   Ownership by file where a directory mixes subjects.
+7. **The acceptance criterion is an artifact that can be rebuilt.** The verifier of the
+   first block rebuilt the route table (322 registrations against the hunter's 321 — the
+   discrepancy was explained) and rewrote 48 permission-granting statements as queries to
+   the live database. That is proof, not "I checked everything".
+8. **(ours) The "Coverage limits" section is mandatory and is never empty.** Completeness is
+   proven by listing what was not read; a heading without text is the same silence as no
+   heading.
 
-## Находки
+## Findings
 
-9. **Находка — сценарий отказа, а не мнение.** Без конкретных входных данных и неверного
-   поведения — не находка. Это отсекает стиль и «можно было бы лучше».
-10. **Отчёт агента — заявление.** Верификатор понизил severity у двух находок, вычеркнул
-    недостижимые сценарии; в другом блоке у 12 находок из 49 понижена severity, а все три
-    примера одного охотника оказались ложными. → Ведущая сессия проверяет каждую находку
-    сама перед починкой.
-11. **`claim` — заголовок, а не протокол.** Верификатор вписал в поле весь ход проверки, и
-    сводная таблица перестала быть таблицей. → Предел 220 символов, `scenario` — 700.
-12. **Отвергнутую находку сохраняют с причиной.** Иначе следующее ревью найдёт то же самое.
-13. **Отложенная находка переживает всё ревью незамеченной**, потому что не считается
-    открытой. → У `deferred` обязательна причина; перед завершением ревью каждую либо
-    чинят, либо отвергают с причиной.
-14. **Номера находок не должны съезжать.** Id раздаются по позиции; без записи id обратно в
-    файл блока находка, добавленная позже, перенумеровала бы всё ниже себя. → Номера
-    вписываются обратно, вторая партия — `import --append`.
-15. **Починенная находка — история.** `check` краснел, когда файл давно починенной находки
-    переименовали. → На живой файл обязаны указывать только `open` и `deferred`.
-16. **(наше) Дубль — по корню, а не по тексту**: две находки дубликаты, если починка корня
-    одной делает вторую несуществующей. Дубль указывает на живую находку, не на дубль и не
-    на отвергнутую.
+9. **A finding is a failure scenario, not an opinion.** Without concrete input data and
+   incorrect behavior — not a finding. This cuts off style and "could be better".
+10. **An agent's report is a claim.** The verifier lowered the severity of two findings and
+    struck out unreachable scenarios; in another block 12 findings of 49 had their severity
+    lowered, and all three examples from one hunter turned out to be false. → The lead
+    session checks every finding itself before fixing.
+11. **`claim` is a title, not a log.** The verifier wrote the whole course of the check into
+    the field, and the summary table stopped being a table. → A limit of 220 characters,
+    `scenario` — 700.
+12. **A rejected finding is kept with the reason.** Otherwise the next review finds the same thing.
+13. **A deferred finding lives through the whole review unnoticed**, because it does not
+    count as open. → `deferred` requires a reason; before the review ends each one is either
+    fixed or rejected with a reason.
+14. **Finding numbers must not shift.** Ids are assigned by position; without writing the id
+    back into the block's file, a finding added later would renumber everything below it. →
+    Numbers are written back, a second batch is `import --append`.
+15. **A fixed finding is history.** `check` went red when the file of a long-fixed finding
+    was renamed. → Only `open` and `deferred` must point at a live file.
+16. **(ours) A duplicate is by root, not by text**: two findings are duplicates if fixing the
+    root of one makes the other nonexistent. A duplicate points at a live finding, not at a
+    duplicate and not at a rejected one.
 
-## Починка
+## Fixing
 
-17. **Тест в обе стороны.** Сплошная правка прав доступа прошла линтер, детектор гонок и все
-    ворота — и отобрала у руководителя журнал работы его подчинённых. Каждый новый тест
-    доказывал, что посторонний больше не видит лишнего; ни один — что свой по-прежнему видит
-    своё.
-18. **Подделка мягче системы делает зелёным то, что в проде падает.** Мок отвечал успехом на
-    отменённом контексте; мок прав по умолчанию отвечал «видит всё». Обратное тоже опасно:
-    подделка строже системы простояла целый круг и тянула ослабить проверку.
-19. **Правка доказывается откатом — и откат должен собираться.** Удалённая проверка оставила
-    неиспользуемую переменную, сборка упала без единого упавшего теста, и «ноль падений»
-    прочитали как «тест не зависит от правки». Честный ответ был: четыре падения из пяти.
-20. **Дефект с двумя адресами и одной правкой — всё ещё дефект.** Три круга подряд находили
-    одну форму ошибки: общий предикат заменили на сервере и не тронули три экрана, которые
-    обязаны с ним совпадать. → Правило «правка идёт по всем адресам», ищи их сам.
-21. **Расползание — это правка молча, а не правка по дороге.** Исполнитель, чинивший одну
-    колонку, нашёл ещё четыре места того же рода — включая то, из-за которого ломался вход, —
-    и починил вместе. Отложи он их, в основную ветку уехала бы половина класса. Опасна не
-    лишняя починка, а неназванная. → Попутная правка — отдельной строкой в отчёте со своим
-    тестом.
-22. **Самый тяжёлый дефект может прийти с третьего круга и быть не вашим.** На третьем круге
-    ревью правок нашлось: заголовок длиннее 500 символов не влезал в колонку, строка аудита
-    писалась в той же транзакции, что и операция, — и человек с таким браузером не мог ни
-    войти, ни создать запись. Лежало с начала. → Круги повторяются, пока окупаются;
-    воспроизводи живьём, где можно.
-23. **Правило, записанное через число, устаревает в тот же день.** «Швов ровно два»
-    устарело, пока его писали. → Формулируй через свойство, проверяемую часть держи
-    воротами.
-24. **Круг, нашедший дефект, внесённый прошлым кругом, — сигнал.** Машина начала работать на
-    себя; ревьюер правок говорит об этом отдельно.
-25. **(наше) Класс дефекта с третьим экземпляром закрывается уздой, а не списком правок.**
-    90% находок пофайлового прохода оказались повторами двадцати корней.
+17. **A test in both directions.** A sweeping fix of access rights passed the linter, the race
+    detector and every gate — and took away a manager's log of their subordinates' work.
+    Every new test proved that an outsider no longer sees too much; not one that an insider
+    still sees their own.
+18. **A fake softer than the system turns green what fails in production.** The mock
+    answered success on a cancelled context; the default permissions mock answered "sees
+    everything". The opposite is dangerous too: a fake stricter than the system stood for a
+    whole round and pushed to loosen the check.
+19. **A fix is proven by reverting — and the revert must build.** The removed check left an
+    unused variable, the build failed without a single failed test, and "zero failures" was
+    read as "the test does not depend on the fix". The honest answer was: four failures of five.
+20. **A defect with two addresses and one fix is still a defect.** Three rounds in a row
+    found one shape of mistake: a shared predicate was replaced on the server and the three
+    screens that must agree with it were left untouched. → The rule "the fix goes to every
+    address", find them yourself.
+21. **Sprawl is a silent fix, not a fix along the way.** The fixer working on one column
+    found four more places of the same kind — including the one that broke login — and fixed
+    them together. Had it deferred them, half the class would have gone into the main branch.
+    The danger is not an extra fix but an unnamed one. → An incidental fix is a separate line
+    in the report with its own test.
+22. **The heaviest defect can come on the third round and not be yours.** On the third round
+    of fix review it turned out: a title longer than 500 characters did not fit the column,
+    the audit row was written in the same transaction as the operation — and a person with
+    such a browser could neither log in nor create a record. It had been there from the
+    start. → Rounds repeat while they pay off; reproduce live where you can.
+23. **A rule written through a number goes stale the same day.** "There are exactly two
+    seams" went stale while it was being written. → State it through a property; keep the
+    checkable part in the gates.
+24. **A round that finds a defect introduced by the previous round is a signal.** The machine
+    has started working for itself; the fix reviewer says so separately.
+25. **(ours) A defect class with a third instance is closed by a guard, not by a list of
+    fixes.** 90% of the findings of the file-by-file pass turned out to be repeats of twenty roots.
 
-## Ворота — проверки, которые должны краснеть
+## Gates — the checks that must go red
 
-26. **Ворота доказываются нарушением, а не чтением.** У всех шести grep-ворот проекта
-    разрешающий комментарий освобождал соседний вызов, а не свой.
-27. **Расширение шаблона — самый вероятный способ выключить ворота.** Чтобы ловить
-    `toLocaleLowerCase`, шаблон переписали как `toLocale?LowerCase` — `?` сделал
-    необязательной букву, а не слово, и ворота перестали ловить исходные шестнадцать
-    вызовов. Коммит назывался «закрываем дыру». → Расширенный шаблон проверяется красным на
-    старой форме и на новой в одном прогоне.
-28. **Ворота, чей красный никто не обязан увидеть, — не ворота.** Проверка была
-    `allow_failure`, отфильтрована по путям и требовала инструмент, которого не было ни на
-    одной машине. → Опасность — под дешёвые обязательные ворота.
-29. **Ворота читают код возврата, а не пустой вывод.** Двенадцать вызовов были написаны как
-    `HITS=$(… || true)` — движок, который не запустился, печатал «чисто».
-30. **Проверка на настоящей базе, идущая только ночью, краснеет после выкладки.** → На
-    каждый запрос на слияние.
+26. **Gates are proven by violation, not by reading.** In all six grep gates of the project
+    the allowing comment exempted the neighboring call, not its own.
+27. **Extending a pattern is the most likely way to switch a gate off.** To catch
+    `toLocaleLowerCase` the pattern was rewritten as `toLocale?LowerCase` — the `?` made a
+    letter optional, not the word, and the gate stopped catching the original sixteen calls.
+    The commit was called "closing the hole". → An extended pattern is checked red on the old
+    form and on the new one in a single run.
+28. **A gate whose red nobody is obliged to see is not a gate.** The check was
+    `allow_failure`, filtered by paths and required a tool that was not on a single machine.
+    → Danger goes under cheap mandatory gates.
+29. **Gates read the exit code, not empty output.** Twelve calls were written as
+    `HITS=$(… || true)` — an engine that failed to start printed "clean".
+30. **A check on the real database that runs only at night goes red after the release.** → On
+    every merge request.
 
-## Проект, который двигается
+## A project that moves
 
-31. **Ревью — фотография.** За четыре дня паузы в основную ветку уехало 59 коммитов, реестр
-    испортился в трёх местах, никто не заметил. → `check` после каждого слияния; ворота
-    «каждый файл у кого-то во владении» (`coverage --no-write`) в общем наборе проверок.
-32. **Ворота покрытия видят только отслеживаемые файлы.** Новый файл до `git add` невидим.
-33. **Блок, владеющий горячими файлами, не умеет оставаться закрытым.** Блок авторизации
-    закрыли 20.09 — к 22.09 в его трёх файлах появились четыре новых шлюза. → Дочитывается
-    последним и до тех пор стоит в `blocked` с запиской.
-34. **(наше) Отпечаток просмотренного** — файлов, контекста и текста гипотез — снимается при
-    проверке, и расхождение ловится `check`, а не памятью. Правка контекста —
-    предупреждение, правка файлов блока — отказ.
+31. **A review is a photograph.** Over a four-day pause 59 commits went into the main branch,
+    the register broke in three places, nobody noticed. → `check` after every merge; the gate
+    "every file is owned by someone" (`coverage --no-write`) in the common set of checks.
+32. **The coverage gate sees only tracked files.** A new file before `git add` is invisible.
+33. **A block that owns hot files cannot stay closed.** The authorization block was closed
+    on 20.09 — by 22.09 four new gateways had appeared in its three files. → It is re-read
+    last and until then stays in `blocked` with a note.
+34. **(ours) The fingerprint of what was reviewed** — files, context and the text of the
+    hypotheses — is taken at check time, and a divergence is caught by `check`, not by memory.
+    A change to the context is a warning, a change to the block's files is a refusal.
 
-## Сам инструмент
+## The tool itself
 
-35. **Инструмент ревью тоже код и тоже врёт.** До самотеста он объявлял ревью законченным при
-    непрочитанном блоке в `blocked`, считал часы `running` от первого старта и принимал фазы
-    не по порядку. Чтение кода этого не поймало. → Самотест, где каждая проверка доказана
-    красным на подделке — у нас каждая проверка проверена мутацией.
-36. **Урок в дневнике не доходит до агентов.** Главный вывод первого блока пролежал в
-    дневнике неделю, а промпты шести десятков блоков его не несли. → Урок для всех блоков
-    переносится в инварианты тем же коммитом.
-37. **Документы ревью умирают вместе с ревью.** Старые документы ревью описывали давно
-    починенные дефекты как открытые месяцами. → Каталог удаляется целиком одним изменением,
-    долговечное переезжает в правила, ADR и тесты; остаётся итог.
-38. **(наше) Метод ищет быстрее, чем проект чинит.** На первом проекте-скилле починено 12%
-    найденного; в пофайловом проходе первой версии — ноль. Следующий блок не начинается,
-    пока серьёзное из предыдущего не закрыто.
+35. **The review tool is code too and lies too.** Before the self-test it declared the review
+    finished with an unread block in `blocked`, counted `running` hours from the first start
+    and accepted phases out of order. Reading the code did not catch that. → A self-test where
+    every check is proven red on a fake — with us every check is proven by a mutation.
+36. **A lesson in the journal does not reach the agents.** The main conclusion of the first
+    block lay in the journal for a week, and the prompts of six dozen blocks did not carry it.
+    → A lesson for all blocks is moved into the invariants in the same commit.
+37. **Review documents die with the review.** Old review documents described long-fixed
+    defects as open for months. → The directory is deleted whole in one change, what lasts
+    moves into rules, ADRs and tests; the summary remains.
+38. **(ours) The method finds faster than the project fixes.** On the first skill project 12%
+    of what was found got fixed; in the file-by-file pass of the first version — zero. The
+    next block does not start until the serious findings of the previous one are closed.
 
-## Ведущая сессия и человек
+## The lead session and the human
 
-39. **Граница блока — полная остановка.** Владелец задаёт порядок и темп: каждый блок рождает
-    правки по всему коду и очередь решений только для него. «Дальше идём в блок X» как
-    свершившийся план — ошибка; правильно — доложить и ждать.
-40. **Длинный агент — плохой выбор по умолчанию.** Повторная починка ушла тому же агенту: 79
-    минут и 600 тысяч токенов контекста. Задание было самодостаточным — свежий агент
-    справился бы точнее.
-41. **Находки — в один файл, а не в переписку.** Пересекающиеся находки разных агентов
-    объединяются в одну запись, каждая проверяется по коду и отмечается по ходу.
-42. **Простыми словами, и открытый вопрос — целиком.** Владелец уходил, пока шла работа, и не
-    понял «два вопроса из прошлого сообщения ещё в силе». Вопрос повторяется полностью; у
-    каждого — кто решает и рекомендация.
+39. **A block boundary is a full stop.** The owner sets the order and the pace: every block
+    produces fixes across the whole code and a queue of decisions for the owner alone. "Next
+    we go into block X" as a settled plan is a mistake; the right thing is to report and wait.
+40. **A long-running agent is a bad default.** A repeat fix went to the same agent: 79
+    minutes and 600 thousand tokens of context. The assignment was self-contained — a fresh
+    agent would have done it more precisely.
+41. **Findings go into one file, not into the conversation.** Overlapping findings from
+    different agents are merged into one record, each is checked against the code and marked
+    as you go.
+42. **In plain words, and an open question — in full.** The owner stepped away while the work
+    went on and did not understand "the two questions from the previous message still
+    stand". A question is repeated in full; each has who decides and a recommendation.

@@ -1,28 +1,28 @@
-name: Трофей — дефект, найденный набором
-description: Настоящий дефект, который нашло ревью по этому методу. Это знаменатель для оценки метода
+name: Trophy — a defect found by the kit
+description: A real defect that a review by this method found. This is the denominator for assessing the method
 labels: [trophy]
 body:
   - type: dropdown
     id: role
     attributes:
-      label: Какой шаг нашёл
-      options: [охотник, проверяющий, ревьюер правок, гейт check, карта покрытия]
+      label: Which step found it
+      options: [hunter, verifier, fix reviewer, check gate, coverage map]
     validations:
       required: true
   - type: textarea
     id: what
     attributes:
-      label: Что за дефект
-      description: класс и сценарий отказа, обезличенно — без имени проекта и внутренних деталей, если они закрыты
+      label: What the defect is
+      description: the class and the failure scenario, anonymised — without the project name and internal details, if they are closed
     validations:
       required: true
   - type: input
     id: link
     attributes:
-      label: Ссылка на находку или починку
-      description: если проект открытый
+      label: Link to the finding or the fix
+      description: if the project is open
   - type: textarea
     id: why
     attributes:
-      label: Почему другие методы его не нашли бы
-      description: необязательно, но это самое ценное
+      label: Why other methods would not have found it
+      description: optional, but this is the most valuable part

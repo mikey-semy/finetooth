@@ -1,20 +1,21 @@
-# Безопасность
+# Security
 
-Инструмент работает локально: читает репозиторий через `git`, пишет в `docs/review/`
-и ничего не отправляет в сеть. Промпты, которые он собирает, исполняют агенты с теми
-правами, которые вы им дали, — читайте промпт перед тем, как отдать его агенту.
+The tool works locally: it reads the repository through `git`, writes to `docs/review/` and
+sends nothing over the network. The prompts it assembles are executed by agents with whatever
+permissions you gave them — read the prompt before handing it to an agent.
 
-## Как сообщить об уязвимости
+## How to report a vulnerability
 
-- Через GitHub: **Security → Report a vulnerability** в этом репозитории (приватный отчёт).
-- Или письмом на адрес из профиля владельца на GitHub.
+- Through GitHub: **Security → Report a vulnerability** in this repository (a private report).
+- Or by email to the address in the owner's GitHub profile.
 
-Ответ — **в течение недели**. Проект ведёт один человек; быстрее обещать нечестно.
+A reply **within a week**. The project is maintained by one person; promising faster would be
+dishonest.
 
-Что считается уязвимостью здесь: инструмент пишет вне `docs/review/`; собранный промпт
-содержит то, чего в нём быть не должно (например, файл из `exclusions`); проверка `check`
-можно обойти так, что она зеленеет на ложном состоянии. Последнее — самое важное:
-набор существует ради того, чтобы такие обходы были невозможны.
+What counts as a vulnerability here: the tool writes outside `docs/review/`; an assembled
+prompt contains what should not be in it (for example, a file from `exclusions`); the `check`
+can be bypassed so that it goes green on a false state. The last one matters most: the kit
+exists so that such bypasses are impossible.
 
-Не считается уязвимостью: поведение агента, исполняющего промпт, — за это отвечает
-агент и его настройки прав.
+What does not count as a vulnerability: the behaviour of the agent executing the prompt — the
+agent and its permission settings are responsible for that.

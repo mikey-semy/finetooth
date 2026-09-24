@@ -1,0 +1,33 @@
+name: stale
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      # Silence is a no (CONTRIBUTING.md): a PR whose author stopped answering is closed
+      # after 30 days, with an invitation to reopen. Issues are not closed automatically —
+      # a defect does not expire because nobody had time for it.
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 21
+          days-before-pr-close: 9
+          stale-pr-message: >-
+            No activity for three weeks. If the change is still wanted, answer the review
+            comments or say what is blocking you; otherwise this PR closes in nine days.
+            Reopen any time when things move again.
+          close-pr-message: >-
+            Closed for inactivity, as CONTRIBUTING.md says. This is not a verdict on the
+            change — reopen when you can continue.
+          stale-pr-label: stale
+          exempt-pr-labels: blocked

@@ -1,0 +1,51 @@
+{
+  "review_id": "toy-review",
+  "kit_version": "0.6.0",
+  "project": "Toy",
+  "lang": "en",
+  "gates": [
+    "npm test"
+  ],
+  "note": "Static definition of the blocks. Progress lives in state.json, findings in findings.jsonl. Array order = execution order.",
+  "exclusions": [
+    {
+      "pattern": "docs/review/**",
+      "reason": "review apparatus, not its subject"
+    },
+    {
+      "pattern": ".gitignore",
+      "reason": "not code"
+    }
+  ],
+  "blocks": [
+    {
+      "id": "H1",
+      "slug": "access",
+      "phase": 1,
+      "title": "Access: who may read what",
+      "role": "security-authz",
+      "goal": "Find any path by which a request reads data its token does not own.",
+      "proof": "read",
+      "paths": [
+        "src/auth",
+        "tests/guard.test.ts"
+      ],
+      "ref_paths": [
+        "src/billing"
+      ]
+    },
+    {
+      "id": "V1",
+      "slug": "billing",
+      "phase": 2,
+      "title": "Billing: quotas and limits",
+      "role": "money",
+      "goal": "Find where a limit counts the wrong thing.",
+      "proof": "read",
+      "paths": [
+        "src/billing"
+      ],
+      "ref_paths": []
+    }
+  ]
+}
