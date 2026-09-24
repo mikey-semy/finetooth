@@ -988,6 +988,20 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("`tests/guard.test.ts` — H1-001", text)
         self.assertIn("<!-- finetooth-summary ", text)
 
+    def test_критерий_приёмки_в_итоге_без_вставленного_образца(self):
+        """Критерий приёмки попадает в итог одной ячейкой, и образец таблицы внутри него —
+        не часть фразы: вклеенный в ячейку, он превращался в вереницу кавычек и палок."""
+        self._reviewed_with_findings()
+        m = Path(self.s.root, "docs/review/blocks/H1-demo.md")
+        m.write_text(m.read_text(encoding="utf-8").replace(
+            "Таблица «вход → ожидание → факт» по каждой гипотезе.",
+            "Таблица «вход → ожидание → факт» по каждой гипотезе.\n\n"
+            "```markdown\n| вход | ожидание | факт |\n```\n"), encoding="utf-8")
+        self.s.run("summary", "--out", "docs/итог.md")
+        text = Path(self.s.root, "docs/итог.md").read_text(encoding="utf-8")
+        self.assertIn("Таблица «вход → ожидание → факт» по каждой гипотезе.", text)
+        self.assertNotIn("```markdown", text)
+
     def test_summary_aged_считает_дрейф_от_коммита_базы(self):
         self._reviewed_with_findings()
         self.s.run("summary", "--out", "docs/итог.md")
@@ -4013,11 +4027,62 @@ class SourceRuleTest(unittest.TestCase):
                 offenders.append((node.lineno, items))
         self.assertEqual(offenders, [], "вызов git со списком путей без -z")
 
-    # Распознавание цитаты живёт в этих двух функциях; всё остальное зовёт `quoted_lines`.
-    QUOTE_TRACKERS = ("fenced_lines", "quoted_lines")
-    # Разборчики markdown, каждый из которых обязан считать цитату цитатой: правка одного
-    # без остальных — это ровно то расхождение, из-за которого `~~~` знал только один.
-    MARKDOWN_PARSERS = ("demote", "section_body", "section_items_full", "verdict_mentions")
+    # Распознавание цитаты живёт здесь; всё остальное спрашивает у них.
+    QUOTE_TRACKERS = ("quoted_lines", "unquoted")
+    # Детекторы цитаты: кто называет их у себя, тот завёл своё распознавание.
+    QUOTE_DETECTORS = {"FENCE", "BLOCKQUOTE", "LIST_OPEN", "CODE_INDENT", "FENCE_SLACK",
+                       "COMMENT_OPEN", "COMMENT_CLOSE"}
+    # Разборщик markdown узнаётся ПО ВИДУ, а не по имени из списка: список не видит того,
+    # кого ещё не написали, — и не увидел ни одного из трёх, которыми это измерено.
+    # Признаки: документ разметки в инструменте зовут `md`; структурные ограды разметки и
+    # заголовочные образцы (`*_HEADING`) называет только тот, кто разбирает разметку;
+    # строки раздела отдают только эти три функции; а `zip(строки, ...)` — это разбор
+    # строки вместе с признаком, и признак обязан быть признаком цитаты.
+    MARKDOWN_ARG = "md"
+    MARKDOWN_SHAPES = {"FENCE", "BLOCKQUOTE", "LIST_OPEN", "LIST_ITEM", "LIST_MARK"}
+    SECTION_READERS = {"section_body", "section_items", "section_items_full"}
+    # `section_body` отдаёт строки раздела КАК ЕСТЬ: цитату оно распознаёт, чтобы найти
+    # границы раздела, а не чтобы выкинуть её из ответа. Поэтому зов `section_body`
+    # разборщика не оправдывает — читающий его строки обязан спросить трекер сам. Ровно
+    # так и прошли мимо ворота про раздел ограничений охвата.
+    RAW_LINES = {"section_body"}
+
+    def _quote_offenders(self, source: str) -> tuple[list, list]:
+        """Кто завёл своё распознавание цитаты и кто разбирает разметку, не спросив общее.
+
+        Разборщик имеет право делегировать (`section_items` берёт строки у
+        `section_items_full`), и требовать зова от каждого звена значило бы требовать
+        лишнего вызова ради правила; отдающие сырые строки в делегаты не годятся.
+        """
+        tree = ast.parse(source)
+        funcs = {fn.name: fn for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)}
+        names = {name: {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+                 for name, fn in funcs.items()}
+        calls = {name: {n.func.id for n in ast.walk(fn)
+                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+                 for name, fn in funcs.items()}
+        asks, changed = set(self.QUOTE_TRACKERS), True
+        while changed:
+            changed = False
+            for name, called in calls.items():
+                if name not in asks and (called - self.RAW_LINES) & asks:
+                    asks.add(name)
+                    changed = True
+        strangers, deaf = [], []
+        for name, fn in funcs.items():
+            if name not in self.QUOTE_TRACKERS and names[name] & self.QUOTE_DETECTORS:
+                strangers.append((name, sorted(names[name] & self.QUOTE_DETECTORS)))
+            shapes = {n for n in names[name]
+                      if n in self.MARKDOWN_SHAPES or n.endswith("_HEADING")}
+            paired = [n for n in ast.walk(fn)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                      and n.func.id == "zip" and len(n.args) > 1
+                      and isinstance(n.args[1], ast.Call)]
+            reads_markdown = (self.MARKDOWN_ARG in {a.arg for a in fn.args.args}
+                              or shapes or calls[name] & self.SECTION_READERS or paired)
+            if reads_markdown and name not in asks:
+                deaf.append(name)
+        return strangers, deaf
 
     def test_цитаты_распознаются_одним_местом(self):
         """УЗДА КЛАССА «цитата не распознана».
@@ -4026,26 +4091,59 @@ class SourceRuleTest(unittest.TestCase):
         одного места не чинила остальные. Форм цитаты четыре — ограда, отступ, `>` и
         html-комментарий, — и каждая по очереди закрывала гипотезу, которую никто не
         отвечал. Распознавание живёт в одном месте, своих детекторов быть не должно, а
-        разборщики обязаны звать общий трекер поимённо.
+        разборщик разметки обязан спросить общий трекер — и узнаётся он по виду, потому
+        что список имён не видит разборщика, которого ещё нет.
         """
         self.assertNotIn('startswith("```")', self.SOURCE,
                          "своё распознавание ограды — зовите quoted_lines()")
-        tree = ast.parse(self.SOURCE)
-        detectors = {"FENCE", "BLOCKQUOTE", "LIST_OPEN", "CODE_INDENT",
-                     "COMMENT_OPEN", "COMMENT_CLOSE"}
-        strangers, deaf = [], []
-        for fn in ast.walk(tree):
-            if not isinstance(fn, ast.FunctionDef):
-                continue
-            names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
-            calls = {n.func.id for n in ast.walk(fn)
-                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-            if fn.name not in self.QUOTE_TRACKERS and names & detectors:
-                strangers.append((fn.name, sorted(names & detectors)))
-            if fn.name in self.MARKDOWN_PARSERS and "quoted_lines" not in calls:
-                deaf.append(fn.name)
+        strangers, deaf = self._quote_offenders(self.SOURCE)
         self.assertEqual(strangers, [], "своё распознавание цитаты — зовите quoted_lines()")
-        self.assertEqual(deaf, [], "разборщик markdown не зовёт общий трекер цитаты")
+        self.assertEqual(deaf, [], "разборщик markdown не спрашивает общий трекер цитаты")
+
+    # Разборщики, которых в инструменте ещё нет: правило обязано видеть их по виду. Все
+    # три измерены — при узде, знавшей разборщиков поимённо, прогон на каждом оставался
+    # зелёным.
+    UNSEEN_PARSERS = {
+        "документ разметки читается своими руками": '''
+def report_sections(md):
+    return [line for line in md.split("\\n") if line.startswith("#")]
+''',
+        "строка разбирается вместе с чужим признаком": '''
+def report_sections(doc):
+    lines = doc.split("\\n")
+    return [line for line, flag in zip(lines, fenced_lines(lines)) if not flag]
+''',
+        "сырые строки раздела читаются как слова отчёта": '''
+def limits_said(doc):
+    return [ln for ln in section_body(doc, LIMITS_HEADING) or [] if ln.strip()]
+''',
+    }
+    # А это не разборщики разметки, и требовать от них трекер значило бы требовать
+    # бессмыслицы: реестр находок — JSONL, где `#` открывает комментарий строки.
+    SEEN_INNOCENT = {
+        "jsonl с комментариями": '''
+def read_register(path):
+    return [line for line in path.read_text().splitlines()
+            if line.strip() and not line.startswith("#")]
+''',
+        "разборщик, который спрашивает трекер": '''
+def report_sections(md):
+    lines = md.split("\\n")
+    return [line for line in unquoted(lines) if line.startswith("#")]
+''',
+    }
+
+    def test_узда_видит_разборщика_которого_ещё_нет(self):
+        """Обе стороны правила: новый разборщик разметки без трекера обязан ронять прогон,
+        а читатель не-разметки и разборщик, который трекер спросил, — нет."""
+        for why, src in self.UNSEEN_PARSERS.items():
+            with self.subTest(разборщик=why):
+                self.assertNotEqual(self._quote_offenders(src)[1], [],
+                                    "узда не увидела разборщика по виду")
+        for why, src in self.SEEN_INNOCENT.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(self._quote_offenders(src)[1], [],
+                                 "узда требует трекер там, где разметки нет")
 
     def test_записи_коммитов_разбираются_одним_местом(self):
         """УЗДА КЛАССА «поток `git log -z` разобран своими руками».

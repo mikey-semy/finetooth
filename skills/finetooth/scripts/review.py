@@ -1275,7 +1275,9 @@ def acceptance_of(b: dict) -> str:
     body = section_body(m.read_text(encoding="utf-8"), ACCEPTANCE_HEADING)
     if not body:
         return "—"
-    text = " ".join(ln.strip() for ln in body if ln.strip())
+    # What the criterion SAYS: a fenced example of a table inside it is not part of the
+    # sentence, and pasted into a one-line cell it is a run of backticks and column bars.
+    text = " ".join(ln.strip() for ln in unquoted(body) if ln.strip())
     text = text.replace("|", "\\|")
     return text if len(text) <= 300 else text[:297] + "…"
 
