@@ -1165,6 +1165,26 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertIn("{{HUNTER_NOTE}}", out.stdout)
 
+    def test_ограда_при_любом_отступе_не_режет_манифест(self):
+        """R3-001: открывающая ограда глубже трёх пробелов не открывалась, строка-пункт внутри
+        примера сдвигала колонку, и ЗАКРЫВАЮЩАЯ ограда читалась как открывающая — манифест
+        из четырёх гипотез становился манифестом из одной, и check зеленел. Правило одно:
+        ограда — ограда при любом отступе."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=4)
+        m = Path(self.s.root, "docs/review/blocks/H1-demo.md")
+        text = m.read_text(encoding="utf-8")
+        first = next(ln for ln in text.splitlines() if ln.startswith("1. "))
+        text = text.replace(first, first + " Инструмент печатает вердикт так:\n"
+                            "       ```\n       - H1.1 — проверена\n       ```", 1)
+        m.write_text(text, encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("hypotheses", "H1").stdout
+        self.assertIn("H1.4", out)
+        self.assertIn("0/4", out)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -3421,10 +3441,17 @@ class SpendTest(unittest.TestCase):
         self.assertIn("RUN FAILED", journal)
 
     def test_отказ_шага_отчёта_не_подменяет_код_возврата_прогона(self):
-        """Обратная сторона того же: всё после запуска — отчёт, и его отказ не имеет
-        права выдавать успешный прогон за упавший."""
-        out, _ = self._run_role(exit_code=0, log_fails=True)
-        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        """Прогон упал — его код и остаётся, что бы ни случилось с отчётом."""
+        out, _ = self._run_role(exit_code=7, log_fails=True)
+        self.assertEqual(out.returncode, 7, out.stdout + out.stderr)
+
+    def test_потерянная_запись_в_журнал_не_выдаёт_себя_за_чистый_прогон(self):
+        """R3-004: ловушка `exit $RC` прятала несделанную запись в дневник за кодом 0.
+        Прогон успешен, а отчёт потерян — код 3, и ответ агента всё равно напечатан."""
+        out, journal = self._run_role(exit_code=0, log_fails=True)
+        self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
+        self.assertIn("journal write failed", out.stderr)
+        self.assertIn("no agent reply in the stream", out.stdout)
 
     def test_ответ_агента_печатается_из_целого_потока(self):
         """Прямая сторона: на целом потоке ответ агента по-прежнему виден оператору."""
@@ -4030,7 +4057,7 @@ class SourceRuleTest(unittest.TestCase):
     # Распознавание цитаты живёт здесь; всё остальное спрашивает у них.
     QUOTE_TRACKERS = ("quoted_lines", "unquoted")
     # Детекторы цитаты: кто называет их у себя, тот завёл своё распознавание.
-    QUOTE_DETECTORS = {"FENCE", "BLOCKQUOTE", "LIST_OPEN", "CODE_INDENT", "FENCE_SLACK",
+    QUOTE_DETECTORS = {"FENCE", "BLOCKQUOTE", "LIST_OPEN", "CODE_INDENT",
                        "COMMENT_OPEN", "COMMENT_CLOSE"}
     # Разборщик markdown узнаётся ПО ВИДУ, а не по имени из списка: список не видит того,
     # кого ещё не написали, — и не увидел ни одного из трёх, которыми это измерено.

@@ -11,6 +11,7 @@ with a review already under way.
 
 ### Fixed
 
+- Fences are recognised at any indentation, opening and closing alike: the column arithmetic (a fence up to three spaces past the content column) let an example's closing fence open a new one and swallow the rest of a manifest — four hypotheses became one and `check` went green. One symmetric rule replaces it (the kit's own review, fix review round 3). `run-role.sh` exits 3 when the run succeeded but the journal line was lost, instead of hiding it behind 0. Mutations: the old fence code → `test_ограда_при_любом_отступе_не_режет_манифест` red; the old trap → `test_потерянная_запись_в_журнал…` red.
 The whole-repository review of the kit itself, block T1 (`review.py`, `axes.py`,
 `run-role.sh`, `guard-grep.sh`): 24 findings, all confirmed by execution, all closed here.
 

@@ -1441,13 +1441,12 @@ BLOCKQUOTE = re.compile(r"^\s*>")
 LIST_OPEN = re.compile(r"^(\s*)([-*+]|\d+[.)])(\s+)")
 # Four spaces past the enclosing content column — the CommonMark indented code block.
 CODE_INDENT = 4
-# A fence may be indented up to three spaces past the content column it sits in and no
-# further — the fourth space makes it indented code instead (CommonMark 4.5). Measured from
-# the CONTENT column, not from the margin: a report quotes the verdict skeleton inside a
-# list item, where the fence starts at four spaces or more from the margin and an absolute
-# limit of three did not see it at all — the quoted skeleton closed every hypothesis of the
-# block and `check` printed "review state is consistent".
-FENCE_SLACK = CODE_INDENT - 1
+# A fence is a fence at ANY indentation — opening and closing alike. The tool does not
+# render markdown, it decides what is quoted, and for that one symmetric rule is safer than
+# CommonMark's column arithmetic: measured from the content column, an opening fence four
+# spaces in was not seen, a list item inside the example moved the column, and the CLOSING
+# fence then opened a new one that swallowed the rest of the manifest — four hypotheses
+# became one and `check` went green (the kit's own review, fix review round 3).
 COMMENT_OPEN, COMMENT_CLOSE = "<!--", "-->"
 
 
@@ -1460,11 +1459,9 @@ def quoted_lines(lines: list[str]) -> list[bool]:
     pushed a heading inside a tilde fence down a level and `section_body` cut the manifest's
     hypotheses short at a `# comment` inside one.
 
-    The fence is tracked in the SAME pass as the list context and not before it, because
-    where a fence may open depends on the list item it sits in: a separate pass can only
-    measure the indent from the margin, and a fence nested in a list item is indented past
-    it. An indented code block cannot interrupt a paragraph (a blank line must come first)
-    and it measures its indent from the same content column — otherwise a hypothesis's own
+    A fence opens and closes at any indentation (see FENCE). An indented code block cannot
+    interrupt a paragraph (a blank line must come first) and it measures its indent from the
+    content column of the list item it sits in — otherwise a hypothesis's own
     sub-items, which is how a report writes its proof, would all be read as examples and
     the gate would refuse an honest report.
     """
@@ -1472,7 +1469,7 @@ def quoted_lines(lines: list[str]) -> list[bool]:
     in_comment = False
     content_col = 0      # where the innermost open list item's content begins
     prev_blank = True    # an indented code block may only start after a blank line
-    char, width, fence_col = "", 0, 0   # the open fence: its mark, its length, its indent
+    char, width = "", 0   # the open fence: its mark and its length
     for ln in lines:
         m = FENCE.match(ln)
         indent = len(m.group(1)) if m else len(ln) - len(ln.lstrip())
@@ -1481,11 +1478,11 @@ def quoted_lines(lines: list[str]) -> list[bool]:
             prev_blank = False
             # The closing fence carries no info string; `~~~` does not close ``` and back.
             if (m and m.group(2)[0] == char and len(m.group(2)) >= width
-                    and not m.group(3).strip() and indent <= fence_col + FENCE_SLACK):
+                    and not m.group(3).strip()):
                 char, width = "", 0
             continue
-        if m and indent <= content_col + FENCE_SLACK:
-            char, width, fence_col = m.group(2)[0], len(m.group(2)), indent
+        if m:
+            char, width = m.group(2)[0], len(m.group(2))
             out.append(True)
             prev_blank = False
             if indent == 0:

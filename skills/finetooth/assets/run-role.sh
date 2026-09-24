@@ -39,15 +39,15 @@ claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
   --max-turns "$CAP" ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"} --allowedTools "$TOOLS" \
   < "$PROMPT" > "$STREAM" 2> "$STREAM.err"
 RC=$?
-set -e
-# Everything below is reporting, and the script's exit code is the RUN's whatever a report
-# does: anything scripted on top of run-role.sh reads the ending of `claude`, not the
-# ending of a journal write. Under `set -e` a failing report used to abort the script
-# before `exit $RC` ever ran, and the operator read the wrong ending.
-trap 'exit $RC' EXIT
+# Everything below is reporting. Every step runs even if an earlier one failed — the reply
+# must reach the operator — and the exit code tells both endings apart: the run's own code
+# when `claude` failed, 3 when the run succeeded but a report was lost (no journal line: the
+# only memory the next session has). A trap that always exited with the run's code hid a
+# failed journal write behind exit 0 (the kit's own review, fix review round 3).
+REPORT_RC=0
 echo "claude exit: $RC"
-python3 "$HERE/../scripts/axes.py" "$STREAM"
-LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)"
+python3 "$HERE/../scripts/axes.py" "$STREAM" || REPORT_RC=$?
+LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)" || REPORT_RC=$?
 # The journal is the only memory the next session has. A run that died or was cut off at
 # the turn cap used to be written there as an ordinary completed one — "hunter — spend: 0
 # min, None turns … $0.00" — with no word that the assignment was truncated, and the block
@@ -56,10 +56,12 @@ LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)"
 if [ "$RC" -ne 0 ]; then
   LINE="RUN FAILED (claude exit $RC — the assignment was NOT completed) · $LINE"
 fi
-$REVIEW log "$BLOCK" "$ROLE — $LINE"
+$REVIEW log "$BLOCK" "$ROLE — $LINE" || { REPORT_RC=$?; echo "journal write failed — the spend line above is not recorded" >&2; }
 # ONE reader for the stream. A second one written here parsed every line with `json.loads`
 # and died on the half-written last line a killed run leaves behind — the very line
 # `axes.py` counts and reports — so an operator whose run was cut off saw a Python
 # traceback instead of the agent's answer.
-python3 "$HERE/../scripts/axes.py" "$STREAM" --reply
-exit $RC
+python3 "$HERE/../scripts/axes.py" "$STREAM" --reply || REPORT_RC=$?
+if [ "$RC" -ne 0 ]; then exit "$RC"; fi
+if [ "$REPORT_RC" -ne 0 ]; then exit 3; fi
+exit 0
