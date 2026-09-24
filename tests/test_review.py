@@ -881,6 +881,50 @@ class ReviewToolTest(unittest.TestCase):
         self.assertLess(out.index("H1 "), out.index("H2 "))
         self.assertIn("the declared order already matches", out)
 
+    # ------------------------------------------------------------- итог ревью
+
+    def _reviewed_with_findings(self) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("tests/guard.test.ts", "g\n")
+        self.s.blocks(paths=["src/one.ts", "tests/guard.test.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": sev, "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "line": "1", "claim": f"дефект {i}",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n"
+            for i, sev in ((1, "high"), (2, "low"), (3, "medium"))))
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.run("set-finding", "H1-002", "rejected", "--reason", "так и задумано: поле необязательно")
+        self.s.run("set-finding", "H1-003", "deferred", "--reason", "чиним после релиза")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha, "--rule", "tests/guard.test.ts")
+
+    def test_summary_пишет_итог_с_базой_отвергнутыми_и_уздами(self):
+        self._reviewed_with_findings()
+        out = self.s.run("summary", "--out", "docs/итог.md")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        text = Path(self.s.root, "docs/итог.md").read_text(encoding="utf-8")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.assertIn(f"`{sha[:12]}`", text)
+        self.assertIn("H1-002", text)
+        self.assertIn("так и задумано: поле необязательно", text)
+        self.assertIn("чиним после релиза", text)
+        self.assertIn("`tests/guard.test.ts` — H1-001", text)
+        self.assertIn("<!-- finetooth-summary ", text)
+
+    def test_summary_aged_считает_дрейф_от_коммита_базы(self):
+        self._reviewed_with_findings()
+        self.s.run("summary", "--out", "docs/итог.md")
+        # правка в файле блока после итога — и одна вне блоков
+        Path(self.s.root, "src/one.ts").write_text("a\nb\n")
+        Path(self.s.root, "README.md").write_text("x\n")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "after")
+        out = self.s.run("summary", "--aged", "docs/итог.md").stdout
+        self.assertRegex(out, r"H1\s+\S+: 1\s+\S+: 1")
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
