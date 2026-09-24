@@ -2664,6 +2664,46 @@ class ReportShapeTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("not named by full", out.stdout)
 
+    def test_каталог_a_не_закрывает_ворота_за_файл_которого_никто_не_читал(self):
+        """`a/` и `b/` — ещё и обычные имена каталогов. Засчитанные где угодно, они
+        закрывали ворота за файл, которого никто не читал: блок владеет и `src/api.ts`,
+        и `a/src/api.ts`, а отчёт назвал только второй."""
+        self.s.write("src/api.ts", "a\n")
+        self.s.write("a/src/api.ts", "b\n")
+        self.s.blocks(paths=["src", "a"], named_files=True)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Прочитано\n- a/src/api.ts\n"
+                              "## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("not named by full", out.stdout)
+        self.assertIn("src/api.ts", out.stdout)
+
+    def test_заголовок_диффа_в_том_же_дереве_по_прежнему_называет_файл(self):
+        """Обратная сторона: там, где `a/` не может значить ничего другого — в заголовке
+        диффа, — приставка засчитывается, и вставленный дифф остаётся доказательством
+        чтения обоих файлов."""
+        self.s.write("src/api.ts", "a\n")
+        self.s.write("a/src/api.ts", "b\n")
+        self.s.blocks(paths=["src", "a"], named_files=True)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Прочитано\n- a/src/api.ts\n"
+                              "```diff\ndiff --git a/src/api.ts b/src/api.ts\n```\n"
+                              "## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertNotIn("not named by full", out.stdout)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
 
 class GitTruthTest(unittest.TestCase):
     """Правда о файлах берётся из индекса, а пути — NUL-разделёнными."""

@@ -2690,6 +2690,13 @@ def cmd_hypotheses(args) -> int:
 # --------------------------------------------------------------------------- check
 
 
+# The header lines of a unified diff — the only place where `a/` and `b/` in front of a
+# path mean "the same file before and after" rather than a directory called `a`. A report
+# pastes such a header inside a list item ("- --- a/src/api.ts"), so the marker is looked
+# for anywhere on the line and the prefix is read only after it.
+DIFF_HEADER = re.compile(r"(?:^|\s)(?:diff --git|---|\+\+\+)\s")
+
+
 def names_file(text: str, rel: str) -> bool:
     """Does the text name THIS path — not a longer one that merely contains it?
 
@@ -2699,16 +2706,25 @@ def names_file(text: str, rel: str) -> bool:
     may not continue the name, and what precedes may not be the rest of a longer one.
     A trailing period ("I read src/api.ts.") is a sentence, not a longer path.
 
-    Three prefixes are the SAME path written another way and are accepted: `./`, which an
+    Two prefixes are the SAME path written another way and are accepted: `./`, which an
     agent writes out of habit, and the `a/`, `b/` of a pasted diff header. Refusing them
     left an honest, complete report with no repair but rewriting its paths — and a gate
     that stops accepting honest reports is discovered by the person whose work it refuses.
     They are accepted only where the prefix itself starts a path, so `docs/src/api.ts`
     and `lib/a/src/api.ts` still name files of their own.
+
+    `a/` and `b/` are ALSO ordinary directory names, and they are read as a diff prefix
+    only on a diff header line, where they cannot mean anything else. Accepted everywhere,
+    they closed the gate for a file nobody had read: a block owning both `src/api.ts` and
+    `a/src/api.ts` passed on a report that named only the second.
     """
-    pattern = (r"(?<![A-Za-z0-9_./-])(?:\./|a/|b/)?" + re.escape(rel)
-               + r"(?![A-Za-z0-9_-]|[./][A-Za-z0-9_-])")
-    return re.search(pattern, text) is not None
+    tail = r"(?![A-Za-z0-9_-]|[./][A-Za-z0-9_-])"
+    said = re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?" + re.escape(rel) + tail)
+    if said.search(text):
+        return True
+    diffed = re.compile(r"(?<![A-Za-z0-9_./-])[ab]/" + re.escape(rel) + tail)
+    return any(diffed.search(line, m.end())
+               for line in text.split("\n") if (m := DIFF_HEADER.search(line)))
 
 
 def cmd_check(args) -> int:
