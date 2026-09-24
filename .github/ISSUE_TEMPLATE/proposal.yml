@@ -1,23 +1,23 @@
-name: Предложение изменения
-description: Новая проверка, роль, команда — с тем, какую дыру она закрывает
+name: Change proposal
+description: A new check, role or command — with the gap it closes
 labels: [proposal]
 body:
   - type: textarea
     id: gap
     attributes:
-      label: Какая дыра
-      description: что сейчас проходит незамеченным; лучше с реальным случаем
+      label: Which gap
+      description: what currently passes unnoticed; preferably with a real case
     validations:
       required: true
   - type: textarea
     id: how
     attributes:
-      label: Как закрыть
-      description: механизм, а не пожелание; как это делают соседи (см. docs/prior-art.md), если делают
+      label: How to close it
+      description: a mechanism, not a wish; how the neighbours do it (see docs/prior-art.md), if they do
     validations:
       required: true
   - type: textarea
     id: roadmap
     attributes:
-      label: Какое направление ROADMAP
-      description: номер, если подходит; иначе — почему нужно новое
+      label: Which ROADMAP direction
+      description: the number, if one fits; otherwise — why a new one is needed

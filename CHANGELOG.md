@@ -1,455 +1,517 @@
-# История изменений
+[Русская версия](CHANGELOG.ru.md)
 
-Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии по
-[семантическому версионированию](https://semver.org/lang/ru/). Пока мажорная версия нулевая,
-формат состояния на диске может меняться: ломающие изменения отмечены отдельно, и к каждому
-сказано, что делать с уже начатым ревью.
+# Changelog
 
-## [Не выпущено]
+The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
+[semantic versioning](https://semver.org/). While the major version is zero, the on-disk state
+format may change: breaking changes are marked separately, and for each it is said what to do
+with a review already under way.
 
-### Изменено
+## [Unreleased]
 
-- **Лицензия — чистый MIT с двумя правообладателями**: Георгий Худобандаев и Михаил Тошкин.
-  24.09.2026 автор основы передал владельцу полное право распоряжаться набором и
-  публиковать его; приложение о границах лицензии из `LICENSE` убрано, происхождение и
-  запись о согласии — в `NOTICE.md`. GitHub теперь распознаёт лицензию.
-- Обвязка открытого проекта: `CONTRIBUTING.md` (DCO, тест + мутация, без зависимостей),
-  `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1, официальный перевод), `SECURITY.md`,
-  шаблоны issue (дефект, трофей, предложение) и PR, бейджи и английский абзац в README,
-  темы и описание репозитория, обсуждения, защита ветки `master` зелёным CI.
+## [0.7.0] — 2026-09-24
+
+The release that makes the kit an open-source project: English is the primary language,
+Russian is a switchable copy, and the repository carries everything a stranger expects.
+
+### Changed
+
+- **English is the primary language.** README, CONTRIBUTING, SECURITY, NOTICE, AGENTS.md,
+  ROADMAP, CHANGELOG and every document in `docs/` are in English; Russian copies live as
+  `README.ru.md`, `ROADMAP.ru.md`, `CHANGELOG.ru.md`, `CODE_OF_CONDUCT.ru.md` and `docs/ru/`,
+  cross-linked at the top of each file. Commits, PRs and issues are in English from now on.
+- **The tool speaks English.** Every message, hint and help string of `review.py`; the
+  report parsers understand both languages (hypothesis verdicts `checked / not checked /
+  not applicable` and their Russian forms, "Coverage limits", coverage verdicts, template
+  placeholders). Verdict labels in `check` and `hypotheses` output are English.
+- **The skill gets a review-language switch.** `blocks.json` field `lang` (`en` default,
+  `ru`) selects the role templates (`hunter.md` / `hunter.ru.md`), the assets and the
+  language of what the tool writes into `docs/review/` (prompt rule 1, reading budget,
+  `findings.md`, the journal). `setup --lang ru` starts a Russian review. A project's own
+  templates in `docs/review/prompts/` override both.
+
+### Added
+
+- **The licence is clean MIT with two copyright holders**: Georgiy Khudobandaev and Mikhail
+  Toshkin. On 24.09.2026 the author of the base handed the owner the full right to dispose of the
+  kit and publish it; the appendix on licence boundaries is removed from `LICENSE`, the origin and
+  the record of consent are in `NOTICE.md`. GitHub now recognises the licence.
+- Open-project scaffolding: `CONTRIBUTING.md` (DCO, test + mutation, no dependencies),
+  `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1, the official translation), `SECURITY.md`,
+  issue templates (defect, trophy, proposal) and a PR template, badges and an English paragraph
+  in the README, repository topics and description, discussions, protection of the `master`
+  branch by green CI.
+- `examples/toy` — a real `docs/review/` produced by the tool on a three-file toy app: one
+  block through hunter and verifier, findings register, coverage map, fingerprints, journal.
+- `CLAUDE.md` imports `AGENTS.md`: one set of rules for every agent.
+- A stale bot for PRs whose author went silent (21 + 9 days); issues never expire.
+- CONTRIBUTING: how changes are accepted — issue first for features, one PR one problem,
+  trivial PRs closed, a test or an explanation of verification, AI use disclosed and the PR
+  description written by a human, silence is a no, write access for work done.
+- Pre-flight check for publication: names, keys and addresses — none; `gitleaks` over the
+  history — 58 commits, no leaks.
+
+### Breaking
+
+- Tool output is English only; scripts that grep Russian phrases of `check` must be updated.
+- Hypothesis verdict labels are `checked / not checked / not applicable`.
+- New reviews are English by default: add `"lang": "ru"` to `blocks.json` (or run
+  `setup --lang ru`) to keep Russian templates and artifacts.
 
 ## [0.6.0] — 2026-09-24
 
-### Изменено
+### Changed
 
-- **Набор переименован: review-kit → finetooth.** Имя — от идиомы *go through with a
-  fine-tooth comb*: прочесать частым гребнем, не пропустив ни одного файла. Выбрано как
-  корень серии изданий по типам ревью (`-lens`, `-slice`, `-pr`, `-scan`, `-shape`,
-  `-threat`, `-gate`) — разбор в `docs/open-source.md`. Репозиторий на GitHub переименован,
-  старые ссылки перенаправляются.
+- **The kit is renamed: review-kit → finetooth.** The name comes from the idiom *go through with
+  a fine-tooth comb*: comb through without missing a single file. Chosen as the root of a series
+  of editions by review type (`-lens`, `-slice`, `-pr`, `-scan`, `-shape`, `-threat`, `-gate`) —
+  the analysis is in `docs/open-source.md`. The GitHub repository is renamed, old links redirect.
 
-### Ломающее
+### Breaking
 
-- Папка скилла — `skills/finetooth`; поставленная копия ляжет в `.claude/skills/finetooth/`.
-  В проектах с копией `review-kit`: переставить `npx skills add mikey-semy/finetooth`,
-  поправить пути в `package.json`/`Makefile` (или поле `cli` в `blocks.json`) и исключение
-  папки скилла в `blocks.json`.
+- The skill folder is `skills/finetooth`; an installed copy will land in
+  `.claude/skills/finetooth/`. In projects with a `review-kit` copy: reinstall with
+  `npx skills add mikey-semy/finetooth`, fix the paths in `package.json`/`Makefile` (or the
+  `cli` field in `blocks.json`) and the skill folder exclusion in `blocks.json`.
 
 ## [0.5.1] — 2026-09-24
 
-### Изменено
+### Changed
 
-- **Урок 6 в `references/lessons.md` обезличен.** «Карточка аварии» называла предметную
-  область родного проекта — ровно эту фразу 0.4.1 уже убирала из образца дневника, а новый
-  файл уроков её вернул. Смысл урока не изменился. Скрипт и формат состояния те же:
-  обновление с 0.5.0 — переустановка.
+- **Lesson 6 in `references/lessons.md` is depersonalised.** The "incident card" named the
+  subject domain of the home project — exactly the phrase 0.4.1 had already removed from the
+  journal example, and the new lessons file brought it back. The meaning of the lesson is
+  unchanged. The script and the state format are the same: updating from 0.5.0 is a reinstall.
 
-### Документы
+### Documents
 
-- ROADMAP: отмечено, что закрыто выпуском 0.5.0 (половина направления 4, часть 11), в
-  направление 9 добавлен разбор токенов, в порядок работ — замер расхода нулевым пунктом.
-- `docs/review-methods.md` — сравнение восьми методов ревью (охват, время, продуктивность,
-  внешние методы по первоисточникам, три замера на истории первого проекта), перенесено из
-  базы знаний проекта и обезличено.
-- ROADMAP: направление 14 — банк линз как источник гипотез для манифестов.
-- `docs/open-source.md` — что нужно, чтобы открыть репозиторий (лицензия на основу, автор
-  под ограничениями GitHub, имя, обвязка по сверке с лучшими соседями), каталог 24 похожих
-  проектов на GitHub и параллели с направлениями ROADMAP; направление 15.
+- ROADMAP: marked what the 0.5.0 release closes (half of direction 4, part of 11), the token
+  analysis added to direction 9, the spend measurement put into the order of work as item zero.
+- `docs/review-methods.md` — a comparison of eight review methods (coverage, time,
+  productivity, external methods by primary sources, three measurements on the first project's
+  history), moved from the project's knowledge base and depersonalised.
+- ROADMAP: direction 14 — a lens bank as a source of hypotheses for manifests.
+- `docs/open-source.md` — what is needed to open the repository (the licence on the base, the
+  author under GitHub restrictions, the name, scaffolding by comparison with the best neighbours),
+  a catalogue of 24 similar projects on GitHub and parallels with the ROADMAP directions;
+  direction 15.
 
 ## [0.5.0] — 2026-09-24
 
-Выпуск по второй версии набора, которую автор метода Георгий Худобандаев развивал
-параллельно и передал 23.09.2026 (архив `review-combine-kit`). Его инструмент сравнён с
-нашим построчно: пять дефектов нашей копии он уже закрыл, у него есть роль и гейт, которых
-у нас не было; наши отпечатки, гипотезы, узды и проверки коммитов у него отсутствуют.
-Механизмы перенесены, тексты переписаны своими словами; данные его проекта не переносились.
+A release based on the second version of the kit, which the method's author Georgiy
+Khudobandaev developed in parallel and handed over on 23.09.2026 (the `review-combine-kit`
+archive). His tool was compared with ours line by line: five defects of our copy he had already
+closed, he has a role and a gate we did not have; our fingerprints, hypotheses, guards and
+commit checks are absent in his. The mechanisms were carried over, the texts rewritten in our own
+words; his project's data was not carried over.
 
-### Исправлено — по его версии
+### Fixed — after his version
 
-- **Починенная находка на удалённом файле роняла проверку навсегда.** Существование файла
-  требовалось у любой находки; теперь — только у открытых и отложенных.
-- **Отложить можно было без причины** — и находка выпадала из ревью незамеченной. Теперь
-  `deferred --reason` обязателен, `check` ловит вписанное руками.
-- **Фазы в `blocks.json` не проверялись на порядок**: блок фазы 2 перед фазой 1 проходил, и
-  `next` выдавал его первым.
-- **`status` объявлял ревью законченным при блоке в `blocked`** и предлагал сносить каталог
-  с непрочитанным блоком внутри. Теперь: «ревью НЕ закончено: ждут …», заблокированные
-  перечислены с записками, `blocked` без записки — отказ `check`.
-- **Время `running` считалось от первого старта**: блок, возвращённый в работу через три
-  недели, тут же объявлялся зависшим.
+- **A fixed finding on a deleted file failed the check forever.** File existence was required of
+  every finding; now — only of open and deferred ones.
+- **Deferring was possible without a reason** — and the finding dropped out of the review
+  unnoticed. Now `deferred --reason` is mandatory, `check` catches what was written in by hand.
+- **Phases in `blocks.json` were not checked for order**: a phase 2 block before phase 1 passed,
+  and `next` issued it first.
+- **`status` declared the review finished with a block in `blocked`** and suggested deleting the
+  directory with an unread block inside. Now: "the review is NOT finished: waiting …", blocked
+  blocks are listed with their notes, `blocked` without a note is a `check` refusal.
+- **The `running` time was counted from the first start**: a block returned to work three weeks
+  later was immediately declared stuck.
 
-### Добавлено — по его версии
+### Added — after his version
 
-- **Роль ревьюера правок** (`prompt <ID> --role fixreview --diff <диапазон> [--round N]
-  [--scope половина]`): дифф вклеивается в промпт целиком, отчёт получает имя круга и
-  половины, в конце — явный вердикт «нужен ли следующий круг». Закрыть блок с починенными
-  находками без такого отчёта нельзя.
-- **Род доказательства блока** — `"proof": "read" | "measured"`; блок без `paths` — живой
-  стенд. Первое правило промпта и заголовок списка файлов выводятся из него; у `measured`
-  не действует порог строк.
-- **Гейт «каждый файл читаемого блока назван полным путём хотя бы в одном отчёте».**
-  «Прочитано 25 из 25» — слово агента; у автора добор после такого заявления нашёл ещё 11
-  дефектов. Исключённое не требуется; выключается `named_files: false`.
-- **Команды `inventory`** (дерево репозитория: файлы, строки, бинарники, чьё) **и `sizes`**
-  (каждый блок против порога), **`coverage --no-write`** — режим ворот в CI.
-- **`set-finding` принимает несколько находок разом.**
-- **Бинарные файлы не считаются строками** ни в пороге, ни в промпте.
-- **Незаполненная подстановка в шаблоне** (`{{ЧТО-ТО}}`) — отказ `prompt`, а не текст агенту.
-- **Промпт исполнителя**: совместимость со старыми данными решают инварианты; попутная
-  правка допустима, если названа отдельной строкой со своим тестом; откат при проверке
-  теста обязан собираться; правка идёт по всем адресам дефекта; стиль коммитов — проекта.
-- `references/lessons.md` — 42 урока двух ревью с историями; `SKILL.md` — правила ведущей
-  сессии (остановка на границе блока, свежий агент на повторную починку).
-- `docs/token-economy.md` — куда уходят токены: цена блока не зависит от его размера,
-  значит, уходит она на результаты инструментов; восемь гипотез с тем, чем их мерить, и
-  список того, чего не делать.
+- **The fix reviewer role** (`prompt <ID> --role fixreview --diff <range> [--round N]
+  [--scope half]`): the diff is pasted into the prompt in full, the report gets the name of the
+  round and the half, at the end — an explicit verdict "is another round needed". A block with
+  fixed findings cannot be closed without such a report.
+- **The block's proof kind** — `"proof": "read" | "measured"`; a block without `paths` is a live
+  system. The prompt's first rule and the file list heading are derived from it; for `measured`
+  the line ceiling does not apply.
+- **The gate "every file of a readable block is named by full path in at least one report".**
+  "Read 25 of 25" is the agent's own word; at the author's, a top-up after such a claim found 11
+  more defects. Excluded files are not required; switched off with `named_files: false`.
+- **The `inventory` command** (the repository tree: files, lines, binaries, whose) **and
+  `sizes`** (each block against the ceiling), **`coverage --no-write`** — the gate mode for CI.
+- **`set-finding` accepts several findings at once.**
+- **Binary files are not counted as lines**, neither in the ceiling nor in the prompt.
+- **An unfilled substitution in a template** (`{{SOMETHING}}`) is a `prompt` refusal, not text
+  for the agent.
+- **The fixer's prompt**: compatibility with old data is decided by the invariants; an
+  incidental edit is allowed if named as a separate line with its own test; the revert when
+  checking a test must compile; the fix goes to all addresses of the defect; the commit style is
+  the project's.
+- `references/lessons.md` — 42 lessons from two reviews with stories; `SKILL.md` — the rules of
+  the lead session (stopping at a block boundary, a fresh agent for a repeated fix).
+- `docs/token-economy.md` — where the tokens go: the cost of a block does not depend on its
+  size, so it goes on tool results; eight hypotheses with how to measure them, and a list of what
+  not to do.
 
-### Ломающее
+### Breaking
 
-- Проекты с пройденными блоками: гейт полных путей покрасит блоки, чьи отчёты не называют
-  файлы. Либо дописать списки в отчёты, либо `named_files: false` в `blocks.json`, пока
-  блоки не перепройдены.
-- `deferred` без `defer_reason` теперь отказ — проставить причины.
+- Projects with passed blocks: the full-path gate will turn red the blocks whose reports do not
+  name files. Either add the lists to the reports, or `named_files: false` in `blocks.json`
+  until the blocks are re-passed.
+- `deferred` without `defer_reason` is now a refusal — fill in the reasons.
 
-### Документы
+### Documents
 
-- **ROADMAP пересобран** по сравнению восьми методов ревью и сверке с внешними методами по
-  первоисточникам. Новые направления: фаза починки как гейт (11), карта стыков по связанности
-  изменений (12), модель угроз как тип блока (13). Направления 1, 3, 9 дополнены замерами:
-  частота правок предсказывает починки лучше размера (34% против 29% в верхних 10% файлов),
-  «поймал — поймал снова» на двух охотниках годится только как верхняя граница, выборка из 59
-  файлов — дешёвая граница сверху. Порядок работ: сначала починка и стыки.
-- `docs/prior-art.md` — источники к этой сверке.
+- **ROADMAP reassembled** after the comparison of eight review methods and the check against
+  external methods by primary sources. New directions: the fix phase as a gate (11), a seams map
+  by change coupling (12), the threat model as a block type (13). Directions 1, 3, 9 are
+  supplemented with measurements: change frequency predicts fixes better than size (34% versus
+  29% in the top 10% of files), capture-recapture on two hunters is fit only as an upper bound,
+  a sample of 59 files is a cheap upper bound. The order of work: first fixing and seams.
+- `docs/prior-art.md` — the sources for this check.
 
 ## [0.4.1] — 2026-09-23
 
-### Изменено
+### Changed
 
-- **Примеры и шаблоны обезличены до конца.** `c4f2dd2` переписал образец инвариантов и
-  обобщил пути блоков, но `assets/manifest.example.md` и `assets/journal.example.md` остались
-  как в исходном архиве, а пример блоков и шаблон `fix.md` сохранили приметы родного
-  проекта: название одного из его ресурсов вместе с историей дефекта прав, имена внутренних
-  файлов и типов, предметную область и раскладку клиентов. Всё это уезжало в каждый проект,
-  куда ставится скилл, — в том числе в публичные репозитории. Предметная область примеров
-  заменена нейтральной («заказы»), история дефекта стала образцом того, что писать в этот
-  раздел; гипотезы, таблицы приёмки и урок из `fix.md` сохранены целиком.
-- Скрипт и формат состояния не менялись: обновление с 0.4.0 — просто переустановка.
+- **Examples and templates are depersonalised to the end.** `c4f2dd2` rewrote the invariants
+  example and generalised the block paths, but `assets/manifest.example.md` and
+  `assets/journal.example.md` stayed as in the original archive, and the blocks example and the
+  `fix.md` template kept marks of the home project: the name of one of its resources together
+  with the history of a permissions defect, the names of internal files and types, the subject
+  domain and the client layout. All of that travelled into every project where the skill is
+  installed — including public repositories. The subject domain of the examples is replaced with
+  a neutral one ("orders"), the defect history became an example of what to write in that
+  section; the hypotheses, the acceptance tables and the lesson from `fix.md` are kept in full.
+- The script and the state format did not change: updating from 0.4.0 is simply a reinstall.
 
 ## [0.4.0] — 2026-09-23
 
-Набор стал **скиллом по стандарту [Agent Skills](https://agentskills.io/specification)**.
-Раньше он жил по модели линтера: установщик копировал инструмент и шаблоны в проект и вписывал
-в инструмент строку подсказок. Каждое обновление значило ручной перенос в каждый проект — в
-первом же проекте это десять переносов за один PR, разошедшаяся строка версии и байткод,
-уехавший в коммит. Теперь копия одна, ставится стандартным установщиком и читается любым
-агентом, знающим стандарт; агент находит её сам, по описанию.
+The kit became **a skill under the [Agent Skills](https://agentskills.io/specification)
+standard**. Before, it lived by the linter model: the installer copied the tool and templates into
+the project and wrote a hint string into the tool. Every update meant a manual transfer into every
+project — in the very first project that was ten transfers in one PR, a diverged version string
+and bytecode that leaked into a commit. Now there is one copy, installed by the standard
+installer and read by any agent that knows the standard; the agent finds it by itself, by the
+description.
 
-### Изменено
+### Changed
 
-- **Раскладка.** Всё, что ставится агенту, — в `skills/review-kit/`: `SKILL.md` (когда
-  применять и порядок работы), `scripts/review.py`, `references/` (шаблоны трёх ролей),
-  `assets/` (бывший `example/`), `LICENSE`. Документы, тесты и план остаются в корне
-  репозитория и агенту не ставятся.
-- **Корень проекта — по рабочему каталогу**, а не по месту, где лежит инструмент. Скилл в
-  `~/.claude/skills/` иначе считал бы корнем свой каталог — или `~/.claude`, будь тот под
-  git, — и писал бы состояние туда. Вне git-репозитория инструмент отказывает; `version`
-  отвечает откуда угодно.
-- **Шаблоны ролей берутся из скилла.** Своя версия в `docs/review/prompts/<роль>.md`
-  необязательна и, если есть, берётся вместо скилловой.
-- **Строка подсказок** — поле `cli` в `blocks.json`; без него — настоящий путь к инструменту
-  (внутри проекта относительный, в домашнем каталоге через `~/`). Вписывать её в код больше
-  не нужно.
+- **Layout.** Everything installed to the agent is in `skills/review-kit/`: `SKILL.md` (when to
+  apply and the working procedure), `scripts/review.py`, `references/` (templates of the three
+  roles), `assets/` (the former `example/`), `LICENSE`. Documents, tests and the plan stay in the
+  repository root and are not installed to the agent.
+- **The project root is by the working directory**, not by where the tool lies. A skill in
+  `~/.claude/skills/` would otherwise take its own directory as the root — or `~/.claude`, were
+  it under git — and write the state there. Outside a git repository the tool refuses; `version`
+  answers from anywhere.
+- **Role templates are taken from the skill.** One's own version in
+  `docs/review/prompts/<role>.md` is optional and, if present, is taken instead of the skill's.
+- **The hint string** is the `cli` field in `blocks.json`; without it — the real path to the tool
+  (relative inside the project, via `~/` in the home directory). Writing it into the code is no
+  longer needed.
 
-### Добавлено
+### Added
 
-- **`review.py setup`** вместо `install.py`: скелет `blocks.json`, `invariants.md`, точка
-  входа. Инструмент и шаблоны в проект не копирует. Если скилл поставлен внутрь проекта,
-  его папка сразу исключается из покрытия — иначе с первого коммита она краснила бы карту.
-- **Проверка формата скилла.** В CI — `skills-ref validate` из репозитория стандарта
-  (закреплён на коммите); в тестах — имя равно каталогу, описание в пределах, ссылки из
-  `SKILL.md` ведут на файлы, версия в шапке равна версии инструмента, `LICENSE` скилла равен
-  корневому. Тестов 76; каждая новая проверка — с мутацией, которая её ломает.
-- Проверено стандартным установщиком `npx skills add` в обоих режимах — в проект и в
-  домашний каталог (`-g`): поставленная копия заводит ревью, строит карту и называет себя в
-  подсказках своим путём.
+- **`review.py setup`** instead of `install.py`: a skeleton `blocks.json`, `invariants.md`, an
+  entry point. It does not copy the tool and templates into the project. If the skill is
+  installed inside the project, its folder is excluded from coverage right away — otherwise from
+  the first commit it would turn the map red.
+- **Skill format check.** In CI — `skills-ref validate` from the standard's repository (pinned
+  to a commit); in the tests — the name equals the directory, the description is within limits,
+  links from `SKILL.md` lead to files, the version in the header equals the tool's version, the
+  skill's `LICENSE` equals the root one. 76 tests; every new check comes with a mutation that
+  breaks it.
+- Checked with the standard installer `npx skills add` in both modes — into the project and into
+  the home directory (`-g`): the installed copy starts a review, builds the map and names itself
+  in the hints by its own path.
 
-### Удалено
+### Removed
 
-- `install.py` — его работу делают `npx skills add` и `review.py setup`.
+- `install.py` — its work is done by `npx skills add` and `review.py setup`.
 
-### Ломающее — переезд проекта с 0.3.0
+### Breaking — migrating a project from 0.3.0
 
-1. Поставить скилл в проект и закоммитить: `npx skills add mikey-semy/review-kit`. Копия
-   в репозитории закрепляет версию для CI.
-2. Удалить свою копию инструмента (`scripts/review/review.py`) и перевести вызовы
-   (`package.json`, `Makefile`, CI) на путь скилла — либо оставить их, записав в
-   `blocks.json` поле `cli` с тем, как проект зовёт инструмент.
-3. `docs/review/prompts/`: шаблоны, которые не правили, удалить — возьмутся из скилла;
-   правленые оставить — они по-прежнему главнее.
-4. Папку скилла отнести к исключениям `blocks.json` (или к блоку, если оснастку ревьюят) —
-   `setup` делает это только для нового ревью.
-5. `check` и `coverage` — проверить, что карта и отпечатки сошлись.
+1. Install the skill into the project and commit: `npx skills add mikey-semy/review-kit`. The
+   copy in the repository pins the version for CI.
+2. Delete your own copy of the tool (`scripts/review/review.py`) and move the calls
+   (`package.json`, `Makefile`, CI) to the skill's path — or keep them, writing into
+   `blocks.json` a `cli` field with how the project calls the tool.
+3. `docs/review/prompts/`: delete the templates that were not edited — they will be taken from
+   the skill; keep the edited ones — they still take precedence.
+4. Put the skill folder into the `blocks.json` exclusions (or into a block, if the tooling is
+   reviewed) — `setup` does this only for a new review.
+5. `check` and `coverage` — verify that the map and the fingerprints agree.
 
 ## [0.3.0] — 2026-09-23
 
-Выпуск про то, что гейты перестали пропускать молча. Первый перенос в живой проект и
-десять раундов внешнего авто-ревью показали: почти каждая проверка 0.2.0 имела тихий
-обход — старая запись без отпечатка, промежуточный статус, пустой раздел, опечатка в
-ссылке. Здесь они закрыты, и каждая правка проверена мутацией (тестов 67). Новые команды:
-`backfill`, `restamp <ID-находки>`, `set-finding … --fixed-in`.
+A release about the gates ceasing to let things through silently. The first transfer into a live
+project and ten rounds of external auto-review showed: almost every check in 0.2.0 had a silent
+bypass — an old record without a fingerprint, an intermediate status, an empty section, a typo in
+a reference. Here they are closed, and every fix is proven by a mutation (67 tests). New
+commands: `backfill`, `restamp <finding ID>`, `set-finding … --fixed-in`.
 
-### Исправлено
+### Fixed
 
-- **Вердикты блоков с буквенным суффиксом терялись.** Идентификатор гипотезы угадывался
-  регуляркой «буквы, цифры, точка», и `V1d.1` под неё не подходил — а такие имена у больше
-  чем половины блоков реального ревью. Теперь идентификатор строится из настоящего имени
-  блока.
-- **Смена статуса зеленила гейты.** Проверки гипотез, ограничений охвата и отпечатка
-  действовали только в `verified` и `closed`; перевод в `triaged` выключал их, ничего не
-  добавив. Теперь они держатся во всех состояниях после проверки.
-- **Причина отказа требовалась не там, где её велит писать шаблон роли.** Шаблон кладёт её в
-  заголовок находки, а проверка требовала отдельное поле — и роняла каждую находку,
-  оформленную ровно по инструкции. Принимается и то, и другое; шаблон дополнен.
-- **Устаревание дерева меряется от точки расхождения.** Свежий коммит в давно отведённой
-  ветке делал её вершину новее удалённой и прятал то, что ветка не содержит ни одного чужого
-  исправления.
-- **Починка в соседнем репозитории** пишется как `репозиторий:коммит` и проверяется на форму,
-  а не на существование.
-- **Записи без отпечатка выпадали из проверки молча.** Блок, пройденный до появления
-  отпечатков, и находка, импортированная до них, пропускались — то есть не проверялось
-  ровно самое старое. Теперь это отказ; новая команда `backfill` проставляет отпечатки с
-  текущего кода и пишет в журнал коммит, с которого изменения отслеживаются.
-- **`set-status triaged` перештамповывал отпечаток.** Любой переход после проверки заново
-  снимал хеш файлов и тем подтверждал просмотр правок, которых никто не смотрел. Отпечаток
-  ставят только `verified` и `closed`; подтвердить правки — по-прежнему `restamp`.
-- **Карта покрытия больше не пишет коммит в шапку.** Проверка «снимок с той же линии
-  истории» пропускала карту, собранную на другом составе файлов, — имя коммита ничего не
-  доказывало. Свежесть карты проверяется построчным сравнением с пересчётом, как и раньше.
-- **Правка гипотез после проверки засчитывала старые вердикты новым вопросам.**
-  Идентификатор гипотезы — порядковый номер; переставь пункты или замени вопрос другим, и
-  «H1.2 проверена» молча относилась к новому тексту. Теперь вместе с отпечатком файлов
-  снимается отпечаток текста гипотез, и его расхождение — отказ (`restamp`, если смысл не
-  менялся).
-- **Подпункт гипотезы считался отдельной гипотезой** и требовал вердикта вопросу, которого
-  промпт не задавал. Считаются только пункты верхнего уровня.
-- **Узда принималась любой строкой.** Опечатка в пути закрывала класс дефекта без всякого
-  правила. Теперь путь обязан быть файлом репозитория (суффиксы `::тест`, `#якорь`,
-  `:строка` отрезаются), а узда в соседнем репозитории пишется как
-  `репозиторий:путь/к/файлу`. Удалённая узда ловится в `check`.
-- **Пустой отчёт проверяющего проводил блок в `verified`.** Проверялось только, что файл
-  есть. Теперь в нём обязан быть текст кроме заголовков и хотя бы один вердикт по находкам
-  (confirmed / plausible / rejected / duplicate или живым языком), а у блока без находок —
-  вердикт об охвате. Форма таблицы не требуется: отчёты пишутся по-разному.
-- **Живую находку на изменённом файле нечем было подтвердить.** Файл меняется и починкой
-  соседней находки, и выхода было два, оба ложные: закрыть живой дефект или править реестр
-  руками. Теперь `restamp <ID-находки>` — так же, как у блока.
-- **Оценка охвата в отчёте проверяющего требуется всегда**, а не только у блока без
-  находок: вердикты по найденному ничего не говорят о непросмотренном.
-- **Противоречивые вердикты в одном отчёте** («H1.1 — проверена» и ниже в таблице «не
-  проверена») разрешались порядком строк, причём для разных форм записи по-разному. Теперь
-  это отказ; берётся первое упоминание во всех формах.
-- **`--dup-of` принимал любую строку.** Опечатка или ссылка на саму себя убирали живой
-  дефект из остатка работ. Дубль обязан указывать на другую существующую находку, которая
-  сама не дубль и не отвергнута; `check` ловит и вписанное руками.
-- **Правка контекста блока проходила незамеченной.** Отпечаток брал только `paths`, а
-  промпт даёт блоку и `ref_paths`. Теперь снимается и отпечаток контекста; его расхождение —
-  **предупреждение**, а не отказ, как «suspect link» у doorstop. Замер, почему не отказ:
-  контекст одного блока в первом же проекте — 229 файлов и 12 коммитов за две недели; отказ
-  краснел бы почти ежедневно и приучил бы жать `restamp` не глядя.
-- **Нетронутая строка шаблона «Полный / неполный — …» засчитывалась оценкой охвата.**
-- **Починку в общем модуле нельзя было отметить честно.** Коммит обязан был касаться файла
-  находки, а маршрут, например, чинят в общем стороже. Место правки теперь называется явно —
-  `set-finding <ID> fixed --commit <sha> --fixed-in <путь>`; путь проверяется, а коммит
-  обязан касаться файла находки или одного из названных.
-- **Оговорка в строке переворачивала вердикт.** «Проверена по коду … живым запросом не
-  проверял» читалось как «не проверена»: слова искались в порядке словаря, а не в порядке
-  строки. Теперь вердикт — слово, стоящее раньше. На реальном ревью из 73 вердиктов
-  изменились ровно два, оба были прочитаны неверно.
-- **Отказ менял только статус.** Находка оставалась разом `rejected` и `confirmed`. Теперь
-  `set-finding … rejected` ставит и уверенность, возврат в работу сбрасывает её в
-  `plausible` (ждёт новой проверки), а `check` ловит расхождение, вписанное руками.
-- **Отпечаток гипотез брал только первую строку пункта.** Сценарий и ожидание, записанные
-  под гипотезой с отступом, правились незамеченными. Теперь в отпечаток идёт пункт целиком.
-- **Пустой раздел «Ограничения охвата» проходил проверку** — заголовок без текста, как и
-  скопированная инструкция шаблона. Теперь нужен текст: непросмотренное или прямое «нет».
-- **Повторный импорт переснимал отпечаток кода известной находки** — и устаревшая находка
-  пропадала из `check` без перепроверки. Теперь отпечаток по тому же id и файлу
-  сохраняется; подтвердить находку на новом коде — `restamp <ID>`.
-- **`import --append` падал на файле блока.** После штатного импорта файл хранит уже
-  записанные находки с номерами, и добор останавливался на первой из них; работал только с
-  файлом, где лежит одна дельта. Вдобавок он переименовывал файл блока в `.jsonl.merged`.
-  Теперь записанное пропускается, новым строкам выдаются свободные номера, номера вписываются
-  обратно в файл; повторный запуск ничего не дописывает.
-- **Симлинки выпадали из ревью целиком** — ни владельца, ни «непокрытого», ни отпечатка, и
-  ссылку можно было перенаправить незаметно. Исключение в 0.2.0 лечило двойной счёт не тем
-  способом. Теперь симлинк — файл блока; строки и отпечаток берутся от текста ссылки, а не
-  от цели, так что двойного счёта нет, а перенаправление ловится даже на цель с тем же
-  содержимым. Подмодули по-прежнему исключены: их код ревьюится в своём репозитории.
-- **Путь с пробелом ломал проверку коммита починки**: список файлов коммита делился по
-  пробелам, и коммит, трогавший `src/my file.ts`, объявлялся «не трогающим».
-- **Гипотезы считал один разбор, а отпечаток снимал другой.** Считавший не знал про блоки
-  кода: `# комментарий` в примере обрывал раздел, `- строка` в нём становилась гипотезой.
-  Теперь разбор один, и блоки кода он пропускает.
-- **Установщик предупреждает, если в `.gitignore` нет `__pycache__/`.** Байткод появляется,
-  стоит кому-то импортировать инструмент как модуль, и уезжает в коммит — в первом же
-  проекте так и вышло.
-- **Не изменено сознательно:** «не проверена» остаётся законным вердиктом и в `closed`.
-  Полноту доказывают перечислением непроверенного, а не его отсутствием (ограничения охвата
-  у Trail of Bits, «pass, fail или письменное обоснование» в ASVS); запрет толкал бы писать
-  «проверена» там, где не проверяли.
+- **Verdicts of blocks with a letter suffix were lost.** The hypothesis identifier was guessed by
+  the regex "letters, digits, dot", and `V1d.1` did not match it — and more than half of the
+  blocks of a real review have such names. Now the identifier is built from the block's real
+  name.
+- **A status change turned the gates green.** The checks of hypotheses, coverage limits and the
+  fingerprint were in force only in `verified` and `closed`; moving to `triaged` switched them
+  off, adding nothing. Now they hold in all states after verification.
+- **The rejection reason was required not where the role template tells you to write it.** The
+  template puts it into the finding's title, while the check required a separate field — and
+  failed every finding formatted exactly by the instruction. Both are accepted; the template is
+  supplemented.
+- **Tree staleness is measured from the divergence point.** A fresh commit in a long-diverged
+  branch made its tip newer than the remote's and hid the fact that the branch contains not one
+  of others' fixes.
+- **A fix in a neighbouring repository** is written as `repository:commit` and checked for form,
+  not for existence.
+- **Records without a fingerprint dropped out of the check silently.** A block passed before
+  fingerprints appeared, and a finding imported before them, were skipped — that is, exactly the
+  oldest went unchecked. Now this is a refusal; the new `backfill` command stamps fingerprints
+  from the current code and writes to the journal the commit from which changes are tracked.
+- **`set-status triaged` re-stamped the fingerprint.** Any transition after verification took the
+  file hash anew and thereby confirmed a review of edits nobody had looked at. The fingerprint is
+  set only by `verified` and `closed`; confirming edits is, as before, `restamp`.
+- **The coverage map no longer writes a commit into its header.** The check "a snapshot from the
+  same line of history" let through a map assembled on a different set of files — the commit
+  name proved nothing. The map's freshness is checked by line-by-line comparison with a
+  recomputation, as before.
+- **Editing hypotheses after verification credited old verdicts to new questions.** The
+  hypothesis identifier is an ordinal number; reorder the items or replace a question with
+  another, and "H1.2 checked" silently applied to the new text. Now, together with the file
+  fingerprint, a fingerprint of the hypotheses' text is taken, and its divergence is a refusal
+  (`restamp` if the meaning did not change).
+- **A sub-item of a hypothesis counted as a separate hypothesis** and demanded a verdict on a
+  question the prompt did not ask. Only top-level items count.
+- **A guard was accepted as any string.** A typo in the path closed a defect class without any
+  rule. Now the path must be a file of the repository (the suffixes `::test`, `#anchor`, `:line`
+  are cut off), and a guard in a neighbouring repository is written as
+  `repository:path/to/file`. A deleted guard is caught in `check`.
+- **An empty verifier report moved a block into `verified`.** Only the file's existence was
+  checked. Now it must contain text besides headings and at least one verdict on findings
+  (confirmed / plausible / rejected / duplicate or in plain language), and for a block without
+  findings — a verdict on coverage. A table form is not required: reports are written
+  differently.
+- **A live finding on a changed file could not be confirmed with anything.** A file also changes
+  when a neighbouring finding is fixed, and there were two ways out, both false: close the live
+  defect or edit the register by hand. Now `restamp <finding ID>` — the same as for a block.
+- **The coverage assessment in the verifier's report is always required**, not only for a block
+  without findings: verdicts on what was found say nothing about what was not looked at.
+- **Contradictory verdicts in one report** ("H1.1 — checked" and below in the table "not
+  checked") were resolved by line order, and differently for different forms of notation. Now
+  this is a refusal; the first mention across all forms is taken.
+- **`--dup-of` accepted any string.** A typo or a reference to itself removed a live defect from
+  the remaining work. A duplicate must point to another existing finding that is itself neither
+  a duplicate nor rejected; `check` also catches what was written in by hand.
+- **An edit to a block's context passed unnoticed.** The fingerprint took only `paths`, while the
+  prompt also gives a block its `ref_paths`. Now a fingerprint of the context is taken too; its
+  divergence is a **warning**, not a refusal, like the "suspect link" at doorstop. The measurement
+  of why not a refusal: the context of one block in the very first project — 229 files and 12
+  commits in two weeks; a refusal would go red almost daily and would train people to hit
+  `restamp` without looking.
+- **An untouched template line "Complete / incomplete — …" counted as a coverage assessment.**
+- **A fix in a shared module could not be marked honestly.** The commit had to touch the
+  finding's file, whereas a route, for instance, is fixed in a shared guard. The place of the fix
+  is now named explicitly — `set-finding <ID> fixed --commit <sha> --fixed-in <path>`; the path
+  is checked, and the commit must touch the finding's file or one of the named ones.
+- **A caveat in a line flipped the verdict.** "Checked by the code … not checked with a live
+  request" read as "not checked": the words were searched in dictionary order, not in line
+  order. Now the verdict is the word that comes earlier. On a real review, of 73 verdicts exactly
+  two changed, both had been read wrongly.
+- **A rejection changed only the status.** The finding stayed both `rejected` and `confirmed` at
+  once. Now `set-finding … rejected` also sets the confidence, a return to work resets it to
+  `plausible` (awaits a new verification), and `check` catches a divergence written in by hand.
+- **The hypotheses fingerprint took only the first line of an item.** The scenario and the
+  expectation written under the hypothesis with an indent were edited unnoticed. Now the whole
+  item goes into the fingerprint.
+- **An empty "Coverage limits" section passed the check** — a heading without text, as did the
+  copied template instruction. Now text is needed: what was not looked at, or a direct "none".
+- **A repeated import re-took the code fingerprint of a known finding** — and a stale finding
+  vanished from `check` without re-verification. Now the fingerprint for the same id and file is
+  kept; to confirm the finding on the new code — `restamp <ID>`.
+- **`import --append` crashed on a block file.** After a regular import the file holds the
+  already recorded findings with numbers, and the top-up stopped at the first of them; it worked
+  only with a file holding a single delta. On top of that it renamed the block file to
+  `.jsonl.merged`. Now the recorded ones are skipped, new lines get free numbers, the numbers are
+  written back into the file; a repeated run appends nothing.
+- **Symlinks dropped out of the review entirely** — no owner, no "uncovered", no fingerprint,
+  and the link could be redirected unnoticed. The exclusion in 0.2.0 cured the double count the
+  wrong way. Now a symlink is a file of the block; the lines and the fingerprint are taken from
+  the link's text, not from the target, so there is no double count, and a redirect is caught
+  even to a target with the same content. Submodules are still excluded: their code is reviewed
+  in their own repository.
+- **A path with a space broke the fix-commit check**: the commit's file list was split on
+  spaces, and a commit touching `src/my file.ts` was declared "not touching".
+- **Hypotheses were counted by one parser and fingerprinted by another.** The counting one did
+  not know about code blocks: `# comment` in an example cut the section short, `- line` in it
+  became a hypothesis. Now there is one parser, and it skips code blocks.
+- **The installer warns if `.gitignore` lacks `__pycache__/`.** Bytecode appears as soon as
+  somebody imports the tool as a module, and leaks into a commit — in the very first project that
+  is what happened.
+- **Deliberately not changed:** "not checked" remains a lawful verdict even in `closed`.
+  Completeness is proven by listing the unchecked, not by its absence (coverage limits at Trail
+  of Bits, "pass, fail or a written justification" in ASVS); a ban would push people to write
+  "checked" where they did not check.
 
-⚠️ Чего проверка отчёта НЕ делает: не сверяет вердикт по каждой находке с отчётом. Номера в
-реестре выдаёт `import` уже после проверки, и в отчёте их нет. Вердикт по каждой находке —
-её поле `confidence`, которое `check` требует у каждой записи; но что его выставил именно
-проверяющий, а не охотник, ничем не доказано. Это открытый вопрос, не решённый формой.
+⚠️ What the report check does NOT do: it does not match the verdict on each finding against the
+report. The numbers in the register are issued by `import` after the verification, and the
+report does not have them. The verdict on each finding is its `confidence` field, which `check`
+requires of every record; but that it was set by the verifier rather than the hunter is proven by
+nothing. This is an open question, not settled by the form.
 
-### Ломающее
+### Breaking
 
-- Проверка, пройденная на 0.2.0, может покраснеть: блоки после проверки и открытые находки
-  без отпечатков (файлов, гипотез, кода под находкой) теперь отказ. Что делать: `backfill`
-  один раз после обновления. Узду, записанную именем правила без файла, перепишите путём к
-  конфигу линтера или тесту. Шапка `coverage.tsv` с коммитом читается по-прежнему;
-  перезапишется при следующем `coverage`.
-- Симлинки теперь входят в состав: в репозитории, где они есть, `coverage` покажет их
-  непокрытыми, пока их не отнесут к блоку, а у пройденных блоков со ссылками сменится
-  отпечаток — `restamp`, если ссылки после проверки не трогали.
-- Формула отпечатка гипотез изменилась: у блоков, проштампованных раньше, `check` сообщит,
-  что гипотезы изменились. Если `git log` по манифестам после штампа пуст — это только
-  формула: `restamp <БЛОК>` и строка в журнал (`log <БЛОК> "…"`) с этой причиной.
+- A check passed on 0.2.0 may go red: blocks after verification and open findings without
+  fingerprints (of files, hypotheses, the code under the finding) are now a refusal. What to do:
+  `backfill` once after updating. A guard recorded as a rule name without a file — rewrite it as
+  a path to the linter config or a test. The `coverage.tsv` header with a commit is still read;
+  it will be overwritten at the next `coverage`.
+- Symlinks are now part of the composition: in a repository that has them, `coverage` will show
+  them as uncovered until they are assigned to a block, and passed blocks with links will get a
+  changed fingerprint — `restamp`, if the links were not touched after verification.
+- The hypotheses fingerprint formula changed: for blocks stamped earlier, `check` will report
+  that the hypotheses changed. If `git log` over the manifests since the stamp is empty — it is
+  only the formula: `restamp <BLOCK>` and a journal line (`log <BLOCK> "…"`) with that reason.
 
 ## [0.2.0] — 2026-09-22
 
-Выпуск про то, что метод перестал держаться на внимании: три механизма, живших текстом в
-промптах, стали проверками, а утверждения о самом методе — замерами с методикой. Плюс первый
-настоящий баг переносимости, найденный до того, как он кого-то укусил.
+A release about the method ceasing to rest on attention: three mechanisms that lived as text in
+prompts became checks, and claims about the method itself became measurements with a method.
+Plus the first real portability bug, found before it bit anyone.
 
-### Добавлено
+### Added
 
-- **Бюджет чтения стоит в самом задании.** Промпт охотника печатает объём блока — файлы,
-  строки, порядок величины в токенах, — а если блок больше читаемого за сеанс, показывает,
-  где проходит граница: файлы по убыванию размера с накопительным итогом и пометкой, что за
-  бортом. Это не запрет их открывать, а обязанность назвать непрочитанное поимённо.
-- **Класс дефекта закрывается уздой, а не списком правок.** У находки появилось поле `root`
-  (имя класса) и `rule` (чем класс закрыт); с третьего экземпляра проверка требует узду.
-  Узда проставляется всему корню сразу — `set-finding <ID> <статус> --rule <путь>`. Новая
-  команда `roots` показывает классы, число живых экземпляров и состояние каждого.
-  Отвергнутые находки и дубли экземплярами не считаются.
-- **Добор находок** — `import --append`: дописывает новое, не трогая уже записанное и
-  починенное, и помечает файл добора сведённым. Штатный импорт заменяет находки блока
-  целиком, и у блока в работе это стирало отметки о починке.
-- **Настраиваемый порог читаемости** — `readable_lines` в `blocks.json`. Дефолт 6000 выведен
-  из TypeScript, а медиана размера изменения различается между языками в два-три раза.
-- **Проверки, перенесённые из опыта соседних проектов**: коммит починки обязан существовать и
-  касаться файла находки; статус блока, вписанный мимо `set-status`; манифест короче двухсот
-  символов; `running` без отметки времени или с нечитаемой.
-- Документы: [`docs/measurements.md`](docs/measurements.md) — все замеры с методикой и
-  границами переноса; [`docs/prior-art.md`](docs/prior-art.md) — кто уже решал задачи из
-  плана и что у них вышло, включая раздел «чем мерить нельзя»;
-  [`ROADMAP.md`](ROADMAP.md) — семь направлений и то, чего делать не стоит.
-- Баннер в README: три роли, на которых стоит метод.
+- **The reading budget stands in the task itself.** The hunter's prompt prints the block's
+  volume — files, lines, the order of magnitude in tokens — and if the block is larger than what
+  is readable in a session, shows where the boundary runs: files by descending size with a
+  running total and a mark of what is overboard. This is not a ban on opening them but a duty to
+  name the unread by name.
+- **A defect class is closed by a guard, not by a list of edits.** A finding got a `root` field
+  (the class name) and `rule` (what the class is closed by); from the third instance the check
+  requires a guard. The guard is set on the whole root at once — `set-finding <ID> <status>
+  --rule <path>`. The new `roots` command shows the classes, the number of live instances and the
+  state of each. Rejected findings and duplicates do not count as instances.
+- **Top-up import of findings** — `import --append`: appends the new without touching what is
+  already recorded and fixed, and marks the top-up file as merged. A regular import replaces the
+  block's findings entirely, and for a block in progress that erased the fix marks.
+- **A configurable readability ceiling** — `readable_lines` in `blocks.json`. The default of
+  6000 was derived from TypeScript, and the median change size differs between languages by two
+  to three times.
+- **Checks carried over from the experience of neighbouring projects**: the fix commit must
+  exist and touch the finding's file; a block status written in bypassing `set-status`; a manifest
+  shorter than two hundred characters; `running` without a timestamp or with an unreadable one.
+- Documents: [`docs/measurements.md`](docs/measurements.md) — all measurements with the method
+  and the limits of transfer; [`docs/prior-art.md`](docs/prior-art.md) — who has already solved
+  the plan's tasks and how it went for them, including the section "what cannot be used to
+  measure"; [`ROADMAP.md`](ROADMAP.md) — seven directions and what is not worth doing.
+- A banner in the README: the three roles the method stands on.
 
-### Замерено
+### Measured
 
-- **Опыт трёх проектов, 587 находок.** Первый — 27 блоков из 27 (313 находок, 256
-  починены), второй — 8 из 13 (210 находок), третий — 4 блока. Доля отвергнутых
-  совпала на всех трёх: **2.6%, 3.8% и около 3%** — тот же результат, что дал замер с
-  подложными находками, но на выборке в полсотни раз больше.
-- ⚠️ Чего это не доказывает: все три проекта на TypeScript, все одного автора, и часть кода
-  в них писал тот же ИИ, который потом его ревьюил.
+- **The experience of three projects, 587 findings.** The first — 27 blocks of 27 (313
+  findings, 256 fixed), the second — 8 of 13 (210 findings), the third — 4 blocks. The share of
+  rejected coincided on all three: **2.6%, 3.8% and about 3%** — the same result the measurement
+  with planted findings gave, but on a sample fifty times larger.
+- ⚠️ What this does not prove: all three projects are TypeScript, all by one author, and part of
+  the code in them was written by the same AI that then reviewed it.
 
-### Исправлено
+### Fixed
 
-- **`git ls-files` возвращает то, что нельзя открыть.** Подмодуль роняет счётчик строк,
-  симлинк считается дважды, sparse-checkout печатает пути, которых на диске нет, LFS отдаёт
-  указатель вместо файла. Теперь состав берётся из `ls-files --stage` без режимов `160000` и
-  `120000`, а содержимое читается через `git show :путь`. В наших трёх проектах ничего этого
-  не было — в первом же чужом репозитории знаменатель покрытия поехал бы молча.
+- **`git ls-files` returns what cannot be opened.** A submodule crashes the line counter, a
+  symlink is counted twice, a sparse checkout prints paths that are not on disk, LFS hands over
+  a pointer instead of the file. Now the composition is taken from `ls-files --stage` without
+  modes `160000` and `120000`, and the content is read via `git show :path`. In our three projects
+  none of this was present — in the very first foreign repository the coverage denominator would
+  have drifted silently.
 
 ## [0.1.0] — 2026-09-21
 
-Первый выпуск этого репозитория. Набор пришёл готовым от автора соседнего проекта (архив от
-16.09.2026, разбор — в [`docs/how-it-works.md`](docs/how-it-works.md)); здесь он приведён в
-состояние, в котором его можно ставить в любой проект, и сверен с мировой практикой.
+The first release of this repository. The kit came ready-made from the author of a neighbouring
+project (an archive of 16.09.2026, the analysis is in [`docs/how-it-works.md`](docs/how-it-works.md));
+here it is brought into a state where it can be installed into any project, and checked against
+world practice.
 
-### Добавлено
+### Added
 
-- **Установщик** `install.py`: ставит инструмент, шаблоны и точку входа, заводит скелет
-  определения блоков и инвариантов, прописывает строку `CLI`, из которой собираются все
-  подсказки. Повторный запуск дописывает недостающее и не трогает правленое руками.
-- **Тесты** — 25 сценариев через командную строку, только `git` и стандартная библиотека.
-  Проверены мутацией: каждая правка инструмента роняет ровно один тест.
-- **Гипотезы как второй знаменатель покрытия.** Гипотезы манифеста нумеруются, каждая
-  закрывается вердиктом «проверена / не проверена / неприменима»; `check` требует вердикта у
-  всех, `hypotheses <БЛОК>` показывает, что закрыто. Разбирается и живой язык отчёта:
-  сводная таблица, «гипотеза 2 не подтвердилась», «опровергнута».
-- **Обязательный раздел об ограничениях охвата** в отчёте охотника: что осознанно не смотрел
-  и почему. Распознаются названия «Ограничения охвата», «Не прочитано из блока», «Чего НЕ
-  сделал».
-- **Отпечаток просмотренного** (идея — [doorstop](https://github.com/doorstop-dev/doorstop)).
-  Перевод блока в `verified`/`closed` запоминает отпечаток состава и содержимого его файлов;
-  `check` ловит блок, закрытый на другой версии кода. Подтвердить просмотр правок —
-  `restamp <БЛОК>`.
-- **Отпечаток кода под находкой.** Открытая находка помнит хеш файла, о котором говорит: код
-  уехал — значит либо её починили, либо описание устарело, и проверка требует решения.
-- **Проверка номера строки**: ссылка на строку, которой в файле нет, ловится без модели
-  (идея — [mergejury](https://github.com/iamEtornam/mergejury)).
-- **Проверка свежести дерева**: если вершина сервера старше нашей больше чем на неделю,
-  проверка падает. Меряется время, а не коммиты.
-- **Команда `set-finding`**: переводит находку и не даёт поставить `fixed` без коммита,
-  `rejected` без причины, `duplicate` без ссылки.
-- **Карта покрытия называет коммит**, от которого собрана, и `check` сверяет, что снимок с
-  этой линии истории.
-- **Подстановки `{{PROJECT}}` и `{{GATES}}`** из `blocks.json` — шаблон промпта больше не
-  здоровается с агентом от имени чужого проекта.
-- **Цели `make`** (`example/makefile-snippet.mk`) и тот же список для `package.json`.
-- Документы: [`docs/comparison-with-practice.md`](docs/comparison-with-practice.md) — сверка
-  метода с методологией аудиторских фирм, практикой Google и Meta, промышленными
-  ИИ-ревьюерами, наукой и соседями по нише на GitHub.
+- **The installer** `install.py`: installs the tool, the templates and the entry point, starts a
+  skeleton of the block definition and the invariants, writes the `CLI` string from which all the
+  hints are assembled. A repeated run adds what is missing and does not touch what was edited by
+  hand.
+- **Tests** — 25 scenarios via the command line, only `git` and the standard library. Proven by
+  mutation: every edit to the tool breaks exactly one test.
+- **Hypotheses as the second coverage denominator.** The manifest's hypotheses are numbered, each
+  is closed by a verdict "checked / not checked / not applicable"; `check` requires a verdict on
+  all, `hypotheses <BLOCK>` shows what is closed. The report's plain language is parsed too: a
+  summary table, "hypothesis 2 was not confirmed", "refuted".
+- **A mandatory coverage-limits section** in the hunter's report: what was deliberately not read
+  and why. The headings "Coverage limits", "Not read from the block", "What I did NOT do" are
+  recognised.
+- **The fingerprint of what was reviewed** (the idea — [doorstop](https://github.com/doorstop-dev/doorstop)).
+  Moving a block to `verified`/`closed` remembers the fingerprint of the composition and content
+  of its files; `check` catches a block closed on a different version of the code. To confirm a
+  review of edits — `restamp <BLOCK>`.
+- **The fingerprint of the code under a finding.** An open finding remembers the hash of the file
+  it speaks about: the code moved on — so either it was fixed or the description is stale, and
+  the check requires a decision.
+- **Line number check**: a reference to a line the file does not have is caught without a model
+  (the idea — [mergejury](https://github.com/iamEtornam/mergejury)).
+- **Tree freshness check**: if the server's tip is older than ours by more than a week, the check
+  fails. Time is measured, not commits.
+- **The `set-finding` command**: moves a finding and does not allow setting `fixed` without a
+  commit, `rejected` without a reason, `duplicate` without a reference.
+- **The coverage map names the commit** it was assembled from, and `check` verifies that the
+  snapshot is from this line of history.
+- **The `{{PROJECT}}` and `{{GATES}}` substitutions** from `blocks.json` — the prompt template
+  no longer greets the agent on behalf of someone else's project.
+- **`make` targets** (`example/makefile-snippet.mk`) and the same list for `package.json`.
+- Documents: [`docs/comparison-with-practice.md`](docs/comparison-with-practice.md) — a check of
+  the method against the methodology of audit firms, the practice of Google and Meta, industrial
+  AI reviewers, science and neighbours in the niche on GitHub.
 
-### Изменено
+### Changed
 
-- **Корень репозитория спрашивается у git**, а не отсчитывается от файла: инструмент можно
-  класть куда удобно проекту.
-- **Промпт вычитает исключения** — так же, как карта покрытия и порог читаемости. Раньше
-  блок получал в работу то, чего в его размере не числилось.
-- **Вердикт проверяющего перебивает вердикт охотника**: отчёты читаются по ролям, `verify`
-  накладывается последним.
-- **Манифест спрашивается только у блока, дошедшего до работы**, а не у всех сразу: иначе
-  проверка красная с первого дня и её перестают читать.
-- **Порог читаемости блока** (6000 строк) считается без исключённых файлов.
-- **Отказ покрытия говорит, что делать**, и почему выбор блока делает человек.
-- Промпты: проверяющий проверяет исполнением и определяет дубликат через корень; исполнитель
-  закрывает класс дефекта уздой и предъявляет зелёный прогон вместо слова «починил»; охотник
-  сверяется с `origin` перед тем, как оформить находку, а в соседнем репозитории — через
-  `git fetch` и `git show origin/master:<файл>`.
-- Имена файлов — латиницей.
+- **The repository root is asked from git**, not counted from a file: the tool can be put
+  wherever suits the project.
+- **The prompt subtracts the exclusions** — the same as the coverage map and the readability
+  ceiling. Before, a block was given to work on what was not counted in its size.
+- **The verifier's verdict overrides the hunter's verdict**: reports are read by role, `verify`
+  is applied last.
+- **The manifest is asked only of a block that has reached work**, not of all at once: otherwise
+  the check is red from the first day and people stop reading it.
+- **The block's readability ceiling** (6000 lines) is counted without excluded files.
+- **A coverage refusal says what to do**, and why the choice of block is made by a human.
+- Prompts: the verifier verifies by execution and defines a duplicate through the root; the fixer
+  closes the defect class with a guard and presents a green run instead of the word "fixed"; the
+  hunter checks against `origin` before filing a finding, and in a neighbouring repository — via
+  `git fetch` and `git show origin/master:<file>`.
+- File names — in Latin letters.
 
-### Исправлено
+### Fixed
 
-- `example/makefile-snippet.mk` содержал не цели ревью, а фрагмент SAST-целей чужого проекта:
-  **ни одна** команда `make review-*` из документации не существовала.
-- Документация звала `prompt BLOCK ROLE`, инструмент требует `prompt BLOCK --role`.
-- Блок закрывался с одним отчётом охотника, без отчёта верификатора.
-- Устаревшая карта покрытия не ловилась.
-- Реестр находок правился руками вопреки собственному правилу: команды для перевода находки
-  не существовало.
-- Причина отказа была объявлена условием завершения ревью, но ничем не потребована.
-- Подсказки в сообщениях звали то `make`, то `npm run` — оснастку переносили между проектами
-  и не вычитали.
+- `example/makefile-snippet.mk` contained not the review targets but a fragment of another
+  project's SAST targets: **not one** `make review-*` command from the documentation existed.
+- The documentation called `prompt BLOCK ROLE`, the tool requires `prompt BLOCK --role`.
+- A block was closed with one hunter's report, without the verifier's report.
+- A stale coverage map was not caught.
+- The findings register was edited by hand contrary to its own rule: a command for moving a
+  finding did not exist.
+- The rejection reason was declared a condition of finishing the review but was demanded by
+  nothing.
+- The hints in messages called now `make`, now `npm run` — the tooling was transferred between
+  projects and not proofread.
 
-### Замерено
+### Measured
 
-- **Проверяющему подсунули шесть заведомо ложных находок вперемешку с шестью настоящими** —
-  отвергнуты все шесть, обеими моделями. Подозрение «проверяющий соглашается» снято.
-- **Связка «охотник + проверяющий» против двух независимых охотников** на одном блоке:
-  проверяющий обошёлся на 41% дешевле второго охотника, проверил все находки, нашёл свои и
-  разрешил прямое противоречие между охотниками. Ноль отвергнутых из 18 — охотник, обязанный
-  предъявлять сценарий отказа, выдумок не приносит.
-- ⚠️ Первый контрпример к этому: проверяющий подтвердил исполнением дефект, которого нет, —
-  рабочая копия соседнего репозитория отставала на 12 суток. Подвело не рассуждение, а
-  свежесть дерева; отсюда проверка свежести и правило в промптах.
+- **The verifier was slipped six deliberately false findings mixed with six real ones** — all six
+  rejected, by both models. The suspicion "the verifier agrees" is lifted.
+- **The pair "hunter + verifier" against two independent hunters** on one block: the verifier
+  came out 41% cheaper than the second hunter, checked all the findings, found its own and
+  resolved a direct contradiction between the hunters. Zero rejected of 18 — a hunter obliged to
+  present a failure scenario brings no fabrications.
+- ⚠️ The first counterexample to this: the verifier confirmed by execution a defect that does not
+  exist — the working copy of the neighbouring repository was 12 days behind. What failed was not
+  the reasoning but the tree's freshness; hence the freshness check and the rule in the prompts.
 
-[Не выпущено]: https://github.com/mikey-semy/finetooth/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mikey-semy/finetooth/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mikey-semy/finetooth/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mikey-semy/finetooth/compare/v0.5.0...v0.6.0
 [0.4.0]: https://github.com/mikey-semy/finetooth/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mikey-semy/finetooth/compare/v0.2.0...v0.3.0

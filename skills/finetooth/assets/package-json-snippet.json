@@ -1,5 +1,5 @@
 {
-  "_комментарий": "Те же цели для проекта на npm. Вставляются в scripts из package.json. Аргументы после review-- : npm run review -- prompt H1 --role verify",
+  "_comment": "The same targets for an npm project. Pasted into scripts in package.json. Arguments go after review -- : npm run review -- prompt H1 --role verify",
   "scripts": {
     "review": "python3 .claude/skills/finetooth/scripts/review.py",
     "review:status": "python3 .claude/skills/finetooth/scripts/review.py status",

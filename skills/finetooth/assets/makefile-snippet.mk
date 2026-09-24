@@ -1,46 +1,48 @@
-# Цели `make` для ревью. Вставляются в Makefile проекта как есть.
+# `make` targets for the review. Pasted into the project's Makefile as is.
 #
-# Смысл целей — не сокращать набор символов, а убрать выбор: путь к инструменту
-# и имена аргументов пишутся здесь один раз, и промпт нельзя собрать «немножко
-# не так». Если в проекте нет Makefile, тот же список живёт в package.json,
-# justfile или в чём угодно — см. package-json-snippet.json рядом.
+# The point of the targets is not to save keystrokes but to remove choice: the
+# path to the tool and the argument names are written here once, and the prompt
+# cannot be assembled "slightly wrong". If the project has no Makefile, the same
+# list lives in package.json, a justfile or anything else — see
+# package-json-snippet.json next to this file.
 #
-# ⚠️ В присланном наборе на месте этого файла лежал фрагмент SAST-целей чужого
-# проекта, и ни одна из команд `make review-*`, обещанных в документации, не
-# существовала. Отсюда правило: команды, записанные в инструкции, выполняются
-# при первой же установке, иначе инструкция описывает намерение, а не работу.
+# ⚠️ In the kit as it was handed over, this file's place was taken by a fragment
+# of another project's SAST targets, and not one of the `make review-*` commands
+# promised in the documentation existed. Hence the rule: commands written in an
+# instruction are run at the very first install, otherwise the instruction
+# describes an intention, not work.
 
 REVIEW := python3 .claude/skills/finetooth/scripts/review.py
 
 .PHONY: review-init review-status review-next review-coverage review-check \
         review-prompt review-import review-findings
 
-review-init: ## Создать state.json по blocks.json
+review-init: ## Create state.json from blocks.json
 	@$(REVIEW) init
 
-review-status: ## Где мы: блоки по фазам, находки, следующий блок
+review-status: ## Where we are: blocks by phase, findings, next block
 	@$(REVIEW) status
 
-review-next: ## id следующего незакрытого блока
+review-next: ## id of the next unclosed block
 	@$(REVIEW) next
 
-review-coverage: ## Пересобрать карту «файл → блок»; падает, если файл ничей
+review-coverage: ## Rebuild the file → block map; fails if a file is unowned
 	@$(REVIEW) coverage
 
-review-check: ## Состояние непротиворечиво: статусы, отчёты, находки, покрытие
+review-check: ## The state is consistent: statuses, reports, findings, coverage
 	@$(REVIEW) check
 
-review-findings: ## Перегенерировать findings.md из findings.jsonl
+review-findings: ## Regenerate findings.md from findings.jsonl
 	@$(REVIEW) findings
 
-# Роль по умолчанию — охотник: с него начинается любой блок.
+# The default role is the hunter: every block starts with it.
 # make review-prompt BLOCK=H1 ROLE=verify
-review-prompt: ## Собрать промпт агенту: BLOCK=H1 [ROLE=hunter|verify|fix]
-	@test -n "$(BLOCK)" || { echo "укажите блок: make review-prompt BLOCK=H1"; exit 2; }
+review-prompt: ## Assemble a prompt for an agent: BLOCK=H1 [ROLE=hunter|verify|fix]
+	@test -n "$(BLOCK)" || { echo "name the block: make review-prompt BLOCK=H1"; exit 2; }
 	@$(REVIEW) prompt $(BLOCK) --role $(or $(ROLE),hunter)
 
-review-import: ## Втянуть находки блока в реестр: BLOCK=H1
-	@test -n "$(BLOCK)" || { echo "укажите блок: make review-import BLOCK=H1"; exit 2; }
+review-import: ## Pull the block's findings into the register: BLOCK=H1
+	@test -n "$(BLOCK)" || { echo "name the block: make review-import BLOCK=H1"; exit 2; }
 	@$(REVIEW) import $(BLOCK)
 	@$(REVIEW) findings
 	@$(REVIEW) check

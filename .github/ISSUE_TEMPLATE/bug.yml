@@ -1,29 +1,29 @@
-name: Дефект инструмента
-description: check зеленеет на ложном состоянии, prompt собирает не то, команда падает
+name: Tool defect
+description: check goes green on a false state, prompt assembles the wrong thing, a command crashes
 labels: [bug]
 body:
   - type: input
     id: version
     attributes:
-      label: Версия
-      description: вывод `python3 <скилл>/scripts/review.py version`
+      label: Version
+      description: output of `python3 <skill>/scripts/review.py version`
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: Как воспроизвести
-      description: команды по порядку на свежем временном репозитории — как в tests/test_review.py
+      label: How to reproduce
+      description: commands in order on a fresh temporary repository — as in tests/test_review.py
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: Что ожидалось и что вышло
+      label: What was expected and what happened
     validations:
       required: true
   - type: textarea
     id: state
     attributes:
-      label: Состояние (если относится)
-      description: куски blocks.json / state.json / findings.jsonl без чужих данных
+      label: State (if relevant)
+      description: pieces of blocks.json / state.json / findings.jsonl without other people's data

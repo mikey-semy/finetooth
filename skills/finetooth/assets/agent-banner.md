@@ -1,10 +1,10 @@
-# Баннер в корневой файл инструкций проекта
+# Banner for the project's root instructions file
 
-Ставится в самое начало файла, который читается в КАЖДОЙ сессии проекта
-(`CLAUDE.md`, `AGENTS.md`, `.cursorrules` — что используется у вас). Без него
-новая сессия просто не узнает, что ревью существует, и начнёт своё параллельное.
+Placed at the very top of the file that is read in EVERY session of the project
+(`CLAUDE.md`, `AGENTS.md`, `.cursorrules` — whichever you use). Without it a new
+session simply will not know that the review exists and will start a parallel one of its own.
 
-Умирает вместе с каталогом ревью — об этом сказано в нём самом.
+It dies together with the review directory — it says so itself.
 
 ---
 

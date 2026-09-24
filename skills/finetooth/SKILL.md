@@ -1,133 +1,140 @@
 ---
 name: finetooth
-description: Сплошное ревью всего репозитория блоками — с картой покрытия «файл → блок», гипотезами как вторым знаменателем, тремя ролями агентов (охотник, проверяющий, исполнитель) и состоянием на диске, которое переживает смену сессий. Use when asked for a full or whole-codebase review or audit that must cover every file rather than a diff, to resume a review already in progress (the repository has docs/review/), or to run the hunter, verify or fix role on a review block.
-license: MIT для доработок; основа передана автором без лицензии — полные условия в LICENSE
-compatibility: Нужны git и Python 3 (только стандартная библиотека; проверено на 3.12 и 3.14). Запускать из каталога ревьюируемого репозитория.
+description: Whole-repository review in blocks — with a file → block coverage map, hypotheses as the second denominator, three agent roles (hunter, verifier, fixer) and on-disk state that survives session changes. Use when asked for a full or whole-codebase review or audit that must cover every file rather than a diff, to resume a review already in progress (the repository has docs/review/), or to run the hunter, verify or fix role on a review block.
+license: MIT for the additions; the base was handed over by its author without a license — full terms in LICENSE
+compatibility: Requires git and Python 3 (standard library only; tested on 3.12 and 3.14). Run from the directory of the repository under review.
 metadata:
-  version: "0.6.0"
-  original-author: "Георгий Худобандаев (https://github.com/Georgiy-Khudobandaev)"
+  version: "0.7.0"
+  original-author: "Georgiy Khudobandaev (https://github.com/Georgiy-Khudobandaev)"
   source: "https://github.com/mikey-semy/finetooth"
 ---
 
-# Сплошное ревью репозитория
+# Whole-repository review
 
-Ревью всего кода, а не диффа: репозиторий режется на блоки, каждый блок проходят три роли,
-а полноту доказывает карта покрытия — ни одного файла без блока. Сессии меняются, контекст
-кончается, поэтому **всё состояние живёт на диске** в `docs/review/` проекта и читается
-обратно инструментом. Ничего не держи в памяти переписки.
+A review of all the code, not of a diff: the repository is cut into blocks, every block goes
+through three roles, and completeness is proven by the coverage map — not one file without a
+block. Sessions change, context runs out, so **all state lives on disk** in the project's
+`docs/review/` and is read back by the tool. Keep nothing in the memory of the conversation.
 
-## Инструмент
+## The tool
 
-Все действия — через `scripts/review.py` из этого скилла, **запущенный из корня
-ревьюируемого репозитория** (корень берётся у git по рабочему каталогу):
+Everything goes through `scripts/review.py` from this skill, **run from the root of the
+repository under review** (the root is taken from git by the working directory):
 
 ```sh
-python3 <путь-к-скиллу>/scripts/review.py status
+python3 <path-to-skill>/scripts/review.py status
 ```
 
-Ниже он называется `review`. Если в `docs/review/blocks.json` есть поле `cli` — проект зовёт
-инструмент по-своему (`npm run review --`, `make review`), используй его. Каждый отказ
-инструмента сам называет команду, которой он исправляется: читай отказ, а не угадывай.
+Below it is called `review`. If `docs/review/blocks.json` has a `cli` field, the project calls
+the tool its own way (`npm run review --`, `make review`) — use that. Every refusal from the
+tool names the command that fixes it: read the refusal, do not guess.
 
-## С чего начать
+## Getting started
 
-**В репозитории уже есть `docs/review/`** — ревью идёт. Не начинай своё параллельное:
+**The repository already has `docs/review/`** — a review is in progress. Do not start a parallel
+one of your own:
 
-1. `review status` — где мы и какой блок следующий; `review next` — его id.
-2. `review check` — непротиворечиво ли состояние. Красное чинится первым.
-3. `docs/review/journal.md` — что решили до тебя и почему.
+1. `review status` — where we are and which block is next; `review next` — its id.
+2. `review check` — is the state consistent. Red gets fixed first.
+3. `docs/review/journal.md` — what was decided before you and why.
 
-**Каталога нет** — ревью заводится:
+**There is no directory** — a review is being set up:
 
-1. `review setup --project <Имя>` (и `--cli "<команда>"`, если проект зовёт инструмент
-   по-своему) — скелет `blocks.json`, `invariants.md`, точка входа `docs/review/README.md`.
-2. `docs/review/invariants.md` — правила ЭТОГО проекта. Вклеивается каждому агенту и решает,
-   что тот сочтёт дефектом. Общие слова бесполезны — пиши то, за что проект уже заплатил.
-3. `docs/review/blocks.json` — `gates` (команды ворот проекта) и блоки: сквозные сначала,
-   доменные потом, стендовые последними. `review inventory` печатает дерево репозитория с
-   размерами и владением — нарезай по нему. Блок — то, что читается за один сеанс (порог
-   `readable_lines`, по умолчанию 6000 строк; `review sizes` показывает, кто выше). Блок,
-   который чтение не докажет (качество тестов, производительность, сканеры), получает
-   `"proof": "measured"`: доказательство — артефакты из манифеста, порог на него не
-   действует. Блок без `paths` — живой стенд. Образец —
+1. `review setup --project <Name>` (plus `--cli "<command>"` if the project calls the tool its
+   own way, and `--lang ru` for Russian) — skeleton `blocks.json`, `invariants.md`, the entry
+   point `docs/review/README.md`. The `lang` field in `blocks.json` (`en` by default, `ru`)
+   selects the language of the prompt templates and assets; the Russian ones sit next to the
+   English with a `.ru.md` suffix.
+2. `docs/review/invariants.md` — the rules of THIS project. It is pasted to every agent and
+   decides what the agent will count as a defect. Generic words are useless — write what the
+   project has already paid for.
+3. `docs/review/blocks.json` — `gates` (the commands of the project's gates) and the blocks:
+   cross-cutting first, domain next, live-system last. `review inventory` prints the
+   repository tree with sizes and ownership — cut by it. A block is what can be read in one
+   sitting (the `readable_lines` ceiling, 6000 lines by default; `review sizes` shows who is
+   above it). A block that reading cannot prove (test quality, performance, scanners) gets
+   `"proof": "measured"`: the proof is the artifacts from the manifest, and the ceiling does
+   not apply. A block without `paths` is a live system. Sample —
    [assets/blocks.example.json](assets/blocks.example.json).
-4. `review init`, затем `review coverage` — разбирай непокрытые файлы, пока их не станет
-   ноль. **Файл в блок относит человек**: попавший по совпадению шаблона будет числиться
-   прочитанным, не будучи прочитанным.
+4. `review init`, then `review coverage` — work through the unowned files until there are
+   zero. **A human assigns a file to a block**: a file caught by a pattern match will be
+   counted as read without having been read.
 
-## Порядок работы над блоком
+## Working through a block
 
-1. **Манифест** `docs/review/blocks/<ID>-<слаг>.md`: зачем блок, что считается находкой,
-   10–15 пронумерованных гипотез про этот проект, критерий приёмки, который нельзя
-   выполнить, не прочитав код. Образец — [assets/manifest.example.md](assets/manifest.example.md).
-   Без проектных гипотез ревью выходит «по общим соображениям»; эту часть не срезать.
-2. **Охотник.** `review prompt <ID> --role hunter` печатает готовый промпт — отдай его
-   субагенту **целиком и без правок**. Агент сам пишет отчёт и черновик находок на диск.
-   Затем `review set-status <ID> hunted`.
-3. **Проверяющий** — другим агентом: `review prompt <ID> --role verify`. Проверяет каждую
-   находку исполнением, делает свой проход по самому опасному, перезаписывает файл находок.
-   Отвергнутые не удаляются — остаются с причиной. Затем `review set-status <ID> verified`.
-4. **Приёмка.** Прочитай оба отчёта сам и сверь с критерием приёмки. Охват неполный — блок
-   на повторный проход, а не в закрытие.
-5. **Реестр.** `review import <ID>`, `review findings`, `review check`.
-6. **Дневник.** `review log <ID> "что решили и почему"` — сразу: это не восстанавливается.
-7. **Починка** — ещё одним агентом: `review prompt <ID> --role fix`. Режь задания по
-   связным областям, а не по одной находке. Ворота и проверку откатом прогоняй сам после
-   исполнителя. Находки переводятся `review set-finding <ID…> fixed --commit <sha>`
-   (несколько id разом); класс дефекта с третьим экземпляром закрывается уздой
-   (`--rule <путь к тесту или правилу>`), а не списком правок. Отложить можно только с
-   причиной (`deferred --reason`).
-8. **Ревьюер правок** — свежим агентом, который правки не писал:
-   `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope половина]`.
-   Дифф вклеивается в промпт целиком; два агента на две половины диффа — нормально. Его
-   подтверждённые находки заносятся в реестр добором (`import <ID> --append`), даже уже
-   починенные. Круги повторяются, пока ревьюер отвечает «следующий круг нужен»; круг,
-   нашедший дефект, внесённый прошлым кругом, — сигнал остановиться и подумать.
-9. Только после этого `review set-status <ID> closed`: без отчёта ревьюера правок блок с
-   починками закрыть нельзя.
+1. **Manifest** `docs/review/blocks/<ID>-<slug>.md`: why the block exists, what counts as a
+   finding, 10–15 numbered hypotheses about this project, an acceptance criterion that cannot
+   be met without reading the code. Sample — [assets/manifest.example.md](assets/manifest.example.md).
+   Without project-specific hypotheses the review comes out "on general grounds"; do not cut this part.
+2. **Hunter.** `review prompt <ID> --role hunter` prints a ready prompt — hand it to a subagent
+   **whole and unedited**. The agent writes the report and the draft findings to disk itself.
+   Then `review set-status <ID> hunted`.
+3. **Verifier** — a different agent: `review prompt <ID> --role verify`. Checks every finding
+   by execution, does its own pass over the most dangerous places, rewrites the findings file.
+   Rejected findings are not deleted — they stay with the reason. Then `review set-status <ID> verified`.
+4. **Acceptance.** Read both reports yourself and check them against the acceptance criterion.
+   Coverage incomplete — the block goes back for another pass, not to closure.
+5. **Register.** `review import <ID>`, `review findings`, `review check`.
+6. **Journal.** `review log <ID> "what was decided and why"` — right away: this cannot be recovered.
+7. **Fixing** — yet another agent: `review prompt <ID> --role fix`. Cut assignments by related
+   areas, not one finding at a time. Run the gates and the revert check yourself after the
+   fixer. Findings are moved with `review set-finding <ID…> fixed --commit <sha>` (several ids
+   at once); a defect class with a third instance is closed by a guard
+   (`--rule <path to the test or rule>`), not by a list of fixes. Deferring is allowed only
+   with a reason (`deferred --reason`).
+8. **Fix reviewer** — a fresh agent that did not write the fixes:
+   `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope <half>]`.
+   The diff is pasted into the prompt whole; two agents on two halves of the diff is fine. Its
+   confirmed findings go into the register as a top-up import (`import <ID> --append`), even
+   the ones already fixed. Rounds repeat while the reviewer answers "another round is needed";
+   a round that finds a defect introduced by the previous round is a signal to stop and think.
+9. Only after that `review set-status <ID> closed`: without a fix reviewer's report a block
+   with fixes cannot be closed.
 
-## Правила, которые не нарушать
+## Rules not to break
 
-- Один агент не ищет и не чинит одновременно; чинит не тот, кто нашёл; проверяет не тот,
-  кто чинил. Повторную починку — свежему агенту, не тому же: задание самодостаточно, а
-  ошибки первого захода — ошибки внимания.
-- Граница блока — полная остановка: доложить владельцу и ждать команды на следующий.
-  Открытый вопрос повторяется целиком, у каждого — кто решает и рекомендация.
-- Блок не закрывается без выполненного критерия приёмки и без отчёта проверяющего.
-- Проверка за пределами своего репозитория — против свежего `origin` после `git fetch`:
-  отставшее дерево показывает починенное как сломанное.
-- Никаких ссылок на ревью в коде: номера находок и блоков умрут вместе с `docs/review/`.
-- Больше двух-трёх агентов разом не запускать, если на машине идёт сборка.
+- One agent does not hunt and fix at the same time; the one who found does not fix; the one
+  who fixed does not verify. A repeat fix goes to a fresh agent, not the same one: the
+  assignment is self-contained, and the first attempt's mistakes are mistakes of attention.
+- A block boundary is a full stop: report to the owner and wait for the go-ahead on the next
+  one. An open question is repeated in full, each with who decides and a recommendation.
+- A block is not closed without the acceptance criterion met and without the verifier's report.
+- Checking outside your own repository — against a fresh `origin` after `git fetch`: a stale
+  tree shows what is fixed as broken.
+- No references to the review in code: finding and block numbers die with `docs/review/`.
+- Do not run more than two or three agents at once if a build is running on the machine.
 
-## Что держит `review check`
+## What `review check` holds
 
-Проверка красная — работа не сделана, даже если так кажется. Она ловит, среди прочего:
-файл без блока и устаревшую карту покрытия; файл читаемого блока, не названный полным путём
-ни в одном отчёте (прочитанное — списком, непрочитанное — в ограничениях охвата); гипотезу
-без вердикта или с противоречивыми вердиктами; отчёт охотника без раздела «Ограничения
-охвата» и пустой отчёт проверяющего; отложенную находку без причины; блок в `blocked` без
-записки; фазы не по порядку; закрытый с починками блок без ревью правок;
-блок и находку, закрытые на другой версии кода (отпечатки — `review restamp`, если правки к
-делу не относятся, `review backfill` для записей старше отпечатков); находку без причины
-отказа, коммит починки, не трогающий файл, дубль несуществующей находки, узду по
-несуществующему пути; дерево, отставшее от сервера больше чем на неделю.
+A red check means the work is not done, even if it looks done. Among other things it catches:
+a file without a block and a stale coverage map; a file of a readable block not named by full
+path in any report (what was read — as a list, what was not — in the coverage limits); a
+hypothesis without a verdict or with conflicting verdicts; a hunter report without a
+"Coverage limits" section and an empty verifier report; a deferred finding without a reason;
+a block in `blocked` without a note; phases out of order; a block closed with fixes but
+without a fix review; a block and a finding closed on a different version of the code
+(fingerprints — `review restamp` if the changes are unrelated, `review backfill` for records
+older than the fingerprints); a finding without a rejection reason, a fix commit that does not
+touch the file, a duplicate of a nonexistent finding, a guard at a nonexistent path; a tree
+more than a week behind the server.
 
-## Когда ревью закончено
+## When the review is finished
 
-Все блоки `closed`, открытых находок нет, у каждой отвергнутой — причина. Тогда каталог
-`docs/review/` **удаляется целиком одним изменением**, а долговечное переезжает: правила — в
-корневой файл инструкций, решения — в ADR, проверки — в тесты. Остаётся один файл — итог:
-дата и коммит-база, блоки и их критерии, отвергнутые находки с причинами, чем закрыт каждый
-класс дефектов. Без него следующее ревью начнётся с нуля.
+All blocks `closed`, no open findings, every rejected one has a reason. Then the
+`docs/review/` directory **is deleted whole in one change**, and what lasts moves out: rules
+into the root instructions file, decisions into ADRs, checks into tests. One file remains —
+the summary: the date and the base commit, the blocks and their criteria, the rejected
+findings with reasons, what closed each defect class. Without it the next review starts from zero.
 
-## Файлы скилла
+## Files of the skill
 
 - [references/hunter.md](references/hunter.md), [references/verify.md](references/verify.md),
   [references/fix.md](references/fix.md), [references/fixreview.md](references/fixreview.md)
-  — шаблоны ролей. Промпт из них собирает `review prompt`; читать их нужно, только чтобы
-  понять или поправить роль. Проект может держать свою версию в
-  `docs/review/prompts/<роль>.md` — тогда берётся она.
-- [references/lessons.md](references/lessons.md) — уроки двух ревью, из которых выросли
-  правила: читать до первого блока.
-- [assets/](assets/) — образцы: блоки, манифест, инварианты, дневник, баннер для корневого
-  файла инструкций, цели `make` и `package.json`, пример узды.
+  — the role templates. `review prompt` assembles the prompt from them; read them only to
+  understand or adjust a role. A project may keep its own version in
+  `docs/review/prompts/<role>.md` — then that one is used. The Russian versions sit next to
+  them as `<role>.ru.md`.
+- [references/lessons.md](references/lessons.md) — the lessons of two reviews the rules grew
+  out of: read before the first block.
+- [assets/](assets/) — samples: blocks, manifest, invariants, journal, banner for the root
+  instructions file, `make` and `package.json` targets, a guard example.

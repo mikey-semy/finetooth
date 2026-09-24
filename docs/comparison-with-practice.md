@@ -1,398 +1,419 @@
-# Этот метод против мировой практики
+[Русская версия](ru/comparison-with-practice.md)
 
-Набор в этом репозитории вырос из опыта двух проектов и ни с чем не сверялся. Здесь он
-сверен: с методологией аудиторских фирм, с практикой компаний, где кодовая база измеряется
-миллионами строк, с промышленными ИИ-ревьюерами и с научными замерами. Проверено 21.09.2026.
+# This method against world practice
 
-Цель документа — не похвалить метод, а найти, где он держится на вере.
+The kit in this repository grew out of the experience of two projects and was checked against
+nothing. Here it is checked: against the methodology of audit firms, the practice of companies
+whose codebases are measured in millions of lines, industrial AI reviewers and academic
+measurements. Verified 21.09.2026.
 
-## Главное в трёх строках
+The purpose of the document is not to praise the method but to find where it rests on faith.
 
-1. **Знаменатель покрытия у всех остальных — не файлы, а вопросы, требования или интерфейсы.**
-   Ни в одном разобранном отчёте аудита нет процента покрытых строк или файлов.
-2. **Второй агент-проверяющий бесполезен, если он перечитывает, и ценен, если исполняет.**
-   Голый LLM-проверяющий на реальных алярмах даёт precision 0.26–0.29 при базе истинных 0.24.
-3. **Сплошной проход по базе оправдан как инвентаризация с выходом в правило, а не как режим.**
-   Тот же анализатор даёт ~0% исправлений пакетным прогоном и >70% на диффе.
+## The main thing in three lines
+
+1. **Everyone else's coverage denominator is not files but questions, requirements or
+   interfaces.** Not one audit report examined has a percentage of covered lines or files.
+2. **A second, verifying agent is useless if it re-reads and valuable if it executes.**
+   A bare LLM verifier on real alarms gives precision 0.26–0.29 at a true-positive base of 0.24.
+3. **A whole-repository pass is justified as an inventory that ends in a rule, not as a
+   mode.** The same analyzer yields ~0% fixes in a batch run and >70% on a diff.
 
 ---
 
-## Восемь утверждений метода под проверкой
+## Eight claims of the method under scrutiny
 
-| | утверждение | вердикт |
+| | claim | verdict |
 |---|---|---|
-| A1 | полноту доказывает карта покрытия файлов | знаменатель неверен, но у карты нет аналога |
-| A2 | кто ищет — не чинит, кто чинил — не проверяет | подтверждено, имя: separation of duties |
-| A3 | верификатор даёт прирост | замерено дважды: 0 ложных проходит, дешевле пары охотников |
-| A4 | состояние на диске важнее контекста | подтверждено |
-| A5 | критерий приёмки защищает от пересказа | подтверждено косвенно, слабее их варианта |
-| A6 | размер блока ограничен читаемостью | **под сомнением с обеих сторон** |
-| A7 | отвергнутые хранятся с причиной | подтверждено сильно |
-| A8 | правку проверяют мутацией | подтверждено промышленно |
+| A1 | completeness is proven by the file coverage map | the denominator is wrong, but the map has no analogue |
+| A2 | who searches does not fix, who fixed does not verify | confirmed, name: separation of duties |
+| A3 | the verifier gives a gain | measured twice: 0 fakes get through, cheaper than a pair of hunters |
+| A4 | state on disk matters more than context | confirmed |
+| A5 | the acceptance criterion protects against retelling | confirmed indirectly, weaker than their variant |
+| A6 | block size is limited by readability | **in doubt from both sides** |
+| A7 | rejected findings are kept with a reason | confirmed strongly |
+| A8 | a fix is verified by mutation | confirmed industrially |
 
-### A1. Карта покрытия файлов
+### A1. The file coverage map
 
-**Против.** Единица покрытия в профессиональном аудите — всегда не файл. Trail of Bits режет
-работу по вопросам к системе («Are the authentication and authorization layers implemented
-consistently across…»). Cure53 — по Work Packages, номер пакета зашит в ID каждой находки.
-NCC Group — по компонентам с бюджетом в человеко-днях. OWASP ASVS — по требованиям, каждое
-с бинарным исходом: «The requirement must be verifiable, and the verification must result in
-a "fail" or "pass" decision». Common Criteria — по интерфейсам функций безопасности (TSFI) и
-подсистемам дизайна. DO-178C — по требованиям с двусторонней трассировкой.
+**Against.** The unit of coverage in professional auditing is never the file. Trail of Bits
+cuts the work by questions to the system ("Are the authentication and authorization layers
+implemented consistently across…"). Cure53 — by Work Packages, the package number is baked
+into the ID of every finding. NCC Group — by components with a budget in person-days. OWASP
+ASVS — by requirements, each with a binary outcome: "The requirement must be verifiable, and
+the verification must result in a "fail" or "pass" decision". Common Criteria — by security
+function interfaces (TSFI) and design subsystems. DO-178C — by requirements with two-way
+tracing.
 
-В восьми разобранных отчётах (ToB ×3, NCC ×2, Cure53 ×3) поиск по «lines of code | SLOC |
-% of the code | % of files» не дал ни одного совпадения.
+In eight reports examined (ToB ×3, NCC ×2, Cure53 ×3), a search for "lines of code | SLOC |
+% of the code | % of files" produced not a single match.
 
-**Две схемы, которые замыкают круг, и разница между ними.** Common Criteria требует, чтобы
-**все** интерфейсы функций безопасности были протестированы (ATE_COV.2.2C), но обратной
-проверки не требует: методика прямо напоминает, что не всякий тест обязан отображаться на
-интерфейс. То есть CC доказывает полноту **поверхности**, а не содержимого — и сам признаёт,
-что сплошной просмотр кода «impractical in almost all cases», предпочитая выборку.
+**Two schemes that close the loop, and the difference between them.** Common Criteria requires
+that **all** security function interfaces be tested (ATE_COV.2.2C), but does not require the
+reverse check: the methodology explicitly reminds that not every test has to map to an
+interface. That is, CC proves completeness of the **surface**, not of the content — and itself
+admits that a full code walk-through is "impractical in almost all cases", preferring a
+sample.
 
-DO-178C — единственная найденная схема, замыкающая круг полностью: forward (у требования есть
-код и тест), backward (**у кода и теста есть требование**), структурное покрытие на
-requirements-based тестах и отдельный объектив на стыки компонентов. И у неё есть
-дисциплина, прямо применимая к нашим «ничьим» файлам: код без требования — это **dead code**,
-дефект разработки, его удаляют; код с требованием, который в этой конфигурации не исполняется
-— **deactivated code**, его оставляют, но обязаны доказать, что он не активируется. Разница
-ровно в наличии трассы. У нас файл, не принадлежащий ни одному блоку, сейчас просто роняет
-проверку — без различения «забыли» и «сознательно не наш».
+DO-178C is the only scheme found that closes the loop completely: forward (a requirement has
+code and a test), backward (**code and test have a requirement**), structural coverage on
+requirements-based tests, and a separate objective for the seams between components. And it
+has a discipline directly applicable to our "unowned" files: code without a requirement is
+**dead code**, a development defect, it gets deleted; code with a requirement that does not
+execute in this configuration is **deactivated code**, it stays, but one is obliged to prove it
+does not activate. The difference is precisely in the presence of a trace. With us, a file
+belonging to no block currently just fails the check — without distinguishing "forgot" from
+"deliberately not ours".
 
-Хуже того: полноту там доказывают **перечислением непросмотренного**. Раздел
-`Coverage Limitations` есть в каждом отчёте ToB, и формулировка бывает прямой: «Because of
-the size of the ExecuTorch codebase, we focused our manual review on identifying common
-vulnerable code patterns across the codebase, **rather than obtaining full manual coverage**».
-Даже Common Criteria смотрит исходный код **выборкой** вплоть до EAL6.
+Worse: completeness there is proven by **enumerating what was not examined**. A
+`Coverage Limitations` section is in every ToB report, and the wording can be blunt: "Because
+of the size of the ExecuTorch codebase, we focused our manual review on identifying common
+vulnerable code patterns across the codebase, **rather than obtaining full manual coverage**".
+Even Common Criteria examines source code **by sampling** up to and including EAL6.
 
-**За.** Их «покрытие» — прилагательное: «satisfactory coverage», «good coverage». Проверить
-его нельзя, не наняв второго аудитора. Карта файлов даёт воспроизводимое число, которое
-нельзя подкрутить словом. И она ловит то, чего не ловит ничто другое: у автора набора —
-забытый микросервис, у нас — 89 файлов маршрутов, не принадлежавших ни одному блоку.
+**For.** Their "coverage" is an adjective: "satisfactory coverage", "good coverage". It cannot
+be checked without hiring a second auditor. A file map gives a reproducible number that cannot
+be nudged with a word. And it catches what nothing else catches: for the kit's author — a
+forgotten microservice, for us — 89 route files that belonged to no block.
 
-Среди промышленных ИИ-ревьюеров доказательства полноты нет **ни у кого**. Единственное
-приближение — PR-Agent, который печатает список файлов, выброшенных из-за нехватки токенов.
-Все остальные при переполнении бюджета молча обрезают; Sourcery просто ставит «Skipped».
+Among industrial AI reviewers **nobody** has proof of completeness. The only approximation is
+PR-Agent, which prints a list of files dropped for lack of tokens. All the others silently
+truncate on budget overflow; Sourcery just marks "Skipped".
 
-**Вывод.** Карту файлов оставить как ловушку забытого. Добавить второй знаменатель: гипотезы
-манифеста со статусом «проверена / не проверена / неприменима» и обоснованием неприменимости
-— модель ASVS 4.0.3: «In case of dispute, there should be sufficient assurance evidence to
-demonstrate each and every verified requirement has indeed been tested».
+**Conclusion.** Keep the file map as a trap for the forgotten. Add a second denominator: the
+manifest's hypotheses with a status "checked / not checked / not applicable" and a
+justification for inapplicability — the ASVS 4.0.3 model: "In case of dispute, there should be
+sufficient assurance evidence to demonstrate each and every verified requirement has indeed
+been tested".
 
-### A2. Разделение ролей
+### A2. Separation of roles
 
-Подтверждено везде и имеет имя — separation of duties.
+Confirmed everywhere and has a name — separation of duties.
 
-- **Linux:** цепочка трейлеров `Reported-by` → `Fixes:` → `Reviewed-by`/`Tested-by` →
-  `Signed-off-by`. Роль каждого участника записана в коммите.
-- **syzbot:** нашёл бот → починил человек → **проверил снова бот** (`#syz test`), и баг
-  закрывается только когда коммит доехал во все отслеживаемые ветки.
-- **Google:** три независимых одобрения на правку — LGTM (корректность), OWNERS (владение),
-  Readability (стиль языка, сертифицированный человек).
-- **Big Sleep:** агент нашёл → человек-эксперт верифицирует **до** отправки отчёта.
+- **Linux:** the trailer chain `Reported-by` → `Fixes:` → `Reviewed-by`/`Tested-by` →
+  `Signed-off-by`. Each participant's role is recorded in the commit.
+- **syzbot:** a bot found it → a human fixed it → **a bot checked again** (`#syz test`), and the
+  bug is closed only when the commit has reached all tracked branches.
+- **Google:** three independent approvals per change — LGTM (correctness), OWNERS (ownership),
+  Readability (language style, a certified human).
+- **Big Sleep:** the agent found it → a human expert verifies **before** the report is sent.
 
-Наука добавляет условие, которого в наборе не было: **проверяющий должен думать иначе**.
-Выигрыш от верификации монотонно падает по мере похожести решателя и проверяющего (37
-моделей, 9 бенчмарков, arXiv 2512.02304). У нас охотник и верификатор — одна и та же модель.
+Science adds a condition the kit did not have: **the verifier must think differently**. The
+gain from verification falls monotonically as the solver and the verifier grow more similar
+(37 models, 9 benchmarks, arXiv 2512.02304). With us the hunter and the verifier are the same
+model.
 
-### A3. Прирост верификатора — самое слабое место
+### A3. The verifier's gain — the weakest point
 
-Наш замер по трём блокам: охотники дали 32 находки, верификаторы добавили 10 (+31%) и
-отвергли 2 (6%).
+Our measurement over three blocks: hunters produced 32 findings, verifiers added 10 (+31%) and
+rejected 2 (6%).
 
-Проблема в том, что прирост находок — не то же самое, что прирост пользы:
+The problem is that a gain in findings is not the same as a gain in usefulness:
 
-- **CR-Bench** (584 дефекта из django, sympy, astropy, scikit-learn): цикл самопроверки поднял
-  recall с 27.0% до 32.8%, но обрушил сигнал/шум с 5.11 до 1.95, а полезность с 83.6% до
-  66.1%. Больше находок ценой того, что ревью перестают читать.
-- **Huang et al., ICLR 2024:** самокоррекция **без внешнего сигнала** статистически вредит —
-  GPT-4 теряет 6.5 п.п. на GSM8K, Llama-2 — 25.5 п.п. Модель чаще ломает правильный ответ,
-  чем чинит неправильный.
-- **Мультиагентная дискуссия проигрывает простому голосованию** при равном бюджете: 83.0
-  против 88.2 на девяти ответах.
-- **Greptile** публично выбросил LLM-судью из продукта: «The LLMs judgment of its own output
-  was nearly random». Заменили фильтром по эмбеддингам: комментарий блокируется, если близок
-  к трём и более ранее заминусованным.
-- **Sourcery** измерил однородный пост-фильтр: 43% против 42% без него — ноль. Сработал только
-  отдельный вызов с булевыми проверками по категориям Valid / Actionable / Specific / Valuable.
+- **CR-Bench** (584 defects from django, sympy, astropy, scikit-learn): a self-check loop raised
+  recall from 27.0% to 32.8%, but crashed signal/noise from 5.11 to 1.95 and usefulness from
+  83.6% to 66.1%. More findings at the price of reviews no longer being read.
+- **Huang et al., ICLR 2024:** self-correction **without an external signal** is statistically
+  harmful — GPT-4 loses 6.5 p.p. on GSM8K, Llama-2 — 25.5 p.p. The model breaks a correct answer
+  more often than it repairs a wrong one.
+- **Multi-agent debate loses to simple voting** at equal budget: 83.0 versus 88.2 over nine
+  answers.
+- **Greptile** publicly threw the LLM judge out of the product: "The LLMs judgment of its own
+  output was nearly random". Replaced with an embedding filter: a comment is blocked if it is
+  close to three or more previously downvoted ones.
+- **Sourcery** measured a uniform post-filter: 43% against 42% without it — zero. The only thing
+  that worked was a separate call with boolean checks by category Valid / Actionable /
+  Specific / Valuable.
 
-**Но есть и обратная сторона, и она про нас.** Tencent, 433 реальных алярма статанализа (база
-истинных 24%): голый LLM-проверяющий — precision 0.26–0.29, то есть почти случайный. Тот же
-LLM с анализом достижимости пути — **0.83–0.93**, снимает 94–98% ложных. GPTScan: стадия
-статического подтверждения убирает две трети ложных срабатываний.
+**But there is a flip side, and it is about us.** Tencent, 433 real static-analysis alarms
+(true-positive base 24%): a bare LLM verifier — precision 0.26–0.29, i.e. nearly random. The
+same LLM with path reachability analysis — **0.83–0.93**, removes 94–98% of false positives.
+GPTScan: the static confirmation stage removes two thirds of false positives.
 
-Наш верификатор **исполняет**, а не перечитывает: мутирует узды, вызывает предикаты на
-матрице значений, прогоняет тесты, независимо пересобирает таблицу маршрутов (и нашёл 7
-пропущенных из 38). Именно это переводит его из «почти случайного» в «работающий».
+Our verifier **executes** rather than re-reads: it mutates guards, calls predicates on a value
+matrix, runs tests, independently rebuilds the route table (and found 7 missed out of 38).
+Exactly that moves it from "nearly random" to "working".
 
-**Замер сделан 21.09.2026 — и подозрение снято.** Шесть настоящих находок перемешаны с
-шестью сочинёнными так, чтобы каждая опровергалась исполнением (правило на `dd` будто бы
-отсутствует, NBSP будто бы не покрыт `\s`, `JavaScript:` будто бы проходит из-за регистра,
-и так далее). Порядок перемешан, происхождение проверяющему не сообщалось, набор прогнан
-двумя моделями независимо.
+**The measurement was done 21.09.2026 — and the suspicion is lifted.** Six real findings were
+mixed with six invented ones, each written so that execution would refute it (a rule on `dd`
+supposedly missing, NBSP supposedly not covered by `\s`, `JavaScript:` supposedly getting
+through because of case, and so on). The order was shuffled, the origin was not disclosed to
+the verifier, the set was run by two models independently.
 
-**Ложь не прошла ни одна — 6 из 6 отвергнуты обеими**, с указанием, что код делает вместо
-заявленного. Наши 6% отвергнутого объясняются не сговорчивостью проверяющего, а точностью
-охотника.
+**Not one lie got through — 6 of 6 rejected by both**, with a statement of what the code does
+instead of what was claimed. Our 6% rejection rate is explained not by the verifier's
+compliance but by the hunter's precision.
 
-Побочно замер вскрыл другое: обе модели отвергли две **настоящие** находки — и обе были
-правы, их закрыл коммит, а реестр об этом не знал. Документ ревью протухает за день.
+As a side effect the measurement exposed something else: both models rejected two **real**
+findings — and both were right, a commit had closed them, and the register did not know. A
+review document goes stale within a day.
 
-Модели разошлись ровно один раз, и разбор этого расхождения сам оказался ошибкой. Одна
-заглянула в соседний репозиторий и «подтвердила исполнением» дыру; я проверил своими руками
-и согласился. Рабочая копия того репозитория отставала на **двенадцать суток** — в
-`origin/master` дыру давно закрыли. Вывод «дешёвая модель пропустила живую находку» снят:
-находка не живая, и права оказалась как раз отвергшая её модель.
+The models disagreed exactly once, and the analysis of that disagreement itself turned out to
+be an error. One looked into the neighbouring repository and "confirmed by execution" a hole; I
+checked with my own hands and agreed. The working copy of that repository was **twelve days**
+behind — in `origin/master` the hole had long been closed. The conclusion "the cheap model
+missed a live finding" is withdrawn: the finding is not live, and the model that rejected it
+was the one that was right.
 
-**Это первый контрпример к «проверяющий не выдумывает»** — и подвело не рассуждение, а
-свежесть дерева. Отсюда правило, которого не было ни у нас, ни в разобранной практике:
-проверка за пределами своего репозитория идёт против `origin/master` после `fetch`.
-Инструмент теперь сам роняет проверку, когда дерево старше своей ветки на сервере, и меряет
-именно **время, а не коммиты**: в том случае отставание было всего два коммита — число,
-которое не насторожило бы никого.
+**This is the first counterexample to "the verifier does not make things up"** — and what let
+us down was not reasoning but the freshness of the tree. Hence a rule that neither we nor the
+practice examined had: checking beyond one's own repository goes against `origin/master`
+after `fetch`. The tool now fails the check itself when the tree is older than its branch on
+the server, and measures precisely **time, not commits**: in that case the lag was only two
+commits — a number that would have alarmed no one.
 
-**Второй замер, 21.09.2026: схема сравнена с самым дешёвым соперником.** Один блок пройден
-дважды — двумя независимыми охотниками (второй читал в обратном порядке, дешёвый аналог
-«перетасовки») и проверяющим по их объединению, вслепую.
+**Second measurement, 21.09.2026: the scheme compared with the cheapest rival.** One block run
+twice — by two independent hunters (the second read in reverse order, a cheap analogue of
+"shuffling") and a verifier over their union, blind.
 
-| | находок | токенов |
+| | findings | tokens |
 |---|---:|---:|
-| охотник A | 10 | 204 тыс. |
-| охотник B | 8 | 222 тыс. |
-| проверяющий (по 18) | +3 своих | 131 тыс. |
+| hunter A | 10 | 204k |
+| hunter B | 8 | 222k |
+| verifier (over 18) | +3 of its own | 131k |
 
-Вердикты: **17 подтверждено, 1 правдоподобна, 0 отвергнуто**. Второй охотник принёс четыре
-новые находки, остальные четыре оказались дубликатами первого по корню. Проверяющий за
-вдвое меньшие деньги проверил все восемнадцать, нашёл три свои, поправил детали трёх и свёл
-четыре пары дублей.
+Verdicts: **17 confirmed, 1 plausible, 0 rejected**. The second hunter brought four new
+findings, the other four turned out to be duplicates of the first by root. The verifier, for
+half the money, checked all eighteen, found three of its own, corrected details in three and
+merged four pairs of duplicates.
 
-И сделал то, чего пара охотников не умеет: **разрешил прямое противоречие** между ними. Один
-утверждал, что пол остатка работает только у одного провайдера, второй — что он бьёт по
-всем; развилка, как оказалось, проходит по наличию ключа, и обе половины указывали на один
-пропуск. В схеме «два прохода с объединением» такое противоречие уезжает в реестр двумя
-находками, и разбирается с ним человек.
+And it did what a pair of hunters cannot: **resolved a direct contradiction** between them. One
+claimed the balance floor works only for one provider, the other that it hits all of them; the
+fork, as it turned out, runs along the presence of a key, and both halves pointed at the same
+omission. In the "two passes with a merge" scheme such a contradiction goes into the register
+as two findings, and a human sorts it out.
 
-**Вывод, устойчивый на двух замерах: ценность второй роли не в фильтре, а в углублении.**
-Ноль отвергнутых в обоих прогонах означает, что охотник, обязанный предъявлять сценарий
-отказа и проверять исполнением, выдумок не приносит — фильтровать нечего. Зато проверяющий
-дешевле второго охотника на 41% и оставляет после себя проверенный результат.
+**A conclusion stable over two measurements: the value of the second role is not in filtering
+but in deepening.** Zero rejected in both runs means that a hunter obliged to present a failure
+scenario and to check by execution brings no inventions — there is nothing to filter. But the
+verifier is 41% cheaper than a second hunter and leaves a verified result behind it.
 
-⚠️ Границы: один блок, одна модель в обеих ролях. На блоке, где охотник ошибается чаще,
-соотношение изменится — чем больше выдумок, тем ценнее фильтр.
+⚠️ Limits: one block, one model in both roles. On a block where the hunter errs more often the
+ratio will change — the more inventions, the more valuable the filter.
 
-### A4. Состояние на диске
+### A4. State on disk
 
-Подтверждено. Spearbit держит аудит в git: приватный репозиторий, ветки пропорционально числу
-файлов в scope, обсуждение комментариями в PR, метки как машина состояний, `Verified by
-USERNAME`, и находка становится issue **только после подтверждения**. Code4rena и Sherlock —
-метки на GitHub issue. Файл правил в репозитории стал стандартом де-факто у ИИ-ревьюеров:
-`.coderabbit.yaml`, `.greptile/config.json`, `.pr_agent.toml`, `BUGBOT.md`, `AGENTS.md`; Devin
-читает даже чужие.
+Confirmed. Spearbit keeps the audit in git: a private repository, branches in proportion to
+the number of files in scope, discussion in PR comments, labels as a state machine,
+`Verified by USERNAME`, and a finding becomes an issue **only after confirmation**. Code4rena
+and Sherlock — labels on GitHub issues. A rules file in the repository has become the de facto
+standard among AI reviewers: `.coderabbit.yaml`, `.greptile/config.json`, `.pr_agent.toml`,
+`BUGBOT.md`, `AGENTS.md`; Devin reads even other tools' ones.
 
-### A5. Критерий приёмки
+### A5. The acceptance criterion
 
-Прямого аналога нет, ближайшее — глава Test Methodology у Cure53, где документируется
-**отрицательный результат**: «искали prototype pollution, DOM XSS sinks, postMessage без
-origin-check — не нашли, вот почему». Это проверяемое утверждение; галочка «файл просмотрен,
-находок 0» — нет.
+No direct analogue; the closest is the Test Methodology chapter at Cure53, where a
+**negative result** is documented: "we looked for prototype pollution, DOM XSS sinks,
+postMessage without an origin check — did not find them, here is why". That is a verifiable
+claim; a tick "file examined, 0 findings" is not.
 
-Наш критерий приёмки сильнее галочки (таблицу маршрутов нельзя собрать, не прочитав код), но
-слабее их связки: у нас нет обязательного раздела «что осознанно не смотрел».
+Our acceptance criterion is stronger than a tick (a route table cannot be assembled without
+reading the code), but weaker than their combination: we have no mandatory section on what was
+deliberately not read.
 
-### A6. Размер блока
+### A6. Block size
 
-Под сомнением с двух сторон сразу.
+In doubt from two sides at once.
 
-**Порог может быть слишком велик.** «Эффективная длина» контекста, где модель держит ≥85%
-своего короткоконтекстного качества: GPT-4o — 8K токенов, Claude 3.5 Sonnet — 4K, Gemini 1.5
-Pro — 2K при заявленных 128K+ (NoLiMa, ICML 2025). Наши 6000 строк — это 60–80K токенов.
-⚠️ Мерено на синтетике «иголка в стоге», перенос на чтение кода не доказан.
+**The threshold may be too large.** The "effective length" of context, where a model keeps
+≥85% of its short-context quality: GPT-4o — 8K tokens, Claude 3.5 Sonnet — 4K, Gemini 1.5 Pro —
+2K at a declared 128K+ (NoLiMa, ICML 2025). Our 6000 lines are 60–80K tokens.
+⚠️ Measured on a synthetic "needle in a haystack", transfer to code reading is not proven.
 
-**И одновременно контекста может быть слишком много.** SWE-PRBench: структурированный дифф с
-саммари на 2000 токенов обошёл «полный контекст» на 2500 токенов **у всех восьми моделей**.
-«Bigger Isn't Always Better»: качество падает экспоненциально с размером диффа, разница 15×
-между малыми и большими.
+**And at the same time the context may be too much.** SWE-PRBench: a structured diff with a
+2000-token summary beat a 2500-token "full context" **on all eight models**. "Bigger Isn't
+Always Better": quality falls exponentially with diff size, a 15× difference between small and
+large.
 
-**Проверяемо дёшево:** взять блок в 6000 строк и тот же блок, разрезанный надвое, сравнить
-находки.
+**Cheaply testable:** take a 6000-line block and the same block cut in half, compare the
+findings.
 
-### A7. Отвергнутые находки
+### A7. Rejected findings
 
-Подтверждено сильнее, чем у нас сделано. Code4rena хранит отвергнутое **публично и навсегда**:
-в одном соревновании 819 satisfactory, 658 unsatisfactory, 72 invalid — каждая с комментарием
-судьи и JSON-файлом. И это не архив ради архива: по ним считается `signal = findings /
-submissions`, который **ограничивает право участника подавать находки**.
+Confirmed more strongly than we have implemented. Code4rena keeps the rejected **publicly and
+forever**: in one contest 819 satisfactory, 658 unsatisfactory, 72 invalid — each with a
+judge's comment and a JSON file. And it is not an archive for its own sake: from them is
+computed `signal = findings / submissions`, which **limits a participant's right to submit
+findings**.
 
-Trail of Bits сохраняет причину отказа дословно: «The ExecuTorch team has opted not to address
-the issue, since the root cause is in the third-party implementation of XNNPACK».
+Trail of Bits keeps the reason for refusal verbatim: "The ExecuTorch team has opted not to
+address the issue, since the root cause is in the third-party implementation of XNNPACK".
 
-У нас причина теперь требуется инструментом, но обратной связи на точность искателя нет.
+With us the reason is now required by the tool, but there is no feedback on the finder's
+precision.
 
-### A8. Мутационная проверка
+### A8. Mutation checking
 
-Подтверждено промышленно. Meta ACH: 10 795 классов → 9 095 мутантов → 571 тест, **инженеры
-приняли 73%**. Детектор эквивалентных мутантов: precision 0.79 / recall 0.47 базово, 0.95 /
-0.96 с предобработкой.
+Confirmed industrially. Meta ACH: 10,795 classes → 9,095 mutants → 571 tests, **engineers
+accepted 73%**. The equivalent-mutant detector: precision 0.79 / recall 0.47 baseline, 0.95 /
+0.96 with preprocessing.
 
-Наш факт того же рода: на блоке записи восемь мутаций дали восемь зелёных прогонов — набор
-тестов не стерёг ни одной находки, — а два контрольных изменения покраснели, что доказало
-исправность стенда.
-
----
-
-## Главный внешний вызов методу
-
-**Meta, CACM 2019.** Тот же Infer, тот же уровень ложных срабатываний. Пакетный прогон по всей
-базе, находки роздали разработчикам — доля исправленных **около нуля**. Переключили на дифф —
-**свыше 70%**. Причины названы прямо: переключение контекста и адресация.
-
-**Google, Fixit 2009.** Отревьюено 3 954 предупреждения FindBugs, исправлено **16%**. Вывод в
-статье: ручной триаж и заведение багов не масштабируются.
-
-Сплошной проход по базе при этом никуда не делся — у него три роли, и все три наши:
-1. **замер** доли ложных срабатываний перед включением новой проверки;
-2. **зачистка** существующих нарушений, прежде чем проверка станет обязательной;
-3. **инвентаризация** всех вхождений свежеоткрытого класса дефекта.
-
-Третья роль в аудите называется **variant analysis**: ToB из находок написали пять правил
-Semgrep, прогнали по всей базе и нашли **26 дополнительных вариантов**; правила приложены к
-отчёту и перезапускаемы. Полноту гарантирует правило, а не обход: оно переживает рефакторинг
-и работает на коде, которого ещё нет.
-
-**Следствие для метода:** у каждого блока должен быть выход в узду. Блок, закрытый только
-списком находок, не окупается — следующий проход найдёт то же самое.
-
-**И почему никто не гонится за полнотой.** Команда Codex опубликовала функцию полезности
-находки: `P(верна) × сэкономленное − стоимость проверки человеком − P(неверна) × цена ложной
-тревоги`. Отсюда их решение: «we explicitly accepted a measured tradeoff: modestly reduced
-recall in exchange for high signal quality and developer trust». Сначала сигнал/шум, потом
-полнота. Цена пропуска платится один раз, цена шума — каждым читателем каждого отчёта.
-
-Там же — предупреждение, которое стоит держать в манифесте: «Over reliance is a serious risk.
-Teams could start treating a clean review as a guarantee of safety».
+Our fact of the same kind: on the writes block eight mutations gave eight green runs — the test
+suite guarded none of the findings — while two control changes went red, which proved the rig
+was sound.
 
 ---
 
-## Соседи по нише на GitHub
+## The main external challenge to the method
 
-Проверено 21.09.2026 по исходникам и README, метаданные — через API.
+**Meta, CACM 2019.** The same Infer, the same false-positive level. A batch run over the whole
+base, findings handed out to developers — the share fixed **about zero**. Switched to the
+diff — **over 70%**. The causes are named outright: context switching and addressing.
 
-**Полного аналога нет.** Около пятнадцати проектов закрывают по два-три наших признака из
-семи, но ни один не соединяет покрытие всей базы как гейт, сборку промпта инструментом из
-манифеста и проверки целостности состояния кодом. Подавляющее большинство «agentic code
-review» — ревью диффа с фан-аутом по ролям; сплошной проход по базе делают единицы, и у них
-состояние либо отсутствует, либо это один markdown-отчёт.
+**Google, Fixit 2009.** 3,954 FindBugs warnings reviewed, **16%** fixed. The paper's
+conclusion: manual triage and filing bugs do not scale.
 
-Ближе всех трое:
+The whole-repository pass has not gone anywhere, though — it has three roles, and all three
+are ours:
+1. **measuring** the false-positive share before switching on a new check;
+2. **clean-up** of existing violations before the check becomes mandatory;
+3. **inventory** of all occurrences of a freshly discovered defect class.
 
-| проект | что есть | чего нет |
+The third role in auditing is called **variant analysis**: from findings ToB wrote five
+Semgrep rules, ran them over the whole base and found **26 additional variants**; the rules are
+attached to the report and re-runnable. Completeness is guaranteed by the rule, not by the
+walk: it survives refactoring and works on code that does not exist yet.
+
+**Consequence for the method:** every block must end in a guard. A block closed with only a
+list of findings does not pay for itself — the next pass will find the same thing.
+
+**And why nobody chases completeness.** The Codex team published a finding-usefulness
+function: `P(correct) × time saved − cost of human verification − P(incorrect) × price of a
+false alarm`. Hence their decision: "we explicitly accepted a measured tradeoff: modestly
+reduced recall in exchange for high signal quality and developer trust". Signal/noise first,
+completeness second. The price of a miss is paid once, the price of noise — by every reader of
+every report.
+
+There too — a warning worth keeping in the manifest: "Over reliance is a serious risk.
+Teams could start treating a clean review as a guarantee of safety".
+
+---
+
+## Neighbours in the niche on GitHub
+
+Checked 21.09.2026 by sources and READMEs, metadata — via the API.
+
+**There is no full analogue.** About fifteen projects cover two or three of our seven features,
+but none combines whole-base coverage as a gate, prompt assembly by the tool from a manifest,
+and state integrity checks in code. The overwhelming majority of "agentic code review" is diff
+review with a fan-out by roles; a whole-repository pass is done by a handful, and their state
+is either absent or a single markdown report.
+
+Closest are three:
+
+| project | what it has | what it lacks |
 |---|---|---|
-| [Faris-Alanazi/codebase-audit](https://github.com/Faris-Alanazi/codebase-audit) | манифест файлов и правило «каждый файл ровно в одной группе», реестр с жизненным циклом `OPEN → FIXED → VERIFIED → REGRESSED`, сопоставление между прогонами по отпечатку | блоков с манифестами нет, группы нарезаются на лету по каталогам; состояние — markdown без схемы |
-| [ncoevoet/claude-review-all](https://github.com/ncoevoet/claude-review-all) | лучший найденный жизненный цикл находки (ключ = корень + хеш кода, автовозврат в `open` при регрессии), сборка промпта из секций, ключ чекпойнта включает тексты промптов, 14 тестов и 40 фикстур | работает только по диффу, сплошного прохода нет |
-| [ChristopherKahler/aegis](https://github.com/ChristopherKahler/aegis) | фазы, `STATE.md`, `/resume` и передача сессии, протокол разногласий между агентами | покрытие по доменам, а не по файлам: «файл ничей» не ловится; тестов нет |
+| [Faris-Alanazi/codebase-audit](https://github.com/Faris-Alanazi/codebase-audit) | a file manifest and the rule "every file in exactly one group", a register with the lifecycle `OPEN → FIXED → VERIFIED → REGRESSED`, matching between runs by fingerprint | no blocks with manifests, groups are cut on the fly by directories; state — markdown without a schema |
+| [ncoevoet/claude-review-all](https://github.com/ncoevoet/claude-review-all) | the best finding lifecycle found (key = root + code hash, auto-return to `open` on regression), prompt assembly from sections, checkpoint key includes the prompt texts, 14 tests and 40 fixtures | works only on a diff, no whole-repository pass |
+| [ChristopherKahler/aegis](https://github.com/ChristopherKahler/aegis) | phases, `STATE.md`, `/resume` and session hand-off, a disagreement protocol between agents | coverage by domains, not by files: "unowned file" is not caught; no tests |
 
-**Самое ценное нашлось не в нише, а рядом — у [doorstop](https://github.com/doorstop-dev/doorstop)**
-(требования как YAML под git). Там у каждого требования стоит поле `reviewed:` с хешем
-собственного текста: правка текста сама переводит требование в «непросмотренные изменения»,
-а `doorstop review` перештамповывает. Плюс **suspect links** — связь хранит отпечаток родителя
-на момент связывания, и правка родителя помечает связь подозрительной. Гейт у них в пять
-строк шелла.
+**The most valuable thing was found not in the niche but next to it — at
+[doorstop](https://github.com/doorstop-dev/doorstop)** (requirements as YAML under git). There
+every requirement has a `reviewed:` field with a hash of its own text: editing the text itself
+moves the requirement into "unreviewed changes", and `doorstop review` re-stamps. Plus
+**suspect links** — a link stores the parent's fingerprint at the moment of linking, and
+editing the parent marks the link suspect. Their gate is five lines of shell.
 
-Это прямой ответ на дыру, которая стояла в основании нашего метода: статус «блок пройден»
-держался вечно, хотя файлы блока можно переписать целиком. **Взято и внедрено.**
+This is a direct answer to the hole that sat at the foundation of our method: the status
+"block done" held forever, although the block's files could be rewritten entirely. **Taken and
+implemented.**
 
-Что ещё взято: отпечаток кода под находкой (doorstop + claude-review-all) и проверка, что
-указанная в находке строка в файле существует — самый дешёвый фильтр выдумки
-([mergejury](https://github.com/iamEtornam/mergejury), у них это делается вообще без модели).
+What else was taken: the fingerprint of the code under a finding (doorstop + claude-review-all)
+and the check that the line named in a finding exists in the file — the cheapest filter of
+invention ([mergejury](https://github.com/iamEtornam/mergejury), where it is done without a
+model at all).
 
-Что отмечено на будущее, но не взято: бюджет контекста как гейт с ненулевым кодом возврата
-([repomix](https://github.com/yamadashy/repomix)) и пометка невлезшего прямо в артефакте
-([ai-digest](https://github.com/khromov/ai-digest) оставляет путь с заглушкой вместо
-содержимого); двусторонний отчёт о покрытии с метриками
-([spec-kit](https://github.com/github/spec-kit), команда `/analyze`); словарь состояний
-покрытия из [OpenFastTrace](https://github.com/itsallcode/openfasttrace), где отдельно
-названы `outdated` (смотрели старую версию) и транзитивная непокрытость.
+Noted for the future but not taken: a context budget as a gate with a non-zero exit code
+([repomix](https://github.com/yamadashy/repomix)) and marking what did not fit right in the
+artifact ([ai-digest](https://github.com/khromov/ai-digest) leaves the path with a placeholder
+instead of the content); a two-way coverage report with metrics
+([spec-kit](https://github.com/github/spec-kit), the `/analyze` command); the coverage state
+vocabulary from [OpenFastTrace](https://github.com/itsallcode/openfasttrace), where `outdated`
+(an old version was examined) and transitive non-coverage are named separately.
 
-⚠️ И анти-пример, стоящий отдельного упоминания:
-[gitingest](https://github.com/coderamp-labs/gitingest) при превышении лимитов молча
-выбрасывает файлы в отладочный лог, а в самом дайджесте о пропуске ни слова. Ровно та тихая
-потеря, из-за которой и заводилась карта покрытия.
+⚠️ And an anti-example worth a separate mention:
+[gitingest](https://github.com/coderamp-labs/gitingest), on exceeding its limits, silently
+drops files into a debug log, and the digest itself says not a word about the omission.
+Exactly the silent loss for which the coverage map was created.
 
-## Чего нет ни у кого
+## What nobody has
 
-1. **Доказательства полноты.** Ни один ИИ-ревьюер не утверждает «все изменённые строки
-   просмотрены» и не предъявляет артефакт. Ближайшее — coverage footer у PR-Agent.
-2. **Опубликованного FP rate по внятной методике.** Исключение одно — Semgrep, и только
-   потому, что их единица работы — находка детерминированного сканера, есть с чем сверять:
-   6.5 млн проанализированных находок, сокращение объёма на 60%, согласие людей 96%.
-   Все остальные дают суррогаты: долю даунвоутов, долю отработанных комментариев, resolution
-   rate. Это метрики полезности, а не точности.
-3. **Recall в принципе.** Никто не публикует, сколько пропустил.
-4. **Каталога прошлых находок с дедупликацией между проходами.** Learnings и Memories хранят
-   правила и предпочтения, а не «эта же проблема была в PR №412».
-5. **Согласия между бенчмарками.** В практическом прогоне четырёх инструментов на 146 PR
-   **93.4% помеченных мест нашёл ровно один инструмент** — они просто не измеряют одно и то же.
-
----
-
-## Что менять, по приоритету
-
-**П1. Гипотезы манифеста получают статус.** `H1.3 | проверена / не проверена / неприменима |
-чем доказано`. Гейт: блок не закрывается, пока у гипотезы нет статуса. Источник: ASVS.
-
-**П2. Обязательный раздел «что не смотрел» в отчёте.** Не «не прочитал файл», а «прочитал, но
-вопрос закрыть не смог, потому что». Источник: Coverage Limitations у ToB и NCC.
-
-**П3. Выход блока в правило.** Поле у находки: чем закрыт класс. Повторяющаяся находка
-обязана стать уздой, иначе работа не окупается. Источник: variant analysis, Zoncolan.
-
-**П4. Отрицательный результат как артефакт.** «Искал X способом Y — не нашёл, потому что Z».
-Источник: Cure53 Test Methodology.
-
-**П5. Верификатор — другой моделью.** Сейчас охотник и верификатор — один Opus. Источник:
-arXiv 2512.02304. ⚠️ Мерено на логике и математике, не на коде.
-
-**П6. Scope прибивается коммитом.** Писать HEAD в шапку карты покрытия и в отчёт блока.
-Источник: ToB `Version c243e427`, Cure53 `Commit: 40c7ad84…`.
-⚠️ Итог внедрения (0.3): коммит в шапке карты убран. Его нечем было проверить — сверка «та
-же линия истории» пропускала карту, собранную на другом составе, — а отчёт аудитора
-подписывается один раз, тогда как наша карта пересобирается постоянно. Версию прибивают
-отпечатки блоков и находок; карта сверяется с пересчётом построчно.
-
-**П7. Замер точности охотника.** Подсунуть верификатору контрольный набор заведомо ложных
-находок и посчитать, сколько отвергнет. Сейчас 6% отвергнутых нельзя отличить от
-«верификатор соглашается». Источник: `signal` у Code4rena.
-
-**П8. Дубликат определяется через корень.** «Если починить корень, находка перестанет
-существовать» — механически применимое определение. Источник: Code4rena.
-
-**П9. Закрытие находки — по зелёному повторному прогону, а не по словам.** Источник: syzbot.
-
-**П10. Самый дешёвый механизм верификации, который стоит попробовать первым.** Cursor BugBot
-гоняет несколько проходов поиска **по перетасованному диффу** и оставляет только то, что
-всплыло в нескольких проходах: перетасовка снимает эффект позиции в контексте, а голосование
-заменяет суждение модели о себе. Ни индекса, ни песочницы, ни истории реакций не нужно. Это
-согласуется с академическим результатом: при равном бюджете голосование бьёт дискуссию.
-Для нас это и есть бейзлайн из П7 — два независимых прохода охотника вместо одного плюс
-верификатор.
+1. **Proof of completeness.** Not one AI reviewer claims "all changed lines examined" or
+   presents an artifact. Closest — the coverage footer at PR-Agent.
+2. **A published FP rate by a sound methodology.** The single exception is Semgrep, and only
+   because their unit of work is a finding from a deterministic scanner, so there is something
+   to compare against: 6.5M analysed findings, a 60% volume reduction, 96% human agreement.
+   Everyone else gives surrogates: downvote share, share of comments acted on, resolution
+   rate. These are usefulness metrics, not precision.
+3. **Recall at all.** Nobody publishes how much they missed.
+4. **A catalogue of past findings with deduplication between passes.** Learnings and Memories
+   store rules and preferences, not "this same problem was in PR #412".
+5. **Agreement between benchmarks.** In a practical run of four tools on 146 PRs **93.4% of
+   flagged locations were found by exactly one tool** — they simply do not measure the same
+   thing.
 
 ---
 
-## Числа для калибровки ожиданий
+## What to change, by priority
 
-| что | значение | источник |
+**P1. Manifest hypotheses get a status.** `H1.3 | checked / not checked / not applicable |
+how proven`. Gate: a block does not close while a hypothesis has no status. Source: ASVS.
+
+**P2. A mandatory "what I did not examine" section in the report.** Not "did not read the file"
+but "read it, but could not close the question, because". Source: Coverage Limitations at ToB
+and NCC.
+
+**P3. A block ends in a rule.** A field on the finding: what closes the class. A recurring
+finding must become a guard, otherwise the work does not pay for itself. Source: variant
+analysis, Zoncolan.
+
+**P4. A negative result as an artifact.** "Looked for X by means of Y — did not find it,
+because Z". Source: Cure53 Test Methodology.
+
+**P5. The verifier — a different model.** Currently hunter and verifier are one Opus. Source:
+arXiv 2512.02304. ⚠️ Measured on logic and mathematics, not on code.
+
+**P6. Scope is pinned by a commit.** Write HEAD into the header of the coverage map and into
+the block report. Source: ToB `Version c243e427`, Cure53 `Commit: 40c7ad84…`.
+⚠️ Outcome of implementation (0.3): the commit in the map header was removed. There was nothing
+to verify it with — the "same line of history" check let through a map assembled on a
+different file set — and an auditor's report is signed once, whereas our map is rebuilt
+constantly. The version is pinned by the fingerprints of blocks and findings; the map is
+checked against a recompute line by line.
+
+**P7. Measuring the hunter's precision.** Slip the verifier a control set of deliberately false
+findings and count how many it rejects. Currently 6% rejected cannot be told apart from "the
+verifier agrees". Source: `signal` at Code4rena.
+
+**P8. A duplicate is defined through the root.** "If the root is fixed, the finding ceases to
+exist" — a mechanically applicable definition. Source: Code4rena.
+
+**P9. Closing a finding — by a green re-run, not by words.** Source: syzbot.
+
+**P10. The cheapest verification mechanism, worth trying first.** Cursor BugBot runs several
+search passes **over a shuffled diff** and keeps only what surfaced in several passes:
+shuffling removes the position effect in context, and voting replaces the model's judgment of
+itself. No index, no sandbox, no reaction history needed. This agrees with the academic result:
+at equal budget voting beats debate. For us this is exactly the baseline from P7 — two
+independent hunter passes instead of one plus a verifier.
+
+---
+
+## Numbers for calibrating expectations
+
+| what | value | source |
 |---|---|---|
-| precision ИИ-ревьюера на реальных PR | 3.56% | CR-Bench, arXiv 2603.11078 |
-| false discovery rate на реальных CVE | 84.82% | IRIS, ICLR 2025 |
-| точное воспроизведение человеческого ревью-комментария | 2.12% | Tufano, ICSE 2022 |
-| плотность комментариев в проде | 5.1 на ревью, содержательны 71% | GitHub, 60 млн ревью |
-| лучший инструмент на независимом наборе | не больше 63% известных проблем | Martian Code Review Bench |
-| все ревью-агенты вместе | ~40% задач | c-CRAB, arXiv 2603.23448 |
-| та же модель: грязный датасет против чистого | F1 68% → 3% | PrimeVul, ICSE 2025 |
-| синтетические мутации против реальных багфиксов | F1 0.847 → 0.066 | arXiv 2606.15689 |
-| Google в проде | целевая precision 50%, успех = 7.5% закрытых комментариев | ICSE-SEIP 2024 |
-| merge rate PR с ревью только от агентов | 45.2% против 68.4% у людей | MSR 2026 |
-| цена аудита людьми | 6–9 инженеро-недель на репозиторий | Trail of Bits |
-| наш блок | 2 агента, 446–679 тыс. токенов, 34–48 мин | журнал ревью |
+| precision of an AI reviewer on real PRs | 3.56% | CR-Bench, arXiv 2603.11078 |
+| false discovery rate on real CVEs | 84.82% | IRIS, ICLR 2025 |
+| exact reproduction of a human review comment | 2.12% | Tufano, ICSE 2022 |
+| comment density in production | 5.1 per review, 71% substantive | GitHub, 60M reviews |
+| best tool on an independent set | no more than 63% of known problems | Martian Code Review Bench |
+| all review agents together | ~40% of tasks | c-CRAB, arXiv 2603.23448 |
+| same model: dirty dataset vs clean | F1 68% → 3% | PrimeVul, ICSE 2025 |
+| synthetic mutations vs real bug fixes | F1 0.847 → 0.066 | arXiv 2606.15689 |
+| Google in production | target precision 50%, success = 7.5% of comments closed | ICSE-SEIP 2024 |
+| merge rate of PRs reviewed only by agents | 45.2% against 68.4% for humans | MSR 2026 |
+| price of an audit by humans | 6–9 engineer-weeks per repository | Trail of Bits |
+| our block | 2 agents, 446–679k tokens, 34–48 min | review journal |
 
-Последняя строка — причина, по которой этот метод вообще имеет смысл: то, что стоит
-человеко-недель, здесь стоит часа. При точности, которая в разы ниже человеческой.
+The last row is the reason this method makes sense at all: what costs person-weeks costs an
+hour here. At a precision several times below human.

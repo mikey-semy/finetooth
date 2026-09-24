@@ -1,386 +1,397 @@
-# Кто это уже решал
+[Русская версия](ru/prior-art.md)
 
-По каждому направлению из [`../ROADMAP.md`](../ROADMAP.md) — что нашлось у других: работающие
-механизмы, опубликованные числа и методы, признанные негодными. Разведка 21.09.2026 по
-первоисточникам; полные отчёты с URL и датами — в истории этого коммита.
+# Who has already solved this
 
-Читать так: **сначала раздел «чем мерить нельзя»**, потом остальное. Дороже всего обходятся
-не отсутствующие механизмы, а те, что выглядят рабочими и врут.
+For each direction in [`../ROADMAP.md`](../ROADMAP.md) — what was found at others: working
+mechanisms, published numbers, and methods recognised as unfit. Reconnaissance of 21.09.2026
+over primary sources; full reports with URLs and dates are in the history of this commit.
+
+Read it like this: **first the "what must not be used for measuring" section**, then the rest.
+The costliest thing is not missing mechanisms but the ones that look working and lie.
 
 ---
 
-## Направление 1. Измерить пропуски
+## Direction 1. Measure the misses
 
-### Главное: recall нельзя измерить прямо
+### The main thing: recall cannot be measured directly
 
-Знаменатель — все существующие дефекты — недоступен. Любой рабочий метод подменяет его
-выборкой с известным ответом, и дальше всё решает один вопрос: **похожа ли выборка на
-настоящие дефекты**. Здесь рассыпается большинство опубликованных цифр.
+The denominator — all existing defects — is unavailable. Any working method substitutes a
+sample with a known answer for it, and then everything hinges on one question: **does the
+sample resemble real defects**. This is where most published numbers fall apart.
 
-| замер | результат |
+| measurement | result |
 |---|---|
-| Error Prone + Infer + SpotBugs на **594 настоящих** дефектах (Habib & Pradel, ASE 2018, DOI 10.1145/3238147.3238213) | найдено **4.5%**, не нашёл никто — 95.5%. Прежние работы на синтетике заявляли 64–99% |
-| 8 фаззеров, 80+ лет процессорного времени, 50 органических CVE (Bundt et al., ASIA CCS 2021, arXiv 2208.11088) | **ни одного** не найдено, при том что синтетические находились |
-| ИИ-ревьюеры на эталоне из настоящих комментариев PR (c-CRAB, arXiv 2603.23448) | Claude Code 32.1%, Devin 24.8%, PR-Agent 23.1%, Codex 20.1%, **все вместе 41.5%** |
+| Error Prone + Infer + SpotBugs on **594 real** defects (Habib & Pradel, ASE 2018, DOI 10.1145/3238147.3238213) | **4.5%** found, found by no one — 95.5%. Earlier work on synthetic sets claimed 64–99% |
+| 8 fuzzers, 80+ years of CPU time, 50 organic CVEs (Bundt et al., ASIA CCS 2021, arXiv 2208.11088) | **not one** found, while the synthetic ones were being found |
+| AI reviewers on a benchmark of real PR comments (c-CRAB, arXiv 2603.23448) | Claude Code 32.1%, Devin 24.8%, PR-Agent 23.1%, Codex 20.1%, **all together 41.5%** |
 
-### Чем мерить нельзя
+### What must not be used for measuring
 
-- **Оценка остатка по Миллзу** (bebugging, IBM FSC-72-6015, 1972): `N̂ = S·n/k`. Держится на
-  равной трудности посаженных и настоящих дефектов — допущение нарушается систематически и
-  в одну сторону. Годится только левая половина: `recall = k/S` для конкретного класса.
-- **Capture-recapture на двух ревьюерах.** «One would be forgiven for concluding that CR
-  models are not usable for two inspectors» (El Emam & Laitenberger, IEEE TSE 27(9), 2001).
-  Нужно **≥4 существенно разных** ревьюера (Petersson et al., JSS 72(2), 2004). ⚠️ Для нас
-  опаснее вдвойне: одинаковые агенты пропускают одно и то же, пересечение выходит
-  искусственно высоким, и формула скажет «почти всё найдено» ровно там, где оба слепы к
-  целому классу.
-- **Mutation score как отчётная цифра.** 17% настоящих дефектов не сцеплены ни с одним
-  мутантом (Just et al., FSE 2014); корреляция счёта с поимкой настоящих дефектов слабеет
-  при контроле размера набора тестов (Papadakis et al., ICSE 2018). Мутации — инструмент
-  улучшения, не отчётности.
-- **Синтетические наборы SAST.** Сам NIST про Juliet/SARD: «users should not extrapolate
-  statistics… to production code». SWE-bench Illusion (arXiv 2506.12286): 76% решается без
-  контекста репозитория, 32.67% успехов — утечка решения в тексте задачи.
-- **SRGM** (модели роста надёжности) — про другой объект, допущения не выполняются.
+- **Mills' remaining-defect estimate** (bebugging, IBM FSC-72-6015, 1972): `N̂ = S·n/k`. Rests on
+  planted and real defects being equally hard — an assumption violated systematically and in
+  one direction. Only the left half is usable: `recall = k/S` for a specific class.
+- **Capture-recapture with two reviewers.** "One would be forgiven for concluding that CR
+  models are not usable for two inspectors" (El Emam & Laitenberger, IEEE TSE 27(9), 2001).
+  You need **≥4 substantially different** reviewers (Petersson et al., JSS 72(2), 2004). ⚠️ For
+  us it is doubly dangerous: identical agents miss the same things, the overlap comes out
+  artificially high, and the formula will say "almost everything found" exactly where both
+  are blind to a whole class.
+- **Mutation score as a reporting number.** 17% of real defects are coupled to no mutant at
+  all (Just et al., FSE 2014); the correlation of the score with catching real defects
+  weakens when test-suite size is controlled for (Papadakis et al., ICSE 2018). Mutations are
+  an improvement tool, not a reporting one.
+- **Synthetic SAST sets.** NIST itself on Juliet/SARD: "users should not extrapolate
+  statistics… to production code". SWE-bench Illusion (arXiv 2506.12286): 76% solved without
+  repository context, 32.67% of successes — the solution leaked in the task text.
+- **SRGM** (reliability growth models) — about a different object, the assumptions do not hold.
 
-### Что работает
+### What works
 
-- **Два корпуса, которые не складываются в одно число.** Дорогой и честный: откат настоящих
-  исправлений из собственной истории (трудность настоящая, контаминации нет). Дешёвый и
-  частый: прицельные мутанты (`cargo-mutants`, `Stryker`, PIT, mutmut).
-- **Калибровочный коэффициент** `k = recall(дешёвый) / recall(честный)`; дешёвые замеры
-  делятся на `k` и публикуются вместе с ним.
-- **Detection efficiency** (Каперс Джонс): доля найденного до поставки в окне 90 дней —
-  единственная метрика с честным знаменателем. Ориентиры: инспекции >85%, статанализ >65%,
-  отдельная форма тестирования <35%. ⚠️ База проприетарна и независимо не воспроизведена.
-- **Детектор эквивалентных мутантов на LLM** (Meta ACH, arXiv 2501.12862): precision 0.79 /
-  recall 0.47, с предобработкой 0.95 / 0.96. Эквивалентность в общем виде неразрешима
-  (Budd & Angluin, 1982), TCE ловит около 30%.
+- **Two corpora that do not add up to one number.** Expensive and honest: reverting real fixes
+  from your own history (real difficulty, no contamination). Cheap and frequent: targeted
+  mutants (`cargo-mutants`, `Stryker`, PIT, mutmut).
+- **A calibration coefficient** `k = recall(cheap) / recall(honest)`; cheap measurements are
+  divided by `k` and published together with it.
+- **Detection efficiency** (Capers Jones): the share found before delivery in a 90-day window —
+  the only metric with an honest denominator. Reference points: inspections >85%, static
+  analysis >65%, a single form of testing <35%. ⚠️ The base is proprietary and not
+  independently reproduced.
+- **An LLM detector of equivalent mutants** (Meta ACH, arXiv 2501.12862): precision 0.79 /
+  recall 0.47, with preprocessing 0.95 / 0.96. Equivalence in general is undecidable
+  (Budd & Angluin, 1982), TCE catches about 30%.
 
 ---
 
-## Направление 2. Переносимость
+## Direction 2. Transferability
 
-### Миф, который стоит развенчать
+### A myth worth debunking
 
-Ходовые числа «400 строк за 60–90 минут» и «70–90% обнаружения дефектов» приписывают
-исследованию Cisco/SmartBear. **В первоисточнике их нет** — это маркетинговая страница. В
-самой главе (2500 ревью, 3.2 млн строк, 50 разработчиков, 2005–2006): объём под ревью
-**<200 строк, потолок 400**; темп **<300 строк/час**; время **<60 минут, потолок 90**;
-рекомендация — **100–300 строк за 30–60 минут**. Плюс: **61% ревью не нашли ничего**, и ни
-одно ревью больше 250 строк не дало больше 37 дефектов на килостроку.
+The common numbers "400 lines in 60–90 minutes" and "70–90% defect detection" are attributed
+to the Cisco/SmartBear study. **They are not in the primary source** — that is a marketing
+page. In the chapter itself (2500 reviews, 3.2M lines, 50 developers, 2005–2006): volume under
+review **<200 lines, ceiling 400**; pace **<300 lines/hour**; time **<60 minutes, ceiling 90**;
+recommendation — **100–300 lines in 30–60 minutes**. Plus: **61% of reviews found nothing**,
+and not a single review over 250 lines yielded more than 37 defects per thousand lines.
 
-### Порог в строках непереносим между языками
+### A line threshold does not transfer between languages
 
-826 259 pull request, 10 языков (Kudrjavets, Nagappan, Rastogi, MSR 2022, arXiv 2203.05045).
-Медиана строк на изменение: Shell 8, Ruby 13, JS/PHP 15, C/C++/Python 21, **TypeScript 35**,
-C# 40, Java 43 — разброс два-три раза, значимый. **Go и Rust не входят ни в одну из этих
-работ.**
+826,259 pull requests, 10 languages (Kudrjavets, Nagappan, Rastogi, MSR 2022, arXiv 2203.05045).
+Median lines per change: Shell 8, Ruby 13, JS/PHP 15, C/C++/Python 21, **TypeScript 35**,
+C# 40, Java 43 — a two-to-threefold spread, significant. **Go and Rust are in none of these
+works.**
 
-→ Наш порог 6000 строк выведен из TypeScript и переносится молча только в TypeScript.
-Сделан настраиваемым (`readable_lines` в `blocks.json`), происхождение числа записано рядом.
+→ Our threshold of 6000 lines is derived from TypeScript and transfers silently only to
+TypeScript. Made configurable (`readable_lines` in `blocks.json`), the origin of the number is
+recorded next to it.
 
-### Что ломает `git ls-files` — проверено экспериментом
+### What breaks `git ls-files` — verified by experiment
 
-| случай | что происходит |
+| case | what happens |
 |---|---|
-| подмодуль (режим `160000`) | одна запись в `ls-files`, на диске каталог → `IsADirectoryError` |
-| симлинк (режим `120000`) | читается как файл, содержимое цели считается **дважды** |
-| sparse-checkout | печатаются пути, которых на диске нет (видно только через `ls-files -t`, флаг `S`) |
-| файл удалён из дерева, но жив в индексе | `FileNotFoundError` |
-| указатель Git LFS | одна строка вместо файла |
+| submodule (mode `160000`) | one entry in `ls-files`, a directory on disk → `IsADirectoryError` |
+| symlink (mode `120000`) | read as a file, the target's content is counted **twice** |
+| sparse-checkout | prints paths that are not on disk (visible only via `ls-files -t`, flag `S`) |
+| file deleted from the tree but alive in the index | `FileNotFoundError` |
+| Git LFS pointer | one line instead of the file |
 
-→ **Исправлено:** состав берётся из `ls-files --stage` с отбрасыванием подмодулей (`160000`),
-содержимое читается через `git show :путь`, а не `open()`. Симлинк в 0.2.0 тоже
-отбрасывался, но так он выпадал из ревью совсем, и перенаправить его можно было незаметно.
-Теперь он в составе. Двойного счёта нет: `git show :путь` отдаёт для него текст ссылки, и
-отпечаток тоже берётся от текста ссылки.
+→ **Fixed:** the file set is taken from `ls-files --stage` with submodules (`160000`) dropped,
+content is read via `git show :path`, not `open()`. In 0.2.0 the symlink was dropped too, but
+that way it fell out of the review entirely, and it could be redirected unnoticed. Now it is
+in the set. There is no double counting: `git show :path` returns the link text for it, and the
+fingerprint is also taken from the link text.
 
-### Кросс-репозиторная актуальность
+### Cross-repository freshness
 
-Канон один и тот же у всех: **хранить закреплённый SHA соседа и сверять на старте**,
-отказывать при расхождении. Подмодуль (gitlink `160000`), `west.yml` (Zephyr), манифест
-`repo` (Android), `MODULE.bazel.lock` (SHA-256), `flake.lock` (`narHash` дерева).
-`buf breaking --against '.git#branch=main'` базу не хранит вовсе — тянет по ссылке.
+The canon is the same everywhere: **store the pinned SHA of the neighbour and check it at
+start-up**, refuse on mismatch. Submodule (gitlink `160000`), `west.yml` (Zephyr), the `repo`
+manifest (Android), `MODULE.bazel.lock` (SHA-256), `flake.lock` (tree `narHash`).
+`buf breaking --against '.git#branch=main'` stores no base at all — it pulls by reference.
 
-Прямого инструмента «покрытие ревью по нескольким репозиториям» нет. Ближайшее по форме —
-SonarQube Portfolios (портфель = список пар «проект, ветка»), по смыслу — CodeQL MRVA
-(до 1000 репозиториев).
-
----
-
-## Направление 3. Регрессия ловится воротами
-
-- **syzbot.** `#syz fix: <заголовок коммита>` — дальше бот сам следит, когда коммит доедет
-  во все отслеживаемые ветки, и **только тогда** закрывает. Возврат дефекта создаёт **новую
-  карточку**, а не тихо переоткрывает старую. `#syz invalid` не глушит навсегда.
-  Бисекция запускается, только если дефект не воспроизводился 30 дней.
-- **DefectDojo.** Четыре алгоритма дедупликации (`unique_id_from_tool`, `hash_code`,
-  комбинированный, `legacy`); поля хеша задаются **на каждый источник находок**
-  (`HASHCODE_FIELDS_PER_SCANNER`). Повторный импорт — готовые ворота регрессии: create /
-  ignore / close / **reopen**; принятый риск и ложные срабатывания автоматически не
-  воскресают. ⚠️ Смена полей хеша не ретроактивна — нужен пересчёт.
-- **Храповики.** ESLint bulk suppressions: файл `eslint-suppressions.json`, счётчик на пару
-  «файл × правило», и **выход с кодом 2, если подавление стало ненужным** — прямой образец
-  гейта «правило исчезло». Betterer коммитит `.betterer.results`: хуже — ошибка, лучше —
-  снимок обновляется. Sonar считает Quality Gate только по новому коду.
-
-**Чего нет ни у кого:** гейта «класс закрыт правилом, а правило исчезло». Ближайшее —
-`Orphaned` в OpenFastTrace («элемент покрывает несуществующий») и код возврата 2 у ESLint.
+There is no direct tool for "review coverage across several repositories". Closest in form —
+SonarQube Portfolios (a portfolio = a list of "project, branch" pairs), in meaning — CodeQL
+MRVA (up to 1000 repositories).
 
 ---
 
-## Направление 4. Двусторонняя трассировка
+## Direction 3. Regression is caught by gates
 
-**OpenFastTrace** — самый богатый словарь и готовый ответ про каскад.
+- **syzbot.** `#syz fix: <commit title>` — from there the bot itself watches for the commit to
+  reach all tracked branches, and **only then** closes. A returning defect creates a **new
+  card**, not a silent reopen of the old one. `#syz invalid` does not mute forever.
+  Bisection starts only if the defect has not reproduced for 30 days.
+- **DefectDojo.** Four deduplication algorithms (`unique_id_from_tool`, `hash_code`, combined,
+  `legacy`); hash fields are set **per source of findings** (`HASHCODE_FIELDS_PER_SCANNER`).
+  Re-import is a ready-made regression gate: create / ignore / close / **reopen**; accepted
+  risk and false positives are not resurrected automatically. ⚠️ Changing the hash fields is
+  not retroactive — a recompute is needed.
+- **Ratchets.** ESLint bulk suppressions: a file `eslint-suppressions.json`, a counter per
+  "file × rule" pair, and **exit code 2 if a suppression has become unnecessary** — a direct
+  model for the "rule has vanished" gate. Betterer commits `.betterer.results`: worse — error,
+  better — the snapshot is updated. Sonar computes the Quality Gate over new code only.
 
-Исходящие состояния: `Covers`, `Predated`, `Outdated`, `Ambiguous`, `Unwanted`, `Orphaned`.
-Входящие: `Covered Shallow`, `Covered Unwanted`, `Covered Predated`, `Covered Outdated`.
-Агрегаты: `Undercovered`, `Overcovered`, `Deep Coverage`, **`Direct Defect` против
+**What nobody has:** a gate for "class closed by a rule, and the rule has vanished". Closest —
+`Orphaned` in OpenFastTrace ("an item covers a non-existent one") and ESLint's return code 2.
+
+---
+
+## Direction 4. Two-way tracing
+
+**OpenFastTrace** — the richest vocabulary and a ready answer about the cascade.
+
+Outgoing states: `Covers`, `Predated`, `Outdated`, `Ambiguous`, `Unwanted`, `Orphaned`.
+Incoming: `Covered Shallow`, `Covered Unwanted`, `Covered Predated`, `Covered Outdated`.
+Aggregates: `Undercovered`, `Overcovered`, `Deep Coverage`, **`Direct Defect` versus
 `Transitive Defect`**, `Forwarding`.
 
-Каскад решён двумя способами сразу: элемент с целым прямым покрытием, но битым потомком
-помечается «не ок (транзитивно)», а итог считает раздельно — `123 total, 5 direct,
-2 transitive`. Честное ограничение самих авторов: «OFT cannot predict the exact number of
-required incoming links… So OFT does not try to».
+The cascade is solved in two ways at once: an item with intact direct coverage but a broken
+descendant is marked "not ok (transitive)", and the total counts separately — `123 total,
+5 direct, 2 transitive`. The authors' own honest limitation: "OFT cannot predict the exact
+number of required incoming links… So OFT does not try to".
 
-**spec-kit `/analyze`** даёт форму отчёта: таблица находок `| ID | Category | Severity |
-Location(s) | Summary | Recommendation |`, **Coverage Summary Table**, отдельная секция
-**Unmapped Tasks**, метрики с Coverage %, потолок «не больше 50 находок» с overflow.
+**spec-kit `/analyze`** gives the report form: a findings table `| ID | Category | Severity |
+Location(s) | Summary | Recommendation |`, a **Coverage Summary Table**, a separate
+**Unmapped Tasks** section, metrics with Coverage %, a ceiling of "no more than 50 findings"
+with overflow.
 
-**DO-178C** даёт то, чего нет в остальных: три разных диагноза для кода без требования —
-dead (ошибка, удалять), deactivated (не ошибка, нужна изоляция и обоснование), extraneous
-(находка сертификации независимо от того, работает ли код). Вывод: «непокрыто» нельзя
-держать одним статусом.
+**DO-178C** gives what the rest lack: three different diagnoses for code without a
+requirement — dead (an error, delete), deactivated (not an error, needs isolation and
+justification), extraneous (a certification finding regardless of whether the code works).
+Conclusion: "uncovered" cannot be kept as one status.
 
 ---
 
-## Направление 5. Калибровка искателя
+## Direction 5. Calibrating the finder
 
-**Единственная опубликованная формула с порогами** — Google Tricorder (ICSE 2015, §IV-E):
+**The only published formula with thresholds** — Google Tricorder (ICSE 2015, §IV-E):
 
 ```
 not-useful rate = NOT USEFUL / (NOT USEFUL + PLEASE FIX + APPLY FIX)
-≥10% — анализатор на испытательном сроке
->25% — может быть отключён немедленно
+≥10% — analyzer on probation
+>25% — may be disabled immediately
 ```
 
-Ключевое в ней — **знаменатель**: считаются только находки, по которым было действие;
-молчание не считается. Приём нового анализатора — «actual issue at least 90% of the time».
-Фон по системе около 5%, у хороших анализаторов 0–3%.
+The key thing in it is the **denominator**: only findings that were acted on are counted;
+silence does not count. Admission of a new analyzer — "actual issue at least 90% of the time".
+The system-wide background is about 5%, good analyzers 0–3%.
 
-**Практика «править правило, а не наказывать источник» подтверждена**: Google AutoCommenter
-обнаружил, что около 80% предсказаний ниже общего порога уверенности верны, и сделал
-**свой порог на каждое правило**, а плохие подклассы глушил без переобучения.
+**The practice of "fix the rule, not punish the source" is confirmed**: Google AutoCommenter
+found that about 80% of predictions below the global confidence threshold were correct, and
+made **its own threshold per rule**, while muting bad subclasses without retraining.
 
-**Code4rena `signal`** = валидные / все поданные (только High и Medium, из финализированных
-аудитов, `null` до трёх подач). Ограничивает не деньги, а **право подавать**: null или <0.2 →
-1 находка, 0.2–0.4 → 2, ≥0.4 → 10.
+**Code4rena `signal`** = valid / all submitted (High and Medium only, from finalised audits,
+`null` until three submissions). It limits not money but **the right to submit**: null or <0.2 →
+1 finding, 0.2–0.4 → 2, ≥0.4 → 10.
 
-**HackerOne**: Signal — средняя репутация на отчёт по шкале −10…7 (спам = −10, решено = +7),
-то есть среднее **со знаком**, а не доля — жёстче к мусору.
+**HackerOne**: Signal — average reputation per report on a −10…7 scale (spam = −10,
+resolved = +7), i.e. a **signed** average, not a share — harsher on junk.
 
-**Sherlock**: право судить с 10 signal, комментировать чужое — со 100, комментарий стоит 2,
-эскалация платная и невозвратная. Есть готовый **Deviation Template**: применимое правило →
-что было бы нормально → причины отклонения → итоговый вердикт.
+**Sherlock**: the right to judge at 10 signal, to comment on others' at 100, a comment costs 2,
+escalation is paid and non-refundable. There is a ready **Deviation Template**: applicable rule →
+what would be normal → reasons for the deviation → final verdict.
 
-⚠️ Оговорка масштаба: пороги Google посчитаны на ~50 000 ревью в день. У нас объём на три
-порядка меньше, поэтому важнее не сами проценты, а два правила — не включать метрику до
-трёх находок и не считать молчание в знаменатель.
-
----
-
-## Направление 6. Архив прогона
-
-- **revmux** (Go): `manifest.json` записывает, какой слой дал каждый кусок промпта, **и хеш
-  его содержимого**; переменные раскрываются в пути, а не в содержимое; сырой вывод агентов
-  сохраняется дословно, ретраи отдельно.
-- **SWE-agent** заменил в формате траектории поле `message` на `query` в версии 1.1.0: первое
-  было приблизительным и указывало на следующий шаг, по нему нельзя было восстановить, что
-  модель видела на этом.
-- **Ключ кэша включает хеш содержимого** — Bazel, Nix, pre-commit, revmux; у Anthropic кэш
-  ключуется на точном префиксе `tools → system → messages`.
+⚠️ A caveat of scale: Google's thresholds are computed on ~50,000 reviews a day. Our volume is
+three orders of magnitude smaller, so what matters is not the percentages themselves but two
+rules — do not switch the metric on until three findings, and do not count silence in the
+denominator.
 
 ---
 
-## Направление 8. Параллельная работа
+## Direction 6. The run archive
 
-**Слияние состояния.** `merge=union` годится только для построчных файлов, которые
-дописывают, и с двумя оговорками: если обе стороны правят одну строку по-разному, union молча
-оставит обе без маркера конфликта; и **GitHub не применяет пользовательский `.gitattributes`
-при слиянии через веб** — такие файлы надо сливать локально.
-
-**Обход общего файла.** towncrier (Twisted, pytest, pip) кладёт фрагмент-файл на изменение
-вместо общего журнала: «два PR, добавляющие два разных файла, не могут конфликтовать».
-В аудите то же самое: Code4rena — issue на находку, Spearbit — ветка на файл (файлы больше
-500 строк режутся), находка сначала комментарий к строке.
-
-**git-bug** формулирует главный урок прямо: «it's not possible to store the current state…
-Instead of storing the final bug data directly, we store a series of edit Operations».
-Порядок — по логическим часам, потому что системному времени в распределённой работе верить
-нельзя; параллельные правки дают граф, из которого состояние **компилируется**.
-
-**Захват без инфраструктуры.** `git update-ref <ref> <new> <old>` — встроенный
-compare-and-swap; сорок нулей в `<old>` означают «убедись, что ссылки ещё нет».
-
-**Зависший участник.** Везде лечится истечением аренды, а не ручной разблокировкой:
-visibility timeout у очередей (по умолчанию 30 секунд, потолок продления 12 часов),
-`SKIP LOCKED` в Postgres, TTR у beanstalkd. Условие — сердцебиение чаще срока аренды.
-
-**Дедупликация и первенство.** Code4rena делит награду между дубликатами с затуханием
-(`10·0.85^(n−1)/n` для высоких), а бонус 30% даёт не первому, а тому, **чей текст выбран в
-отчёт**; слабая формулировка получает частичный кредит 25/50/75%, но входит в знаменатель.
-Вардены не видят чужих подач — дубли заложены в процесс. Sherlock требует от дубликата
-выполнить **все три условия**: назвать корень, назвать хотя бы среднее влияние, назвать
-рабочий путь атаки; группе присваивается **наивысшая** серьёзность среди участников.
-DefectDojo пересчитывает отпечатки задним числом (`manage.py dedupe`), то есть поздний дубль
-лечится перегенерацией, а не переписыванием истории.
-
-⚠️ Формулировку «машина предлагает группировку дубликатов, человек утверждает» подтвердить
-первоисточником **не удалось**: в репозиториях соревнований такие метки видны, но в
-документации процесс не описан. Считать фактом нельзя.
-
-**Параллельные агенты.** Anthropic пишет прямо: делить работу надо **по границам контекста, а
-не по ролям**; разделение «планировщик / исполнитель / тестировщик / ревьюер» тратит на
-координацию больше, чем на работу; параллелить стоит независимые ветки и **проверку как
-чёрный ящик** — она не требует контекста реализации. Цена мультиагентной схемы — около 15×
-токенов против обычного диалога.
-
-→ Для нас: «охотник → проверяющий» — ровно их разрешённый случай. «Охотник и исполнитель
-параллельно по одному блоку» — запрещённый.
+- **revmux** (Go): `manifest.json` records which layer produced each piece of the prompt, **and
+  a hash of its content**; variables are expanded into the path, not into the content; the raw
+  output of agents is stored verbatim, retries separately.
+- **SWE-agent** replaced the `message` field with `query` in the trajectory format in version
+  1.1.0: the former was approximate and pointed to the next step, so it was impossible to
+  reconstruct what the model saw at this one.
+- **The cache key includes a content hash** — Bazel, Nix, pre-commit, revmux; at Anthropic the
+  cache is keyed on the exact prefix `tools → system → messages`.
 
 ---
 
-## Направление 9. Экономика
+## Direction 8. Parallel work
 
-**Цена задачи решается архитектурой обхода, а не моделью.** На одном наборе: AutoCodeRover
-$0.43 за задачу (37 тыс. токенов) против SWE-agent $2.51 (245 тыс.) при сопоставимом
-качестве — разница в токенах 6.6×, в деньгах 5.8× (arXiv 2404.05427). Agentless — $0.34 при
-27.3% и $0.70 при 32.0%.
+**Merging state.** `merge=union` is suitable only for line-based files that are appended to,
+and with two caveats: if both sides change the same line differently, union silently keeps
+both without a conflict marker; and **GitHub does not apply a custom `.gitattributes` when
+merging via the web** — such files must be merged locally.
 
-**Разброс важнее среднего.** Восемь фронтирных моделей на SWE-bench Verified (arXiv
-2604.22750): агентные задачи тратят примерно в 1000× больше токенов, чем обычный диалог;
-**прогоны одной задачи различаются до 30 раз**; драйвер — входные токены; точность **пикует
-на средних затратах и насыщается**; модели недооценивают собственный расход (корреляция до
+**Avoiding the shared file.** towncrier (Twisted, pytest, pip) puts a fragment file per change
+instead of a shared changelog: "two PRs adding two different files cannot conflict".
+In auditing the same: Code4rena — an issue per finding, Spearbit — a branch per file (files
+over 500 lines are split), a finding starts as a comment on a line.
+
+**git-bug** states the main lesson outright: "it's not possible to store the current state…
+Instead of storing the final bug data directly, we store a series of edit Operations".
+Ordering — by logical clocks, because system time cannot be trusted in distributed work;
+parallel edits yield a graph from which the state is **compiled**.
+
+**Claiming without infrastructure.** `git update-ref <ref> <new> <old>` — a built-in
+compare-and-swap; forty zeros in `<old>` mean "make sure the ref does not exist yet".
+
+**A hung participant.** Everywhere it is cured by lease expiry, not by manual unlocking:
+visibility timeout in queues (30 seconds by default, extension ceiling 12 hours),
+`SKIP LOCKED` in Postgres, TTR in beanstalkd. The condition — a heartbeat more frequent than
+the lease.
+
+**Deduplication and precedence.** Code4rena splits the reward between duplicates with decay
+(`10·0.85^(n−1)/n` for highs), and the 30% bonus goes not to the first but to the one **whose
+text is selected for the report**; a weak write-up gets partial credit of 25/50/75% but enters
+the denominator. Wardens do not see others' submissions — duplicates are built into the
+process. Sherlock requires a duplicate to meet **all three conditions**: name the root, name at
+least a medium impact, name a working attack path; the group is assigned the **highest**
+severity among its members. DefectDojo recomputes fingerprints retroactively
+(`manage.py dedupe`), i.e. a late duplicate is cured by regeneration, not by rewriting history.
+
+⚠️ The wording "the machine proposes the grouping of duplicates, a human approves" **could not**
+be confirmed by a primary source: such labels are visible in contest repositories, but the
+process is not described in the documentation. It cannot be treated as fact.
+
+**Parallel agents.** Anthropic says it directly: work must be split **along context
+boundaries, not by roles**; a "planner / implementer / tester / reviewer" split spends more on
+coordination than on work; what is worth parallelising is independent branches and
+**black-box checking** — it does not require the implementation context. The price of a
+multi-agent scheme — about 15× the tokens of a plain conversation.
+
+→ For us: "hunter → verifier" is exactly their permitted case. "Hunter and fixer in parallel on
+one block" — the forbidden one.
+
+---
+
+## Direction 9. Economics
+
+**The price of a task is decided by the traversal architecture, not the model.** On one set:
+AutoCodeRover $0.43 per task (37k tokens) versus SWE-agent $2.51 (245k) at comparable
+quality — a 6.6× difference in tokens, 5.8× in money (arXiv 2404.05427). Agentless — $0.34 at
+27.3% and $0.70 at 32.0%.
+
+**Spread matters more than the mean.** Eight frontier models on SWE-bench Verified (arXiv
+2604.22750): agentic tasks spend roughly 1000× more tokens than a plain conversation;
+**runs of the same task differ up to 30-fold**; the driver is input tokens; accuracy **peaks at
+medium spend and saturates**; models underestimate their own consumption (correlation up to
 0.39).
 
-**Суперлинейности по числу файлов в литературе нет — есть падение качества.** SWE-bench Pro
-(arXiv 2509.16941): рост ширины задачи с одного файла до 4.1 роняет решаемость с более чем
-70% до 23.3%. Деградация с длиной входа монотонна у всех 18 проверенных моделей.
+**There is no superlinearity in the number of files in the literature — there is a drop in
+quality.** SWE-bench Pro (arXiv 2509.16941): growing the task width from one file to 4.1 drops
+solvability from over 70% to 23.3%. Degradation with input length is monotonic across all 18
+tested models.
 
-**Порядок обхода имеет измеренную цену.** 20% файлов с наивысшим предсказанным числом
-дефектов содержали 71–92% найденных, в среднем **83%** (Ostrand, Weyuker, Bell, IEEE TSE
-31(4), 2005). Код с тревожным уровнем «здоровья» несёт **в 15 раз больше дефектов** и требует
-**на 124% больше времени** (Tornhill & Borg, TechDebt 2022, arXiv 2203.04374). ⚠️ Вторая
-метрика проприетарная — её числа на самодельный суррогат не переносятся.
+**The traversal order has a measured price.** The 20% of files with the highest predicted
+number of defects contained 71–92% of those found, on average **83%** (Ostrand, Weyuker, Bell,
+IEEE TSE 31(4), 2005). Code with an alarming "health" level carries **15 times more defects**
+and requires **124% more time** (Tornhill & Borg, TechDebt 2022, arXiv 2203.04374). ⚠️ The
+second metric is proprietary — its numbers do not transfer to a home-made surrogate.
 
-**Сплошной проход — обоснованное решение, а не умолчание.** Стандарт аудиторской выборки
-прямо не распространяется на сплошную проверку; объём выборки выводится из риска.
+**A whole-repository pass is a reasoned decision, not a default.** The audit sampling standard
+explicitly does not extend to exhaustive examination; the sample size is derived from risk.
 
-**Бюджет как механизм.** Каталог из 63 инцидентов перерасхода (arXiv 2606.04056): причины —
-бесконечные циклы, накопление контекста, инъекция; меры — бюджет на задачу, размыкатель,
-деградация. Типовое устройство: метка на каждом запросе, мягкий и жёсткий предел, прогноз по
-95-му перцентилю, три слоя — ведро токенов, размыкатель по скорости расхода, запасная
-дешёвая модель.
+**Budget as a mechanism.** A catalogue of 63 overspend incidents (arXiv 2606.04056): causes —
+infinite loops, context accumulation, injection; measures — a per-task budget, a circuit
+breaker, degradation. The typical design: a label on every request, a soft and a hard limit, a
+forecast by the 95th percentile, three layers — a token bucket, a breaker on spend rate, a
+fallback cheap model.
 
-⚠️ Последний слой нам не подходит: на синтетике дешёвая модель почти не уступает, а на
-реальных изменениях лучший результат падает на 92% (arXiv 2606.15689).
-
----
-
-## Направление 10. Жизненный цикл
-
-**Повторная проверка — узкая фаза, а не новый проход.** NCC Group: «Retesting is only
-re-evaluating the previously reported issues, not searching for new issues». Живые цифры
-одного аудита: исходный — 45 дней, повторный через семь месяцев — **5 дней** (около 11%
-усилий), из 8 находок проверено 6: одна починена, одна частично, **четыре приняты как риск**.
-Результат не отдельный документ — обновляется исходный отчёт. Trail of Bits добавляет второй
-критерий: «without introducing new problems». Cure53 пишет `Fix Note` прямо в тело находки.
-
-**Порога «N% кода» не существует.** Стандарт преемственности доверия (Common Criteria
-Assurance Continuity, редакция 2024-02-29) прямо: «there is no fixed method for identifying
-whether the security impact of a change is major or minor». Оттуда же три правила: размер
-изменения не равен влиянию; **накопление мелких изменений — самостоятельный повод** для
-пересмотра; истёкшее время — отдельный критерий. И: результат повторной оценки становится
-**новой базой сравнения**.
-
-**Регуляторика задаёт такт и перечень событий.** PCI DSS 4.0.1: «не реже раза в двенадцать
-месяцев **и после значимых изменений**», где значимое определено списком, а не порогом.
-Надзорные аудиты по ISO — ежегодно, полный пересмотр раз в три года. Отчёт SOC 2 не истекает,
-но считается протухшим старше 12 месяцев **от конца периода наблюдения**.
-
-**Протухшие трекеры — измеренная беда.** Veracode State of Software Security 2025 (1.3 млн
-приложений): находки старше года — «долг безопасности», его несёт **половина организаций**;
-период полураспада у лидеров — 5 недель, у отстающих — больше года; в финансовом секторе
-средний возраст открытой находки **276 дней**.
-
-**Как лечат.** Kubernetes: 90 дней → «залежалось», ещё 30 → автозакрытие (практика спорная
-внутри самого проекта). Chromium даёт третий путь: старше 90 дней → в архив, а часть —
-**обратно в «неразобранное»**, то есть не держать и не удалять, а вернуть в очередь.
+⚠️ The last layer does not suit us: on synthetic data the cheap model barely trails, but on
+real changes the best result drops by 92% (arXiv 2606.15689).
 
 ---
 
-## Направление 7. Состояние в чужом репозитории
+## Direction 10. Lifecycle
 
-⚠️ **Ни один из проверенных инструментов не пишет состояние в рабочее дерево чужого
-репозитория.** `buf` тянет базу по ссылке, `oasdiff` отдаёт код возврата, Pact выносит
-матрицу в брокер, revmux пишет в свой каталог задач.
+**Re-verification is a narrow phase, not a new pass.** NCC Group: "Retesting is only
+re-evaluating the previously reported issues, not searching for new issues". Live numbers from
+one audit: original — 45 days, repeat seven months later — **5 days** (about 11% of the
+effort), of 8 findings 6 checked: one fixed, one partially, **four accepted as risk**. The
+result is not a separate document — the original report is updated. Trail of Bits adds a
+second criterion: "without introducing new problems". Cure53 writes a `Fix Note` straight into
+the body of the finding.
 
-Для нас это не приговор — состояние в git и есть замысел метода, — но список того, обо что
-это разобьётся в чужом проекте, стоит держать перед глазами: защищённая ветка, обязательная
-подпись коммитов, чужие pre-commit хуки, `.gitattributes` с нормализацией, и конфликт
-слияния на файле состояния при каждом втором предложении.
+**A "N% of code" threshold does not exist.** The assurance continuity standard (Common
+Criteria Assurance Continuity, edition 2024-02-29) states outright: "there is no fixed method
+for identifying whether the security impact of a change is major or minor". From the same
+place, three rules: the size of a change does not equal its impact; **accumulation of small
+changes is a reason in its own right** for a reassessment; elapsed time is a separate
+criterion. And: the result of a reassessment becomes the **new baseline**.
 
-В дереве уместна только **закреплённая ссылка**: SHA соседнего репозитория, хеш промптов,
-отпечаток просмотренного.
+**Regulation sets the cadence and the list of events.** PCI DSS 4.0.1: "at least once every
+twelve months **and after significant changes**", where significant is defined by a list, not
+a threshold. ISO surveillance audits — yearly, a full recertification every three years. A SOC
+2 report does not expire but is considered stale after 12 months **from the end of the
+observation period**.
 
-## Методы ревью целиком — сверка 23.09.2026
+**Stale trackers are a measured misery.** Veracode State of Software Security 2025 (1.3M
+applications): findings older than a year — "security debt", carried by **half of
+organisations**; the half-life at leaders — 5 weeks, at laggards — over a year; in the financial
+sector the average age of an open finding is **276 days**.
 
-Сверка восьми методов, которыми проверялся первый проект, с внешними методами. Числа с
-пометкой «вторичный» взяты из пересказа — перепроверить до того, как строить на них решение.
+**How it is treated.** Kubernetes: 90 days → "stale", another 30 → auto-close (a practice
+disputed within the project itself). Chromium offers a third path: older than 90 days → to the
+archive, and some — **back to "untriaged"**, i.e. neither keep nor delete but return to the
+queue.
 
-**Куда смотреть первым (направления 9 и 12).**
-- Концентрация дефектов: 20% файлов — 83% дефектов (Ostrand, Weyuker, Bell, TSE 2005). В
-  коде низкого качества в 15 раз больше дефектов, 39 кодовых баз (Tornhill & Borg, «Code
-  Red», TechDebt 2022, https://arxiv.org/abs/2203.04374).
-- Процессные метрики лучше размера и сложности: относительный объём правок отличает
-  дефектные модули с точностью 89% (Nagappan & Ball, ICSE 2005,
+---
+
+## Direction 7. State in someone else's repository
+
+⚠️ **Not one of the tools examined writes state into the working tree of someone else's
+repository.** `buf` pulls the base by reference, `oasdiff` returns an exit code, Pact moves the
+matrix out to a broker, revmux writes to its own task directory.
+
+For us this is not a verdict — state in git is the very idea of the method — but the list of
+what it will break against in someone else's project is worth keeping in view: a protected
+branch, mandatory commit signing, other people's pre-commit hooks, `.gitattributes` with
+normalisation, and a merge conflict on the state file with every second proposal.
+
+Only a **pinned reference** belongs in the tree: the SHA of the neighbouring repository, a hash
+of the prompts, a fingerprint of what was reviewed.
+
+## Review methods as a whole — cross-check of 23.09.2026
+
+A cross-check of the eight methods by which the first project was reviewed against external
+methods. Numbers marked "secondary" are taken from retellings — recheck before building a
+decision on them.
+
+**Where to look first (directions 9 and 12).**
+- Defect concentration: 20% of files — 83% of defects (Ostrand, Weyuker, Bell, TSE 2005). Low
+  quality code has 15 times more defects, 39 codebases (Tornhill & Borg, "Code Red", TechDebt
+  2022, https://arxiv.org/abs/2203.04374).
+- Process metrics beat size and complexity: relative churn distinguishes defective modules
+  with 89% accuracy (Nagappan & Ball, ICSE 2005,
   https://doi.org/10.1145/1062455.1062514); Moser et al., ICSE 2008
-  (https://doi.org/10.1145/1368088.1368114); число правок лучше длины (Graves et al., TSE
-  2000, https://doi.org/10.1109/32.859533). Межпроектное предсказание почти не переносится
-  (Zimmermann et al., FSE 2009, вторичный).
-- Связанность изменений: ROSE — нужное место правки в трёх лучших подсказках в >70% случаев,
-  связь не видна анализом кода (Zimmermann et al., TSE 2005,
-  https://doi.org/10.1109/tse.2005.72); архитектурный долг — 20–61% усилий на сопровождение
+  (https://doi.org/10.1145/1368088.1368114); the number of changes beats length (Graves et al.,
+  TSE 2000, https://doi.org/10.1109/32.859533). Cross-project prediction barely transfers
+  (Zimmermann et al., FSE 2009, secondary).
+- Change coupling: ROSE — the right place to change is in the top three suggestions in >70% of
+  cases, the link is invisible to code analysis (Zimmermann et al., TSE 2005,
+  https://doi.org/10.1109/tse.2005.72); architectural debt — 20–61% of maintenance effort
   (Xiao, Cai, Kazman, ICSE 2016).
-- SZZ: половина коммитов, помеченных как исправления, ими не является (Herbold et al., EMSE
-  2022, https://doi.org/10.1007/s10664-021-10092-4) — любая метка «починка» по сообщению
-  коммита грубая.
+- SZZ: half of commits labelled as fixes are not (Herbold et al., EMSE 2022,
+  https://doi.org/10.1007/s10664-021-10092-4) — any "fix" label based on the commit message is
+  crude.
 
-**Как читать.**
-- Собрания инспекций почти ничего не добавляют к индивидуальному чтению (Votta, FSE 1993,
+**How to read.**
+- Inspection meetings add almost nothing to individual reading (Votta, FSE 1993,
   https://doi.org/10.1145/167049.167070; Porter, Votta, Basili, TSE 1995,
   https://doi.org/10.1109/32.391380).
-- Чтение с позиции (perspective-based reading): явного положительного эффекта нет, признаки
-  предвзятости исследователей (Ciolkowski, ESEM 2009, https://doi.org/10.1109/esem.2009.5316026).
-- Модель угроз (направление 13): Shostack, *Threat Modeling* (2014); полнота 0,36 при точности
-  0,81 на студентах (Scandariato et al., 2015, вторичный).
+- Perspective-based reading: no clear positive effect, signs of researcher bias (Ciolkowski,
+  ESEM 2009, https://doi.org/10.1109/esem.2009.5316026).
+- Threat model (direction 13): Shostack, *Threat Modeling* (2014); completeness 0.36 at
+  precision 0.81 on students (Scandariato et al., 2015, secondary).
 
-**Полнота (направление 1).**
-- «Поймал — поймал снова» при малом числе проверяющих неточен; рекомендация — модель Mh с
-  Jackknife (Briand et al., TSE 2000, https://doi.org/10.1109/32.852741); при двух — полезен
-  только для решения «перепроходить или нет» (El Emam & Laitenberger, TSE 2001,
-  https://doi.org/10.1109/32.950319). Коррелированные проверяющие дают систематическую ошибку.
-- Выборка: 59 файлов без дефектов → доля дефектных ≤5% с уверенностью 95%
-  (AICPA *Audit Sampling*; ISO 2859-1). Применений к коду не найдено.
+**Completeness (direction 1).**
+- Capture-recapture with few reviewers is imprecise; the recommendation is the Mh model with
+  Jackknife (Briand et al., TSE 2000, https://doi.org/10.1109/32.852741); with two it is useful
+  only for the decision "re-pass or not" (El Emam & Laitenberger, TSE 2001,
+  https://doi.org/10.1109/32.950319). Correlated reviewers produce a systematic error.
+- Sampling: 59 files without defects → the defective share is ≤5% with 95% confidence
+  (AICPA *Audit Sampling*; ISO 2859-1). No applications to code found.
 
-**Ревью диффа и ИИ-ревьюеры (что метод НЕ заменяет).**
-- Дефекты — 14% комментариев ревью диффа (Bacchelli & Bird, ICSE 2013,
-  https://doi.org/10.1109/icse.2013.6606617); 75% найденных на ревью дефектов не трогают
-  видимую функциональность (Mäntylä & Lassenius, TSE 2009); покрытие ревью снижает дефекты
-  после релиза (McIntosh et al., MSR 2014).
-- ИИ-ревьюеры: лучший F1 19% на 1000 PR, агрегация 5 прогонов — 24% (SWR-Bench, FSE 2026,
-  https://arxiv.org/abs/2509.01494); точность 75% только после фильтра (BitsAI-CR, FSE 2025,
+**Diff review and AI reviewers (what the method does NOT replace).**
+- Defects are 14% of diff-review comments (Bacchelli & Bird, ICSE 2013,
+  https://doi.org/10.1109/icse.2013.6606617); 75% of defects found in review do not touch
+  visible functionality (Mäntylä & Lassenius, TSE 2009); review coverage reduces post-release
+  defects (McIntosh et al., MSR 2014).
+- AI reviewers: best F1 19% on 1000 PRs, aggregation of 5 runs — 24% (SWR-Bench, FSE 2026,
+  https://arxiv.org/abs/2509.01494); 75% precision only after a filter (BitsAI-CR, FSE 2025,
   https://dl.acm.org/doi/10.1145/3696630.3728552).
-- Сплошное пофайловое ревью как метод: прямых замеров отдачи не найдено.
-
+- Exhaustive file-by-file review as a method: no direct measurements of its payoff found.

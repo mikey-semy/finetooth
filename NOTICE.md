@@ -1,33 +1,33 @@
-# Происхождение и права
+# Origin and rights
 
-**finetooth** — совместная работа двух авторов, распространяется под лицензией MIT
-(см. `LICENSE`).
+**finetooth** is the joint work of two authors, distributed under the MIT license (see
+`LICENSE`).
 
-## Основа
+## The base
 
-Метод и первая версия набора — работа **Георгия Худобандаева**
-(https://github.com/Georgiy-Khudobandaev): процесс сплошного ревью с блоками, ролями и
-состоянием на диске, отработанный на его проекте. Переданы архивом 16.09.2026 (первый коммит
-этого репозитория — архив как получен), вторая версия с уроками и ролью ревьюера правок —
-23.09.2026.
+The method and the first version of the kit are the work of **Georgiy Khudobandaev**
+(https://github.com/Georgiy-Khudobandaev): the whole-repository review process with blocks,
+roles and state on disk, worked out on his project. Handed over as an archive on 16.09.2026
+(the first commit of this repository is the archive as received); the second version, with
+the lessons and the fix reviewer role, on 23.09.2026.
 
-## Доработка
+## The follow-up work
 
-Всё, что сверх основы — проверки инструмента, отпечатки, гипотезы, корни и узды, форма
-скилла, тесты, документы и замеры, — работа **Михаила Тошкина** совместно с ИИ-агентами
-(Claude); история правок — в `git log` и `CHANGELOG.md`.
+Everything beyond the base — the tool's checks, fingerprints, hypotheses, roots and guards,
+the skill form, tests, documents and measurements — is the work of **Mikhail Toshkin**
+together with AI agents (Claude); the history of changes is in `git log` and `CHANGELOG.md`.
 
-## Согласие на лицензию
+## Consent to the license
 
-24.09.2026 автор основы передал владельцу репозитория полное право распоряжаться набором
-как второй партнёр и совладелец, включая публикацию под любой лицензией и на любой
-площадке. На этом основании лицензия MIT выше распространяется на весь репозиторий, а оба
-автора названы правообладателями. Согласие передано устно через владельца; подтверждение
-самим автором в письменном виде (комментарий в issue или коммит с `Signed-off-by`)
-приветствуется и будет добавлено сюда ссылкой.
+On 24.09.2026 the author of the base granted the repository owner the full right to dispose of
+the kit as a second partner and co-owner, including publication under any license and on any
+platform. On that basis the MIT license above extends to the whole repository, and both
+authors are named as rights holders. The consent was given verbally through the owner; a
+written confirmation by the author himself (a comment in an issue or a commit with
+`Signed-off-by`) is welcome and will be added here as a link.
 
-## Чужие проекты
+## Other people's projects
 
-Примеры и описания в репозитории обезличены: названия проектов, на которых метод
-обкатывался, их внутренние детали и найденные дефекты не публикуются. Если что-то из этого
-всё же обнаружится — сообщите, будет убрано.
+The examples and descriptions in the repository are anonymised: the names of the projects the
+method was road-tested on, their internal details and the defects found are not published. If
+any of that nevertheless turns up — report it, and it will be removed.

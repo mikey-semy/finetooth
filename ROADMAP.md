@@ -1,913 +1,956 @@
-# Куда расти
+[Русская версия](ROADMAP.ru.md)
 
-План выведен из того, что уже замерено, а не из пожеланий. Каждое направление отвечает на
-вопрос «чего мы про метод не знаем» или «что ломается при переносе», и у каждого есть условие,
-по которому его можно считать закрытым.
+# Where to grow
 
-Состояние на 24.09.2026: набор обкатан на **трёх проектах** (587 находок, одно ревью
-доведено до конца — 27 блоков из 27), сверен с методологией аудиторских фирм, практикой
-Google и Meta, промышленными ИИ-ревьюерами, академическими работами и соседями по нише на
-GitHub. Цифры — в [`docs/measurements.md`](docs/measurements.md), разбор чужих решений по
-каждому направлению — в [`docs/prior-art.md`](docs/prior-art.md).
+The plan is derived from what has already been measured, not from wishes. Each direction answers
+the question "what do we not know about the method" or "what breaks on transfer", and each has a
+condition by which it can be considered closed.
 
-23.09 план пересобран после сравнения восьми методов ревью, которыми проверялся первый
-проект (файл за файлом, крупные файлы, линзы, сквозной аудит, вертикали, ИИ-ревью в PR,
-скилл-ревью и этот набор), и сверки с внешними методами по первоисточникам. Сравнение и
-замеры — в [`docs/review-methods.md`](docs/review-methods.md). Из него сюда
-пришли три новых направления (11–13) и поправки к 1, 3 и 9.
+State as of 24.09.2026: the kit has been run on **three projects** (587 findings, one review
+brought to the end — 27 blocks of 27), compared with the methodology of audit firms, the practice
+of Google and Meta, industrial AI reviewers, academic works and neighbours in the niche on
+GitHub. The figures are in [`docs/measurements.md`](docs/measurements.md), the analysis of others'
+solutions for each direction is in [`docs/prior-art.md`](docs/prior-art.md).
 
-24.09 вышла 0.5.0 по второй версии набора у его автора: закрыты пять дефектов нашей копии,
-добавлены роль ревьюера правок, род доказательства блока, гейт «каждый файл назван» (это
-половина направления 4), `inventory`/`sizes`/`coverage --no-write`. Что из плана этим
-закрыто — отмечено в таблице ниже.
+On 23.09 the plan was reassembled after a comparison of eight review methods the first project
+was checked with (file by file, large files, lenses, cross-cutting audit, vertical slices, AI
+review in PRs, skill review and this kit), and a check against external methods by primary
+sources. The comparison and measurements are in
+[`docs/review-methods.md`](docs/review-methods.md). From it came three new directions (11–13)
+and corrections to 1, 3 and 9.
 
-## Что мы знаем про метод
+On 24.09, 0.5.0 came out based on the second version of the kit from its author: five defects of
+our copy closed, the fix reviewer role, the block's proof kind, the gate "every file is named"
+(that is half of direction 4), `inventory`/`sizes`/`coverage --no-write` added. What this closes
+from the plan is marked in the table below.
 
-| утверждение | чем подтверждено |
+## What we know about the method
+
+| claim | how it is backed |
 |---|---|
-| проверяющий не пропускает выдумку | 6 подложных находок из 6 отвергнуты, двумя моделями независимо |
-| охотник не выдумывает | 0 отвергнутых из 18 находок на блоке денег |
-| связка «охотник + проверяющий» дешевле пары охотников | 41% экономии при сопоставимом числе уникальных корней |
-| проверка исполнением работает, перечитывание — нет | наш замер + 433 реальных алярма у Tencent (precision 0.26 против 0.83) |
-| один охотник находит не больше ~половины дефектов блока | два независимых охотника на блоке денег: 10 и 8 находок, 4 общих → оценка ~19–20 дефектов; это **верхняя граница** (охотники коррелированы) |
-| искать метод умеет быстрее, чем проект чинит | первый проект: 77 находок на 5 блоках, починено 9 (12%) |
-| блоки режут стыки | 76% пар файлов, которые меняются вместе, лежат в разных блоках; без общих узлов — 38 сильных межблочных пар |
-| цена блока не зависит от его размера | 782 строки — 557 тыс. токенов, 4017 строк — 576 тыс.: расход уходит на результаты инструментов, не на чтение файлов блока |
-| ревью правок находит то, чего не нашли ни охотник, ни проверяющий | у автора набора самый тяжёлый дефект блока доступа пришёл с третьего круга ревью правок и лежал в проекте с начала |
-| карта покрытия ловит забытое | 89 файлов маршрутов у нас, целый микросервис у автора набора |
+| the verifier does not let a fabrication through | 6 planted findings of 6 rejected, by two models independently |
+| the hunter does not fabricate | 0 rejected of 18 findings on the money block |
+| the pair "hunter + verifier" is cheaper than a pair of hunters | 41% saving with a comparable number of unique roots |
+| verification by execution works, re-reading does not | our measurement + 433 real alarms at Tencent (precision 0.26 versus 0.83) |
+| one hunter finds no more than ~half of a block's defects | two independent hunters on the money block: 10 and 8 findings, 4 shared → an estimate of ~19–20 defects; this is an **upper bound** (the hunters are correlated) |
+| the method can search faster than the project fixes | the first project: 77 findings on 5 blocks, 9 fixed (12%) |
+| blocks cut seams | 76% of file pairs that change together lie in different blocks; without shared hubs — 38 strong cross-block pairs |
+| the cost of a block does not depend on its size | 782 lines — 557 thousand tokens, 4017 lines — 576 thousand: the spend goes on tool results, not on reading the block's files |
+| fix review finds what neither the hunter nor the verifier found | at the kit's author the heaviest defect of the access block came from the third round of fix review and had been in the project from the start |
+| the coverage map catches the forgotten | 89 route files with us, a whole microservice at the kit's author |
 
-**И первая оценка пропусков** — из данных двух законченных ревью: основной проход даёт
-71–77% всех находок и **86–88% крупных**. Остальное всплывает позже, при починке и ревью
-диффа, и это в основном мелочь.
+**And a first estimate of misses** — from the data of two finished reviews: the main pass gives
+71–77% of all findings and **86–88% of the large ones**. The rest surfaces later, during fixing
+and diff review, and it is mostly small stuff.
 
-## Чего мы НЕ знаем
+## What we do NOT know
 
-**Сколько метод пропускает насовсем.** Оценка выше — снизу: её знаменатель «всё, что нашли в
-итоге», а не «всё, что есть». Дефекты, не найденные никем, в неё не входят, и сколько их —
-неизвестно. Индустрия тут не помощник: полноту не публикует никто.
+**How much the method misses for good.** The estimate above is a lower one: its denominator is
+"everything found in the end", not "everything there is". Defects found by nobody are not in it,
+and how many there are is unknown. The industry is no help here: nobody publishes completeness.
 
-## Пятнадцать направлений
+## Fifteen directions
 
-| № | о чём | готовность |
+| № | what about | readiness |
 |---|---|---|
-| 1 | измерить пропуски по-настоящему | есть оценка снизу, нужен корпус |
-| 2 | переносимость на другой язык | между проектами подтверждена, язык один |
-| 3 | регрессия ловится воротами | узда проверяется на существование (0.3.0); нет прогона ворот по корню |
-| 4 | третий слой покрытия | половина файлов сделана в 0.5.0: каждый файл читаемого блока назван в отчёте; сторона гипотез не начата |
-| 5 | точность искателя меняет промпт | данные копятся, счёта нет |
-| 6 | архив прогона | не начато |
-| 7 | блок на два репозитория | не начато, боль известна |
-| 8 | двое ведут ревью одновременно | известно, что сломается |
-| 9 | экономика и масштаб | модель есть, калибровки нет; разбор токенов — `docs/token-economy.md`, первый шаг — замер |
-| 10 | что остаётся после сноса каталога | противоречие устранено, итог не автоматизирован |
-| 11 | фаза починки как гейт | в 0.5.0 — причина у `deferred` и ревью правок перед `closed`; сам гейт на новый блок не начат |
-| 12 | стыки между блоками: карта связанности изменений | замер есть, команды нет |
-| 13 | модель угроз как тип блока | не начато |
-| 14 | банк линз — источник гипотез для манифестов | 26 линз с промптами есть в первом проекте; в наборе — нет |
-| 15 | открытый проект: лицензия, обвязка, каталоги скиллов | чек-лист в `docs/open-source.md`; ждёт решений владельца по лицензии и имени |
+| 1 | measure the misses for real | there is a lower estimate, a corpus is needed |
+| 2 | portability to another language | confirmed between projects, the language is one |
+| 3 | regression is caught by gates | the guard is checked for existence (0.3.0); no run of the gates by root |
+| 4 | third layer of coverage | the files half done in 0.5.0: every file of a readable block is named in a report; the hypotheses side not started |
+| 5 | the seeker's precision changes the prompt | data accumulates, no count |
+| 6 | run archive | not started |
+| 7 | a block over two repositories | not started, the pain is known |
+| 8 | two people run the review at once | it is known what will break |
+| 9 | economics and scale | there is a model, no calibration; token analysis — `docs/token-economy.md`, the first step is a measurement |
+| 10 | what remains after deleting the directory | the contradiction removed, the summary not automated |
+| 11 | fix phase as a gate | in 0.5.0 — a reason on `deferred` and fix review before `closed`; the gate on a new block itself not started |
+| 12 | seams between blocks: a change coupling map | there is a measurement, no command |
+| 13 | threat model as a block type | not started |
+| 14 | lens bank — a source of hypotheses for manifests | 26 lenses with prompts exist in the first project; in the kit — none |
+| 15 | open project: licence, scaffolding, skill catalogues | checklist in `docs/open-source.md`; waiting for the owner's decisions on licence and name |
 
 ---
 
-## Направление 1. Измерить пропуски
+## Direction 1. Measure the misses
 
-**Зачем первым.** Всё остальное — улучшение того, чья полезность не измерена.
+**Why first.** Everything else is an improvement of something whose usefulness is not measured.
 
-**Первое, что нужно знать: recall нельзя измерить прямо.** Знаменатель — все существующие
-дефекты — недоступен. Любой рабочий метод подменяет его выборкой с известным ответом, и всё
-решает вопрос, похожа ли выборка на настоящие дефекты. Именно здесь рассыпается большинство
-опубликованных цифр:
+**The first thing to know: recall cannot be measured directly.** The denominator — all existing
+defects — is unavailable. Any working method substitutes a sample with known answers for it, and
+everything hinges on whether the sample resembles real defects. This is exactly where most
+published figures fall apart:
 
-- статанализаторы (Error Prone, Infer, SpotBugs) на **594 настоящих** дефектах находят
-  **4.5%**; на синтетических наборах те же инструменты заявляли 64–99% (Habib & Pradel,
-  ASE 2018);
-- восемь фаззеров за 80+ лет процессорного времени не нашли **ни одного** из 50 органических
-  CVE, хотя синтетические находили (Bundt et al., ASIA CCS 2021);
-- ИИ-ревьюеры на эталоне из настоящих комментариев PR: 20–32% поодиночке, **41.5%** все
-  вместе (c-CRAB, arXiv 2603.23448).
+- static analysers (Error Prone, Infer, SpotBugs) on **594 real** defects find **4.5%**; on
+  synthetic sets the same tools claimed 64–99% (Habib & Pradel, ASE 2018);
+- eight fuzzers over 80+ years of CPU time found **not one** of 50 organic CVEs, although they
+  found synthetic ones (Bundt et al., ASIA CCS 2021);
+- AI reviewers on a benchmark of real PR comments: 20–32% individually, **41.5%** all together
+  (c-CRAB, arXiv 2603.23448).
 
-**Чем мерить нельзя — проверено до нас:**
-- **оценка остатка по Миллзу** (`N̂ = S·n/k`) — держится на равной трудности посаженных и
-  настоящих дефектов, а это допущение нарушается систематически и в одну сторону;
-- **capture-recapture на двух ревьюерах** — «one would be forgiven for concluding that CR
-  models are not usable for two inspectors» (El Emam & Laitenberger, TSE 2001). Для нас хуже
-  вдвойне: одинаковые агенты пропускают одно и то же, пересечение выходит искусственно
-  высоким, и формула скажет «почти всё найдено» ровно там, где оба слепы к целому классу;
-- **mutation score как отчётная цифра** — 17% настоящих дефектов не сцеплены ни с одним
-  мутантом (Just et al., FSE 2014), а корреляция счёта с поимкой настоящих дефектов слабеет
-  при контроле размера набора тестов (Papadakis et al., ICSE 2018).
+**What cannot be used to measure — checked before us:**
+- **the Mills remainder estimate** (`N̂ = S·n/k`) rests on equal difficulty of seeded and real
+  defects, and this assumption is violated systematically and in one direction;
+- **capture-recapture on two reviewers** — "one would be forgiven for concluding that CR
+  models are not usable for two inspectors" (El Emam & Laitenberger, TSE 2001). For us it is
+  doubly worse: identical agents miss the same things, the overlap comes out artificially high,
+  and the formula will say "almost everything found" exactly where both are blind to a whole
+  class;
+- **mutation score as a reported figure** — 17% of real defects are coupled to no mutant at all
+  (Just et al., FSE 2014), and the correlation of the score with catching real defects weakens
+  when test suite size is controlled (Papadakis et al., ICSE 2018).
 
-**Что это значит для нашего собственного замера на двух охотниках.** Блок денег прошёл
-два независимых охотника: 10 и 8 находок, 4 общих. Линкольн–Петерсен даёт ~20 дефектов,
-Чепмен ~19, то есть один охотник находит ~40–50%. Это **верхняя граница, а не замер**: одна
-модель и один промпт пропускают одно и то же, пересечение завышено, и настоящее число
-дефектов больше. Если всё же считать — моделью Mh с оценкой Jackknife и с проверяющими
-**разных** моделей (Briand et al., TSE 2000), и только как повод «перепроходить или нет».
+**What this means for our own measurement on two hunters.** The money block was passed by two
+independent hunters: 10 and 8 findings, 4 shared. Lincoln–Petersen gives ~20 defects, Chapman
+~19, i.e. one hunter finds ~40–50%. This is **an upper bound, not a measurement**: one model and
+one prompt miss the same things, the overlap is inflated, and the true number of defects is
+higher. If one counts anyway — with the Mh model with the Jackknife estimator and with verifiers
+of **different** models (Briand et al., TSE 2000), and only as a reason to decide "re-pass or
+not".
 
-**Дешёвая граница сверху, которую можно снять уже сейчас — выборка.** 59 случайных файлов из
-закрытых блоков, повторный глубокий проход другой моделью: если ни одного нового серьёзного
-дефекта, то с уверенностью 95% доля файлов с пропущенным серьёзным дефектом не выше 5%
-(`n = ln 0,05 / ln 0,95`). Выборку стратифицировать по частоте правок, иначе редкие опасные
-места в неё не попадут. Это не recall, а контроль качества партии — но это число, которое не
-врёт в свою пользу.
+**A cheap upper bound that can be taken right now — sampling.** 59 random files from closed
+blocks, a repeated deep pass by another model: if not a single new serious defect, then with 95%
+confidence the share of files with a missed serious defect is no higher than 5%
+(`n = ln 0,05 / ln 0,95`). Stratify the sample by change frequency, otherwise rare dangerous
+places will not get into it. This is not recall but quality control of a batch — yet it is a
+number that does not lie in its own favour.
 
-**Как делать правильно — два корпуса, которые никогда не складываются в одно число.**
+**How to do it properly — two corpora that never fold into one number.**
 
-*Корпус А, дорогой и честный:* откат настоящих исправлений из собственной истории в
-изолированном рабочем дереве. Трудность настоящая, контаминации нет (код приватный),
-классы берутся из карты корней. Цель — 40–60 случаев.
+*Corpus A, expensive and honest:* reverting real fixes from our own history in an isolated
+worktree. The difficulty is real, there is no contamination (the code is private), the classes
+are taken from the roots map. Target — 40–60 cases.
 
-*Корпус Б, дешёвый и частый:* прицельные мутанты по линзам (`cargo-mutants`, `Stryker`).
+*Corpus B, cheap and frequent:* targeted mutants by lens (`cargo-mutants`, `Stryker`).
 
-*Связь между ними:* `k = recall(Б) / recall(А)`. Все дешёвые замеры делятся на `k` и
-публикуются вместе с ним. Без калибровки цифра по мутантам — реклама.
+*The link between them:* `k = recall(B) / recall(A)`. All cheap measurements are divided by `k`
+and published together with it. Without calibration the mutant figure is advertising.
 
-**Правила прогона, без которых цифра соврёт:**
-- **ослепление**: ни истории файла, ни диффа, ни говорящего имени ветки;
-- **правило зачёта записывается ДО прогона** (файл и механизм, а не «примерно туда»);
-- судит тот, кто не видел списка посадок;
-- результат публикуется **по классам дефектов**, а не одним числом: общее среднее прячет
-  классы с нулевым recall;
-- классы, которые мы не умеем сажать (архитектура, конкурентность, вёрстка, локализация),
-  отмечаются строкой «не измерено» — не «100%»;
-- меньше ~100 случаев не позволяет отличить 50% от 70%: 20 посадок дают ±20 пунктов.
+**Run rules without which the figure will lie:**
+- **blinding**: no file history, no diff, no telling branch name;
+- **the scoring rule is written down BEFORE the run** (file and mechanism, not "roughly there");
+- the judge is one who has not seen the list of seeds;
+- the result is published **by defect class**, not as one number: the overall mean hides classes
+  with zero recall;
+- classes we cannot seed (architecture, concurrency, layout, localisation) are marked with a
+  "not measured" row — not "100%";
+- fewer than ~100 cases does not let you tell 50% from 70%: 20 seeds give ±20 points.
 
-**Закрыто, когда:** есть доля найденных по классам на корпусе А, посчитан `k`, и по обоим
-числам понятно, от чего зависит результат — от размера блока, качества гипотез или типа
-дефекта.
+**Closed when:** there is a share of found by class on corpus A, `k` is computed, and from both
+numbers it is clear what the result depends on — block size, hypothesis quality or defect type.
 
-**Цена:** корпус А — основная работа человека (отбор и откат исправлений); прогоны ≈ 1 млн
-токенов на три блока.
+**Cost:** corpus A — mainly human work (selecting and reverting fixes); runs ≈ 1 million tokens
+for three blocks.
 
-## Направление 2. Проверить переносимость на другой язык
+## Direction 2. Check portability to another language
 
-**Что уже известно.** Набор прошёл три проекта: А (27 блоков из 27, 313 находок),
-Б (8 блоков из 13, 210 находок) и В. Переносимость **между проектами
-подтверждена практикой**, и доля отвергнутых находок совпала на всех трёх — около 3%.
+**What is already known.** The kit has been through three projects: A (27 blocks of 27, 313
+findings), B (8 blocks of 13, 210 findings) and C. Portability **between projects is confirmed
+by practice**, and the share of rejected findings coincided on all three — about 3%.
 
-**Зачем тогда направление.** Все три проекта — TypeScript, все одного автора, и часть кода в
-них писал тот же ИИ, который потом его ревьюил. Непроверенным остаётся ровно то, что и
-делает утверждение «в любом проекте» сильным: другой язык, чужой код, чужие соглашения.
+**Why a direction then.** All three projects are TypeScript, all by one author, and part of the
+code in them was written by the same AI that then reviewed it. What remains unchecked is exactly
+what makes the claim "in any project" strong: another language, someone else's code, someone
+else's conventions.
 
-**Как.** Прогнать один блок на живом open-source репозитории другого языка (Go или Rust),
-чужом и не знакомом. Смотреть не на находки, а на оснастку: где порог читаемости соврал, где
-`git ls-files` дал не то, где промпт потребовал того, чего в проекте нет.
+**How.** Run one block on a live open-source repository in another language (Go or Rust),
+someone else's and unfamiliar. Look not at the findings but at the tooling: where the readability
+ceiling lied, where `git ls-files` gave the wrong thing, where the prompt demanded something the
+project does not have.
 
-**Закрыто, когда:** блок пройден на чужом репозитории **другого языка** без правок
-инструмента, а все обнаруженные различия либо устранены, либо названы в README как
-ограничения. Кандидаты для проверки: порог читаемости (6000 строк выведен из TS — в Go и
-Rust плотность смысла на строку другая), счёт строк как мера объёма, работа `git ls-files`
-с подмодулями.
+**Closed when:** a block has been passed on someone else's repository **in another language**
+without changes to the tool, and all discovered differences are either removed or named in the
+README as limitations. Candidates for checking: the readability ceiling (6000 lines was derived
+from TS — in Go and Rust the density of meaning per line is different), line count as a measure
+of volume, the behaviour of `git ls-files` with submodules.
 
-## Направление 3. Регрессия обнаруживается воротами, а не новым ревью
+## Direction 3. Regression is detected by gates, not by a new review
 
-**Зачем.** Сегодня «починенное снова сломалось» не обнаруживается ничем. Реестр узнаёт об
-этом, только если человек заведёт находку заново, — то есть не узнаёт. Это дыра в главном
-обещании метода: класс дефекта закрывается уздой, но никто не проверяет, что узда жива.
+**Why.** Today "the fixed thing broke again" is detected by nothing. The register learns about
+it only if a person files the finding anew — that is, it does not learn. This is a hole in the
+method's main promise: a defect class is closed by a guard, but nobody checks that the guard is
+alive.
 
-**Что уже известно.**
+**What is already known.**
 
-- **syzbot** закрывает баг не по слову, а по факту: `#syz fix: <заголовок коммита>` — и дальше
-  бот сам следит, когда коммит доедет во все отслеживаемые ветки. Возврат дефекта создаёт
-  **новую карточку**, а не тихо переоткрывает старую: «new similarly-looking crashes create a
-  new bug». Отдельная деталь — `#syz invalid` не глушит навсегда.
-- **DefectDojo** решает это повторным импортом: create / ignore / close / **reopen**, где
-  «previously closed findings reappearing in a new scan are automatically reopened», а принятый
-  риск и ложные срабатывания автоматически не воскресают. Ключ сходства — `hash_code` из
-  **настраиваемого на каждый источник** набора полей. ⚠️ Смена набора полей не ретроактивна.
-- **ESLint bulk suppressions** дают готовую форму гейта «правило стало ненужным»: файл
-  `eslint-suppressions.json` со счётчиком на пару «файл × правило» и **выход с кодом 2, если
-  подавление больше не нужно**. Betterer коммитит `.betterer.results`: хуже — ошибка, лучше —
-  снимок обновляется.
-- **Чего нет ни у кого:** гейта «класс закрыт правилом, а правило исчезло». Ближайшее —
-  `Orphaned` в OpenFastTrace: «элемент покрывает несуществующий».
+- **syzbot** closes a bug not by word but by fact: `#syz fix: <commit title>` — and then the bot
+  itself tracks when the commit reaches all tracked branches. A defect's return creates a **new
+  card**, not a silent reopening of the old one: "new similarly-looking crashes create a new
+  bug". A separate detail — `#syz invalid` does not silence forever.
+- **DefectDojo** solves this by re-import: create / ignore / close / **reopen**, where
+  "previously closed findings reappearing in a new scan are automatically reopened", while
+  accepted risk and false positives are not automatically resurrected. The similarity key is a
+  `hash_code` from a set of fields **configurable per source**. ⚠️ Changing the set of fields is
+  not retroactive.
+- **ESLint bulk suppressions** give a ready form of the gate "the rule became unnecessary": a
+  file `eslint-suppressions.json` with a counter per pair "file × rule" and **exit code 2 if a
+  suppression is no longer needed**. Betterer commits `.betterer.results`: worse — an error,
+  better — the snapshot is updated.
+- **What nobody has:** a gate "the class is closed by a rule, and the rule disappeared". The
+  closest is `Orphaned` in OpenFastTrace: "an item covers a non-existent one".
 
-**Как делать.**
+**How to do it.**
 
-1. Поле `rule` перестаёт быть строкой и становится **проверяемым указателем**: путь к файлу
-   узды (тест, правило линтера, скрипт ворот) плюс, по возможности, имя правила внутри него.
-2. `check` проверяет, что указанное существует. Исчезло — класс перестал быть закрытым, и
-   это роняет проверку, как `orphaned` у OFT.
-3. Регрессию ловит не ревью, а обычный прогон ворот проекта: узда краснеет — дефект вернулся.
-   Инструменту достаточно уметь сказать, **какой класс** за какой уздой закреплён, чтобы
-   красная узда сразу называла корень и прошлые находки.
-4. Возврат оформляется **новой находкой** со ссылкой на прежнюю, а не переоткрытием старой:
-   так у syzbot, и это честнее — вернувшийся дефект обычно вернулся другим путём.
+1. The `rule` field stops being a string and becomes a **checkable pointer**: the path to the
+   guard file (a test, a linter rule, a gate script) plus, where possible, the rule name inside
+   it.
+2. `check` verifies that what is pointed at exists. Gone — the class has stopped being closed,
+   and this fails the check, like `orphaned` at OFT.
+3. Regression is caught not by review but by the ordinary run of the project's gates: the guard
+   goes red — the defect is back. It is enough for the tool to be able to say **which class** is
+   assigned to which guard, so that a red guard immediately names the root and the past
+   findings.
+4. A return is filed as a **new finding** with a link to the previous one, not by reopening the
+   old one: that is how syzbot does it, and it is more honest — a returned defect usually came
+   back by another route.
 
-**Узда может быть запросом поиска вариантов.** Для класса, который нельзя закрыть тестом,
-узда — правило Semgrep или запрос CodeQL в репозитории: найденный дефект превращается в
-запрос, запрос прогоняется по всему коду и в CI (практика Trail of Bits и GitHub Security
-Lab). Рецензируемых замеров отдачи нет, но это ровно форма «третий повтор → правило». Указатель
-уже поддерживает любой файл; нужно лишь, чтобы проект гонял такие правила в воротах.
+**A guard can be a variant-analysis query.** For a class that cannot be closed by a test, the
+guard is a Semgrep rule or a CodeQL query in the repository: the found defect is turned into a
+query, the query is run over all the code and in CI (the practice of Trail of Bits and GitHub
+Security Lab). There are no peer-reviewed measurements of yield, but it is exactly the form
+"third repeat → a rule". The pointer already supports any file; all that is needed is for the
+project to run such rules in its gates.
 
-**Сделано в 0.3.0:** путь узды проверяется на существование, удалённая узда роняет проверку.
+**Done in 0.3.0:** the guard's path is checked for existence, a deleted guard fails the check.
 
-**Закрыто, когда.** `check` отличает три состояния: класс закрыт и узда на месте; класс
-закрыт, но узда исчезла (роняет); класс не закрыт (роняет с третьего экземпляра). И есть хотя
-бы один случай, когда красная узда привела к новой находке со ссылкой на прежнюю.
+**Closed when.** `check` distinguishes three states: the class is closed and the guard is in
+place; the class is closed but the guard has disappeared (fails); the class is not closed (fails
+from the third instance). And there is at least one case where a red guard led to a new finding
+with a link to the previous one.
 
-**Цена.** Небольшая: одно поле, одна проверка существования, правка промпта исполнителя.
-Основная работа — договориться, как записывать указатель для разных видов узд.
+**Cost.** Small: one field, one existence check, an edit to the fixer's prompt. The main work is
+agreeing how to write the pointer for different kinds of guards.
 
-**Ловушки.**
-- Соблазн переоткрывать старую находку: теряется история и ломается счёт «сколько раз
-  возвращалось».
-- Указатель на правило, которое существует, но выключено в конфигурации: проверка
-  существования файла этого не поймает.
-
----
-
-## Направление 4. Третий слой покрытия: файл, которого не коснулся ни один вопрос
-
-**Зачем.** Сейчас знаменателей два: файлы (что открывали) и гипотезы (на какие вопросы
-ответили). Между ними нет связи. Файл может лежать в блоке, числиться прочитанным — и не
-попасть ни под одну гипотезу: формально покрыт, по существу нет.
-
-**Что уже известно.**
-
-- **OpenFastTrace** — самый богатый словарь состояний: исходящие `Covers`, `Predated`,
-  `Outdated`, `Ambiguous`, `Unwanted`, `Orphaned`; входящие `Covered Shallow`, `Covered
-  Unwanted`, `Covered Predated`, `Covered Outdated`; агрегаты `Undercovered`, `Overcovered`,
-  `Deep Coverage`. Главное — **каскад решён**: элемент с целым прямым покрытием, но битым
-  потомком помечается «не ок (транзитивно)», и итог считает раздельно: `123 total, 5 direct,
-  2 transitive`. Их же честное ограничение: предсказать нужное число входящих связей нельзя,
-  и они не пытаются.
-- **spec-kit `/analyze`** даёт форму отчёта: таблица находок со стабильными ID, **Coverage
-  Gaps в обе стороны** (требование без задач И задача без требования), секция Unmapped,
-  метрики с Coverage %, потолок «не больше 50 находок» с overflow.
-- **DO-178C** даёт то, чего нет у остальных: три разных диагноза для кода без требования —
-  dead (ошибка, удалять), deactivated (не ошибка, изолировать и обосновать), extraneous.
-  Вывод прямой: «непокрыто» нельзя держать одним статусом.
-
-**Как делать.**
-
-1. Вердикт гипотезы получает необязательное поле «чем доказано» в виде списка файлов —
-   агент и так их называет, надо лишь распознавать.
-2. Отчёт о покрытии печатает **обе стороны**: файл, не названный ни в одном вердикте, и
-   гипотеза, не сославшаяся ни на один файл. Вторая половина не менее важна: гипотеза без
-   файлов — это вопрос, на который ответили в воздухе.
-3. Транзитивная непокрытость считается отдельно от прямой и печатается отдельной строкой,
-   иначе первый же прогон утонет в каскаде.
-4. Появляется артефакт «остаток» — файл со списком непокрытого, как `residual.diff`.
-
-**Закрыто, когда.** Отчёт печатает обе стороны и остаток отдельным файлом, а транзитивные
-дефекты не смешаны с прямыми.
-
-**Цена.** Средняя: распознавание ссылок на файлы в вердиктах — самая хрупкая часть, потому
-что зависит от того, как агент пишет.
-
-**Ловушки.**
-- Требовать от агента формальную разметку — он начнёт её имитировать. Лучше распознавать то,
-  как он пишет сейчас, и уточнять промпт по результатам.
-- Смешать «файл не назван» с «файл не важен для этого вопроса»: у части файлов законно нет
-  своей гипотезы (конфигурация, типы), и для них нужен статус вроде deactivated у DO-178C.
+**Pitfalls.**
+- The temptation to reopen the old finding: the history is lost and the count "how many times it
+  came back" breaks.
+- A pointer to a rule that exists but is disabled in the configuration: a file existence check
+  will not catch that.
 
 ---
 
-## Направление 5. Точность искателя измеряется и меняет промпт
+## Direction 4. Third layer of coverage: a file that no question touched
 
-**Зачем.** Отвергнутые находки хранятся с причиной, но ни на что не влияют. Мы не знаем, у
-какого блока охотник точнее, а у какого манифест просит не того.
+**Why.** Right now there are two denominators: files (what was opened) and hypotheses (which
+questions were answered). There is no link between them. A file can lie in a block, count as
+read — and fall under no hypothesis: formally covered, in substance not.
 
-**Что уже известно.**
+**What is already known.**
 
-- **Единственная опубликованная формула с порогами** — Google Tricorder:
-  `not-useful rate = NOT USEFUL / (NOT USEFUL + PLEASE FIX + APPLY FIX)`; ≥10% —
-  анализатор на испытательном сроке, >25% — может быть отключён. Ключевое в ней —
-  **знаменатель**: считаются только находки, по которым было действие; молчание не считается.
-  Приём нового анализатора — «actual issue at least 90% of the time».
-- **Практика «править правило, а не наказывать источник» подтверждена**: Google AutoCommenter
-  обнаружил, что около 80% предсказаний ниже общего порога уверенности верны, и сделал **свой
-  порог на каждое правило**, а плохие подклассы глушил без переобучения.
-- **Code4rena** считает `signal` = валидные / все поданные (только High и Medium, `null` до
-  трёх подач) и ограничивает им **право подавать**: до 0.2 — одна находка, 0.2–0.4 — две,
-  выше — десять.
-- **HackerOne** считает среднее **со знаком** (−10 за спам, +7 за решённое) — жёстче к мусору,
-  чем доля.
+- **OpenFastTrace** has the richest vocabulary of states: outgoing `Covers`, `Predated`,
+  `Outdated`, `Ambiguous`, `Unwanted`, `Orphaned`; incoming `Covered Shallow`, `Covered
+  Unwanted`, `Covered Predated`, `Covered Outdated`; aggregates `Undercovered`, `Overcovered`,
+  `Deep Coverage`. The main thing — **the cascade is solved**: an item with intact direct coverage
+  but a broken descendant is marked "not ok (transitively)", and the total counts separately:
+  `123 total, 5 direct, 2 transitive`. Their own honest limitation: the needed number of incoming
+  links cannot be predicted, and they do not try.
+- **spec-kit `/analyze`** gives a report form: a findings table with stable IDs, **Coverage
+  Gaps in both directions** (a requirement without tasks AND a task without a requirement), an
+  Unmapped section, metrics with Coverage %, a ceiling of "no more than 50 findings" with
+  overflow.
+- **DO-178C** gives what the others lack: three different diagnoses for code without a
+  requirement — dead (an error, delete), deactivated (not an error, isolate and justify),
+  extraneous. The conclusion is direct: "uncovered" cannot be kept as a single status.
 
-**Как делать.**
+**How to do it.**
 
-1. Считать по реестру долю подтверждённых на блок и печатать её в `status`. Знаменатель — по
-   образцу Tricorder: только находки, получившие вердикт; «не дошли руки» не считается.
-2. Не включать метрику, пока у блока меньше трёх находок: на одной-двух она шумит.
-3. Реакция — **правка манифеста или промпта**, а не ограничение прав: у нас один искатель, и
-   наказывать некого. Низкая доля означает, что гипотезы просят не того.
-4. Словарь причин отказа замкнуть: в метрику идут только «не воспроизводится» и «завышена
-   серьёзность», а «уже починено» и «вне предмета блока» — нет, иначе метрика меряет реестр,
-   а не охотника.
+1. A hypothesis verdict gets an optional field "proven by" as a list of files — the agent names
+   them anyway, one only has to recognise them.
+2. The coverage report prints **both sides**: a file named in no verdict, and a hypothesis that
+   referred to no file. The second half is no less important: a hypothesis without files is a
+   question answered in the air.
+3. Transitive uncoveredness is counted separately from direct and printed as a separate line,
+   otherwise the very first run will drown in the cascade.
+4. A "residual" artefact appears — a file with the list of the uncovered, like `residual.diff`.
 
-**Закрыто, когда.** `status` печатает долю подтверждённых по последним блокам, и по ней
-принято хотя бы одно решение о правке манифеста или промпта.
+**Closed when.** The report prints both sides and the residual as a separate file, and
+transitive defects are not mixed with direct ones.
 
-**Цена.** Малая для счёта, основная — в дисциплине заполнения причин отказа.
+**Cost.** Medium: recognising file references in verdicts is the most fragile part, because it
+depends on how the agent writes.
 
-**Ловушка.** Пороги Google посчитаны на десятках тысяч ревью в день. У нас объём на три
-порядка меньше, и сами проценты переносить нельзя — переносимы два правила: не включать
-метрику до трёх находок и не считать молчание в знаменатель.
-
----
-
-## Направление 6. Архив прогона: по закрытому блоку можно восстановить задание
-
-**Зачем.** Сегодня нельзя ответить на два вопроса: какая формулировка в манифесте породила
-находку и почему агент прошёл мимо. Отчёт агента есть, а задание — нет: промпт собирается на
-лету и нигде не сохраняется. Значит, править манифест по результатам можно только на память.
-
-**Что уже известно.**
-
-- **revmux** пишет `manifest.json`, где указано, какой слой дал каждый кусок промпта, **и хеш
-  его содержимого**; переменные раскрываются в пути, а не в содержимое; сырой вывод агентов
-  сохраняется дословно, ретраи — отдельно.
-- **SWE-agent** заменил в формате траектории поле `message` на `query`, потому что первое было
-  приблизительным и указывало на следующий шаг: по нему нельзя восстановить, что модель
-  видела на этом.
-- **Ключ кэша, включающий хеш содержимого промптов**, встречается у Bazel, Nix, pre-commit и
-  revmux: поправил шаблон — всё сохранённое обесценилось.
-
-**Как делать.**
-
-1. `prompt` умеет писать собранное задание рядом с отчётом блока, а не только в стандартный
-   вывод.
-2. В состоянии блока хранится **хеш манифеста и шаблонов ролей** на момент прохода. Правка
-   манифеста после прохода — это тот же случай, что правка файлов: блок больше не тот,
-   который проходили, и `check` обязан это заметить (механизм уже есть — отпечаток
-   просмотренного, нужно расширить его на тексты).
-3. Отчёт агента и собранное задание живут парой: по любому закрытому блоку восстанавливается
-   ровно то, что агент получал.
-
-**Закрыто, когда.** По закрытому блоку можно предъявить точное задание, и `check` ловит
-правку манифеста или промпта после прохода.
-
-**Цена.** Малая. Главное решение — хранить ли задания в репозитории (они объёмные) или рядом,
-вне дерева.
-
-**Ловушка.** Задание содержит инварианты и манифест целиком — при публикации репозитория это
-выносит наружу внутренние правила проекта. Хранить в дереве стоит только хеш, а сам текст —
-там же, где отчёты, с тем же режимом доступа.
+**Pitfalls.**
+- Demanding formal markup from the agent — it will start imitating it. Better to recognise how
+  it writes now and refine the prompt by results.
+- Confusing "the file is not named" with "the file is not relevant to this question": some files
+  legitimately have no hypothesis of their own (configuration, types), and for them a status like
+  DO-178C's deactivated is needed.
 
 ---
 
-## Направление 7. Блок, который смотрит на два репозитория
+## Direction 5. The seeker's precision is measured and changes the prompt
 
-**Зачем.** Самая дорогая ошибка за всю работу метода: проверяющий подтвердил исполнением
-дефект в соседнем сервисе по рабочей копии, отставшей на двенадцать суток. Правило записано в
-промпт, узда на свежесть есть — но блок, чей предмет лежит в двух репозиториях, набор не
-поддерживает: покрытие считается по одному `git ls-files`.
+**Why.** Rejected findings are stored with a reason but affect nothing. We do not know on which
+block the hunter is more precise and on which the manifest asks for the wrong thing.
 
-**Что уже известно.**
+**What is already known.**
 
-- Канон один и тот же у всех, кто решает эту задачу: **хранить закреплённый SHA соседа и
-  сверять на старте**, отказывая при расхождении. Подмодуль (gitlink `160000`), `west.yml`
-  (Zephyr), манифест `repo` (Android), `MODULE.bazel.lock` (SHA-256), `flake.lock` (хеш дерева).
-- `buf breaking --against '.git#branch=main'` базу не хранит вовсе — тянет по ссылке, то есть
-  сверка всегда против актуального.
-- **Contract testing** (Pact) выносит матрицу совместимости в брокер и отвечает на вопрос
-  «можно ли выкатывать» отдельной командой.
-- Прямого инструмента «покрытие ревью по нескольким репозиториям» нет. Ближайшее по форме —
-  портфели SonarQube (список пар «проект, ветка»), по смыслу — CodeQL MRVA.
+- **The only published formula with thresholds** — Google Tricorder:
+  `not-useful rate = NOT USEFUL / (NOT USEFUL + PLEASE FIX + APPLY FIX)`; ≥10% — the analyser
+  is on probation, >25% — may be switched off. The key thing in it is **the denominator**: only
+  findings on which there was an action are counted; silence does not count. Acceptance of a new
+  analyser — "actual issue at least 90% of the time".
+- **The practice "fix the rule, do not punish the source" is confirmed**: Google AutoCommenter
+  found that about 80% of predictions below the common confidence threshold were correct, and
+  made **its own threshold per rule**, while muting bad subclasses without retraining.
+- **Code4rena** counts `signal` = valid / all submitted (only High and Medium, `null` until
+  three submissions) and limits by it **the right to submit**: up to 0.2 — one finding, 0.2–0.4 —
+  two, above — ten.
+- **HackerOne** counts a **signed** mean (−10 for spam, +7 for resolved) — harsher on junk than a
+  share.
 
-**Как делать.**
+**How to do it.**
 
-1. Блок объявляет внешние зависимости явно: репозиторий, ветка, и что именно там предмет
-   (пути). Не весь соседний репозиторий, а его часть.
-2. Перед выдачей промпта инструмент требует `fetch` и **сверяет свежесть** — уже существующий
-   гейт устаревания применяется к каждому объявленному соседу, а не только к своему дереву.
-3. Покрытие соседа **не считается**: его считает его собственное ревью. Наш блок отвечает за
-   стык, и в отчёте обязан назвать, какую версию соседа смотрел (закреплённый SHA).
-4. Находка в соседнем репозитории заводится со ссылкой на его коммит и передаётся туда —
-   чинить её здесь нельзя.
+1. Count from the register the share of confirmed per block and print it in `status`. The
+   denominator — after Tricorder: only findings that received a verdict; "did not get round to
+   it" does not count.
+2. Do not enable the metric while a block has fewer than three findings: on one or two it is
+   noise.
+3. The reaction is **an edit to the manifest or the prompt**, not a limitation of rights: we have
+   one seeker, and there is nobody to punish. A low share means the hypotheses ask for the wrong
+   thing.
+4. Close the vocabulary of rejection reasons: only "does not reproduce" and "severity
+   overstated" go into the metric, while "already fixed" and "outside the block's subject" do
+   not, otherwise the metric measures the register, not the hunter.
 
-**Закрыто, когда.** Блок «контракт с соседним сервисом» проходится штатно, отчёт называет
-SHA соседа, а попытка пройти его по устаревшей копии роняет проверку.
+**Closed when.** `status` prints the share of confirmed over the latest blocks, and at least one
+decision to edit a manifest or a prompt has been made on it.
 
-**Цена.** Средняя: главная работа — решить, что делать с находками, которые живут в чужом
-репозитории и чинятся не нами.
+**Cost.** Small for the count, the main part is in the discipline of filling in rejection
+reasons.
 
-**Ловушка.** Соблазн втянуть соседний репозиторий в своё покрытие — тогда знаменатель станет
-неопределимым, а ответственность размазанной. Стык проверяется, содержимое соседа — нет.
+**Pitfall.** Google's thresholds are computed on tens of thousands of reviews a day. Our volume
+is three orders of magnitude smaller, and the percentages themselves cannot be transferred — two
+rules are transferable: do not enable the metric before three findings and do not count silence in
+the denominator.
 
 ---
 
-## Направление 8. Двое ведут ревью одновременно
+## Direction 6. Run archive: from a closed block the task can be reconstructed
 
-**Зачем.** Метод писался под одну сессию, идущую последовательно. Как только участников
-становится двое — человек и агент в другом дереве, или просто два человека, — состояние в git
-начинает драться само с собой. Это не гипотеза: конфликтуют три конкретных файла, и один из
-них конфликтует всегда.
+**Why.** Today two questions cannot be answered: which wording in the manifest produced a
+finding and why the agent walked past. The agent's report exists, but the task does not: the
+prompt is assembled on the fly and saved nowhere. So editing the manifest by results can only be
+done from memory.
 
-**Что сломается — поимённо.**
+**What is already known.**
 
-| файл | как пишется | что будет |
+- **revmux** writes a `manifest.json` stating which layer gave each piece of the prompt, **and
+  the hash of its content**; variables are expanded in paths, not in content; the raw output of
+  agents is saved verbatim, retries separately.
+- **SWE-agent** replaced the `message` field in the trajectory format with `query`, because the
+  former was approximate and pointed at the next step: from it one cannot reconstruct what the
+  model saw at this one.
+- **A cache key that includes the hash of prompt content** is found at Bazel, Nix, pre-commit and
+  revmux: edit the template — everything saved is invalidated.
+
+**How to do it.**
+
+1. `prompt` can write the assembled task next to the block's report, not only to standard
+   output.
+2. The block state stores **the hash of the manifest and the role templates** at the time of the
+   pass. Editing the manifest after the pass is the same case as editing files: the block is no
+   longer the one that was passed, and `check` must notice (the mechanism already exists — the
+   fingerprint of what was reviewed; it needs extending to texts).
+3. The agent's report and the assembled task live as a pair: for any closed block exactly what the
+   agent received can be reconstructed.
+
+**Closed when.** For a closed block the exact task can be produced, and `check` catches an edit
+to the manifest or the prompt after the pass.
+
+**Cost.** Small. The main decision is whether to store the tasks in the repository (they are
+bulky) or nearby, outside the tree.
+
+**Pitfall.** The task contains the invariants and the manifest in full — when the repository is
+published this carries the project's internal rules outside. Only the hash should be stored in the
+tree, and the text itself — in the same place as the reports, with the same access mode.
+
+---
+
+## Direction 7. A block that looks at two repositories
+
+**Why.** The most expensive mistake in the method's whole history: the verifier confirmed by
+execution a defect in the neighbouring service on a working copy that was twelve days behind.
+The rule is written into the prompt, there is a guard on freshness — but a block whose subject
+lies in two repositories is not supported by the kit: coverage is counted from a single
+`git ls-files`.
+
+**What is already known.**
+
+- The canon is the same for everyone who solves this task: **store the pinned SHA of the
+  neighbour and check it at start**, refusing on divergence. A submodule (gitlink `160000`),
+  `west.yml` (Zephyr), the `repo` manifest (Android), `MODULE.bazel.lock` (SHA-256),
+  `flake.lock` (tree hash).
+- `buf breaking --against '.git#branch=main'` stores no base at all — it pulls by reference,
+  i.e. the comparison is always against the current state.
+- **Contract testing** (Pact) moves the compatibility matrix into a broker and answers the
+  question "can we deploy" with a separate command.
+- There is no direct tool for "review coverage across several repositories". The closest in
+  form are SonarQube portfolios (a list of "project, branch" pairs), in meaning — CodeQL MRVA.
+
+**How to do it.**
+
+1. The block declares external dependencies explicitly: repository, branch, and what exactly is
+   the subject there (paths). Not the whole neighbouring repository, but its part.
+2. Before issuing the prompt the tool requires a `fetch` and **checks freshness** — the already
+   existing staleness gate is applied to every declared neighbour, not only to one's own tree.
+3. The neighbour's coverage **is not counted**: its own review counts it. Our block is
+   responsible for the seam, and in the report it must name which version of the neighbour it
+   looked at (the pinned SHA).
+4. A finding in the neighbouring repository is filed with a link to its commit and handed over
+   there — it cannot be fixed here.
+
+**Closed when.** The block "contract with the neighbouring service" is passed routinely, the
+report names the neighbour's SHA, and an attempt to pass it on a stale copy fails the check.
+
+**Cost.** Medium: the main work is deciding what to do with findings that live in someone else's
+repository and are fixed not by us.
+
+**Pitfall.** The temptation to pull the neighbouring repository into one's own coverage — then
+the denominator becomes undefinable and the responsibility smeared. The seam is checked, the
+neighbour's contents are not.
+
+---
+
+## Direction 8. Two people run the review at once
+
+**Why.** The method was written for a single session going sequentially. As soon as there are
+two participants — a human and an agent in another tree, or simply two people — the state in git
+starts fighting itself. This is not a hypothesis: three specific files conflict, and one of them
+conflicts always.
+
+**What will break — by name.**
+
+| file | how it is written | what will happen |
 |---|---|---|
-| `reports/<БЛОК>-*` | файл на блок | **уже безопасно** |
-| `journal.md` | дописывание в конец | конфликт в хвосте, лечится `merge=union` |
-| `findings.jsonl` | **перезапись целиком** | конфликт на всём файле; `union` не поможет — это не дописывание |
-| `state.json` | снимок целиком | конфликт на каждой параллельной смене статуса; `union` на JSON даёт невалидный JSON |
-| `coverage.tsv` | производное от определения блоков | конфликт, не несущий ни бита информации |
+| `reports/<BLOCK>-*` | a file per block | **already safe** |
+| `journal.md` | appending to the end | a conflict at the tail, cured by `merge=union` |
+| `findings.jsonl` | **rewritten entirely** | a conflict on the whole file; `union` will not help — this is not appending |
+| `state.json` | a whole snapshot | a conflict on every parallel status change; `union` on JSON gives invalid JSON |
+| `coverage.tsv` | derived from the block definition | a conflict that carries not one bit of information |
 
-Две вещи уже работают в нашу пользу: идентификатор находки шардирован блоком (`H1-001`), так
-что участники на разных блоках их не столкнут, и в импорте есть зачаток оптимистической
-блокировки — правда, видящий только своё дерево.
+Two things already work in our favour: the finding identifier is sharded by block (`H1-001`), so
+participants on different blocks will not collide them, and the import has a rudiment of
+optimistic locking — though one that sees only its own tree.
 
-**Что уже известно.**
+**What is already known.**
 
-- **`merge=union` годится только для построчных файлов, которые дописывают.** Две оговорки:
-  если обе стороны правят одну строку по-разному, union молча оставит обе без маркера; и
-  **GitHub не применяет пользовательский `.gitattributes` при слиянии через веб** — мержить
-  такие файлы надо локально.
-- **Обход общего файла, проверенный практикой:** towncrier (Twisted, pytest, pip) кладёт
-  фрагмент-файл на изменение вместо общего журнала — «два PR, добавляющие два разных файла,
-  не могут конфликтовать». В аудите то же: Code4rena — issue на находку, Spearbit — ветка на
-  файл, находка сначала комментарий к строке.
-- **git-bug** формулирует главный урок прямо: хранить снимок нельзя, хранится **series of edit
-  operations**, а состояние компилируется из них; порядок — по логическим часам, потому что
-  системному времени в распределённой работе верить нельзя.
-- **Захват блока не требует инфраструктуры:** `git update-ref <ref> <new> <old>` — встроенный
-  compare-and-swap, а нули в `<old>` означают «убедись, что ссылки ещё нет».
-- **Зависший участник везде лечится истечением аренды, а не ручной разблокировкой:**
-  visibility timeout у очередей, `SKIP LOCKED` в Postgres, TTR у beanstalkd. Условие одно —
-  сердцебиение чаще, чем срок аренды.
-- **Первенство по времени нигде не награждается.** Code4rena делит награду между дубликатами
-  с затуханием, а бонус даёт не первому, а тому, чью формулировку взяли в отчёт; слабая
-  формулировка получает частичный кредит, но в знаменатель входит. Sherlock требует от
-  дубликата выполнить **все три условия** — назвать корень, назвать хотя бы среднее влияние и
-  назвать рабочий путь; группе присваивается **наивысшая** серьёзность среди участников.
-- **Разногласия везде устроены одинаково:** короткое окно, названный решающий, отступление от
-  правила документируется по шаблону, а несогласие **стоит** — у Sherlock эскалация
-  оплачивается репутацией и невозвратна.
-- **Про параллельных агентов Anthropic пишет прямо:** делить работу надо по границам
-  контекста, а не по ролям; разделение «планировщик / исполнитель / тестировщик / ревьюер»
-  тратит на координацию больше, чем на работу, а параллелить стоит независимые ветки и
-  **проверку как чёрный ящик** — она не требует контекста реализации.
+- **`merge=union` is fit only for line-based files that are appended to.** Two caveats: if both
+  sides edit one line differently, union silently keeps both without a marker; and **GitHub does
+  not apply a custom `.gitattributes` when merging via the web** — such files must be merged
+  locally.
+- **A workaround for the shared file, proven by practice:** towncrier (Twisted, pytest, pip) puts
+  a fragment file per change instead of a shared journal — "two PRs adding two different files
+  cannot conflict". In audit the same: Code4rena — an issue per finding, Spearbit — a branch per
+  file, a finding is first a comment on a line.
+- **git-bug** states the main lesson directly: a snapshot cannot be stored, what is stored is a
+  **series of edit operations**, and the state is compiled from them; the order is by logical
+  clocks, because system time cannot be trusted in distributed work.
+- **Claiming a block needs no infrastructure:** `git update-ref <ref> <new> <old>` is a built-in
+  compare-and-swap, and zeros in `<old>` mean "make sure the ref does not exist yet".
+- **A stuck participant is everywhere cured by lease expiry, not by manual unlocking:**
+  visibility timeout in queues, `SKIP LOCKED` in Postgres, TTR in beanstalkd. One condition — the
+  heartbeat is more frequent than the lease term.
+- **Being first in time is rewarded nowhere.** Code4rena splits the reward between duplicates
+  with decay, and gives the bonus not to the first but to the one whose wording was taken into
+  the report; a weak wording gets partial credit but goes into the denominator. Sherlock requires
+  a duplicate to meet **all three conditions** — name the root, name at least medium impact and
+  name a working path; the group is assigned the **highest** severity among its members.
+- **Disagreements are everywhere arranged the same way:** a short window, a named decider, a
+  deviation from the rule is documented by template, and disagreement **costs** — at Sherlock an
+  escalation is paid for with reputation and is non-refundable.
+- **About parallel agents Anthropic writes directly:** work must be split by context boundaries,
+  not by roles; the split "planner / executor / tester / reviewer" spends more on coordination
+  than on work, and what is worth parallelising is independent branches and **verification as a
+  black box** — it does not need the implementation context.
 
-**Что из этого следует для нашей схемы.** Связка «охотник → проверяющий» — ровно их
-разрешённый случай: проверяющий работает как чёрный ящик и не нуждается в контексте охотника.
-А «охотник и исполнитель параллельно по одному блоку» — их запрещённый случай, и это стоит
-записать правилом, а не оставлять на усмотрение.
+**What follows from this for our scheme.** The pair "hunter → verifier" is exactly their
+permitted case: the verifier works as a black box and does not need the hunter's context. And
+"hunter and fixer in parallel on one block" is their forbidden case, and it is worth writing down
+as a rule rather than leaving to discretion.
 
-**Как делать — по возрастанию цены.**
+**How to do it — in ascending order of cost.**
 
-1. **`.gitattributes`: журнал сливать объединением.** Одна строка.
-2. **Убрать карту покрытия из репозитория.** Она производная от определения блоков;
-   конфликтует, не неся информации. Генерировать по требованию.
-3. **Правило «один блок — один участник»** в точке входа. Соглашением снимает большинство
-   случаев: файлы блоков не пересекаются, идентификаторы шардированы.
-4. **Захват блока отдельным файлом** `claims/<БЛОК>.json`: кто, когда, до какого срока.
-   Разные файлы не конфликтуют. Срок истёк и не продлён записью в журнал — блок свободен;
-   ручного разблокирования нет намеренно.
-5. **Перестать перезаписывать сводный реестр.** Честнее — убрать его вовсе, оставив
-   `reports/<БЛОК>-findings.jsonl` единственным источником, а сводку генерировать.
-6. **Состояние блоков — тоже производное**, по образцу git-bug: истина в файлах блоков, а
-   `state.json` собирается. Минимальный вариант — разложить по файлу на блок.
-7. **Дедупликация по корню**, группировка по правилу Sherlock, серьёзность группы — наивысшая
-   из участников. Первенство по времени не вводить: оно провоцирует спешку вместо качества.
-8. **Окно возражений с названным решающим** и шаблоном отступления от правила.
-9. **Сверка с `origin/master` по файлам блока в начале прохода** — обязательной строкой в
-   журнал. При двух участниках это перестаёт быть рекомендацией и становится условием
-   корректности: чужая починка уже в общей ветке, а в твоём дереве её нет.
-10. **Не параллелить охотника и исполнителя по одному блоку.** Проверяющего — только как
-    чёрный ящик: он не читает отчёт охотника до собственного прохода, и это заодно усиливает
-    метод.
+1. **`.gitattributes`: merge the journal by union.** One line.
+2. **Remove the coverage map from the repository.** It is derived from the block definition;
+   it conflicts while carrying no information. Generate on demand.
+3. **The rule "one block — one participant"** at the entry point. By agreement it removes most
+   cases: block files do not overlap, identifiers are sharded.
+4. **Claiming a block with a separate file** `claims/<BLOCK>.json`: who, when, until what
+   deadline. Different files do not conflict. Deadline expired and not extended by a journal entry
+   — the block is free; there is deliberately no manual unlocking.
+5. **Stop rewriting the summary register.** More honest — remove it altogether, leaving
+   `reports/<BLOCK>-findings.jsonl` as the only source, and generate the summary.
+6. **Block state is also derived**, after git-bug: the truth is in the block files, and
+   `state.json` is assembled. The minimal variant — split into a file per block.
+7. **Deduplication by root**, grouping by the Sherlock rule, the group's severity is the highest
+   of its members. Do not introduce first-in-time: it provokes haste instead of quality.
+8. **An objection window with a named decider** and a template for deviating from the rule.
+9. **A check against `origin/master` over the block's files at the start of a pass** — as a
+   mandatory line in the journal. With two participants this stops being a recommendation and
+   becomes a condition of correctness: someone else's fix is already in the shared branch, and
+   your tree does not have it.
+10. **Do not parallelise the hunter and the fixer on one block.** The verifier — only as a black
+    box: it does not read the hunter's report before its own pass, and this also strengthens the
+    method.
 
-**Закрыто, когда.** Два участника проходят два разных блока одновременно, сливаются без
-ручного разрешения конфликтов, и захваченный блок, брошенный на середине, освобождается сам.
+**Closed when.** Two participants pass two different blocks at the same time, merge without
+manual conflict resolution, and a claimed block abandoned midway frees itself.
 
-**Цена.** Пункты 1–4 дешёвые и делаются за один заход. Пункты 5–6 — переделка формата
-состояния, то есть ломающее изменение с миграцией; браться за них стоит, только когда
-участников станет трое или когда двое реально пойдут в один блок.
+**Cost.** Items 1–4 are cheap and done in one go. Items 5–6 are a rework of the state format,
+i.e. a breaking change with a migration; worth taking on only when there are three participants
+or when two really go into one block.
 
-**Ловушки.**
-- `union` на JSON — молчаливая порча файла. Применять только к построчному журналу.
-- Захват без срока превращается в вечную блокировку после первого же обрыва сессии.
-- Соблазн наградить первого нашедшего: во всех соревновательных аудитах от этого отказались,
-  потому что первенство поощряет скорость, а нужна точность.
+**Pitfalls.**
+- `union` on JSON is silent file corruption. Apply only to the line-based journal.
+- A claim without a deadline turns into an eternal lock after the first session drop.
+- The temptation to reward the first finder: all competitive audits abandoned it, because being
+  first encourages speed, and what is needed is precision.
 
 ---
 
-## Направление 9. Экономика: во что обойдётся и когда перестанет окупаться
+## Direction 9. Economics: what it will cost and when it stops paying off
 
-**Зачем.** Мы знаем цену блока и не знаем цены ревью. На вопрос «сколько будет стоить
-пройти проект на десять тысяч файлов» ответа нет, а от него зависит, берутся ли за метод
-вообще.
+**Why.** We know the cost of a block and do not know the cost of a review. To the question "how
+much will it cost to pass a project of ten thousand files" there is no answer, and whether the
+method gets taken up at all depends on it.
 
-**Что уже известно.**
+**What is already known.**
 
-- **Архитектура обхода решает цену сильнее модели.** На одном и том же наборе задач
-  AutoCodeRover стоит $0.43 за задачу, SWE-agent — $2.51 при сопоставимом качестве: разница в
-  токенах 6.6×, в деньгах 5.8×.
-- **Разброс важнее среднего.** Агентные задачи тратят примерно в тысячу раз больше токенов,
-  чем обычный диалог; **прогоны одной и той же задачи различаются до 30 раз**; драйвер цены —
-  входные токены, а не выходные; точность **пикует на средних затратах и дальше насыщается**;
-  модели систематически недооценивают собственный расход.
-- **Суперлинейного роста цены от числа файлов в литературе нет — есть падение качества при
-  фиксированной цене.** Рост ширины задачи с одного файла до четырёх роняет решаемость с
-  более чем 70% до 23%; деградация с длиной входа монотонна у всех проверенных моделей.
-  Экономически это то же самое: чтобы удержать качество, число блоков должно расти быстрее,
-  чем просто «файлы делить на 22».
-- **Порядок обхода имеет измеренную цену.** 20% файлов с наивысшим предсказанным числом
-  дефектов содержали 71–92% найденных, в среднем **83%** (Ostrand, Weyuker, Bell, IEEE TSE
-  31(4), 2005). Код с тревожным уровнем «здоровья» несёт **в 15 раз больше дефектов** и
-  требует **на 124% больше времени** на задачу (Tornhill & Borg, TechDebt 2022).
-  ⚠️ Вторая метрика проприетарная, на самодельный суррогат её числа не переносятся.
-- **Сплошной проход — решение, которое обосновывают.** Стандарт аудиторской выборки прямо не
-  распространяется на сплошную проверку: она не умолчание, а выбор, и объём выборки выводится
-  из риска.
-- **Наши блоки велики по меркам человеческого ревью.** Рекомендация из исследования 2500
-  ревью — 200–400 строк за заход, и при темпе быстрее ~450 строк в час плотность находок ниже
-  средней в 87% случаев. Наш порог 6000 строк выше этого в 15–30 раз. Это не приговор — агент
-  читает иначе, — но объясняет, почему блок «прочитан» и «понят» может расходиться.
+- **The traversal architecture decides the cost more strongly than the model.** On the same task
+  set AutoCodeRover costs $0.43 per task, SWE-agent — $2.51 at comparable quality: the difference
+  in tokens is 6.6×, in money 5.8×.
+- **The spread matters more than the mean.** Agentic tasks spend roughly a thousand times more
+  tokens than an ordinary dialogue; **runs of the same task differ up to 30 times**; the cost
+  driver is input tokens, not output; accuracy **peaks at medium spend and then saturates**;
+  models systematically underestimate their own spend.
+- **There is no superlinear growth of cost with the number of files in the literature — there is
+  a fall of quality at a fixed cost.** Growing the task width from one file to four drops
+  solvability from over 70% to 23%; degradation with input length is monotonic for all tested
+  models. Economically this is the same thing: to hold quality, the number of blocks must grow
+  faster than just "files divided by 22".
+- **The traversal order has a measured cost.** The 20% of files with the highest predicted number
+  of defects contained 71–92% of those found, on average **83%** (Ostrand, Weyuker, Bell, IEEE
+  TSE 31(4), 2005). Code with an alarming "health" level carries **15 times more defects** and
+  requires **124% more time** per task (Tornhill & Borg, TechDebt 2022).
+  ⚠️ The second metric is proprietary, its numbers do not transfer to a home-made surrogate.
+- **An exhaustive pass is a decision that gets justified.** The audit sampling standard does not
+  directly extend to an exhaustive check: it is not the default but a choice, and the sample size
+  is derived from risk.
+- **Our blocks are large by the standards of human review.** The recommendation from a study of
+  2500 reviews is 200–400 lines per sitting, and at a pace faster than ~450 lines an hour the
+  finding density is below average in 87% of cases. Our ceiling of 6000 lines is 15–30 times
+  above that. Not a verdict — an agent reads differently — but it explains why a block "read" and
+  "understood" can diverge.
 
-**Модель стоимости, которую стоит принять.**
+**The cost model worth adopting.**
 
 ```
-C_ревью = Σ по блокам [ C_охотник(b) + C_проверяющий(b)
-                        + p_чинится(b) · r(b) · ( C_починка(b) + C_ревью_диффа(b) ) ]
+C_review = Σ over blocks [ C_hunter(b) + C_verifier(b)
+                          + p_fixed(b) · r(b) · ( C_fix(b) + C_fix_review(b) ) ]
 
-C_агента(b) = β + α · L(b)
+C_agent(b) = β + α · L(b)
 ```
 
-где `β` — постоянная блока (инварианты, манифест, шаблон роли — от размера не зависит),
-`α` — расход на единицу читаемого, `r(b)` — число кругов «починил → прочитали дифф».
+where `β` is the block constant (invariants, manifest, role template — independent of size),
+`α` is the spend per unit of readable, `r(b)` is the number of rounds "fixed → the diff was
+read".
 
-**Калибровка — гипотеза, а не замер.** Из наших 400–700 тысяч токенов на 17–27 файлов при
-`β ≈ 250 тыс.` выходит `α ≈ 15 тыс.` на файл. Чтобы разделить `β` и `α` честно, нужны два
-блока заведомо разного размера с логированием токенов — самый маленький и самый крупный. До
-этого любая экстраполяция остаётся прикидкой.
+**Calibration is a hypothesis, not a measurement.** From our 400–700 thousand tokens on 17–27
+files at `β ≈ 250 thousand` we get `α ≈ 15 thousand` per file. To separate `β` and `α` honestly, two
+blocks of deliberately different size with token logging are needed — the smallest and the
+largest. Until then any extrapolation remains a rough guess.
 
-**Прикидка на большом проекте** (по нашим же ставкам: обзорный блок — два агента, блок с
-регрессиями — двенадцать, доля чинимых — один из тринадцати): 1803 файла → 67 блоков ≈ 184
-агента ≈ 100 млн токенов. **10 000 файлов → около 455 блоков ≈ 1260 агентов ≈ 0.7 млрд
-токенов**, примерно 190 часов при пяти параллельных агентах.
+**A rough estimate on a large project** (at our own rates: an overview block — two agents, a
+block with regressions — twelve, the share of fixable — one in thirteen): 1803 files → 67 blocks
+≈ 184 agents ≈ 100 million tokens. **10,000 files → about 455 blocks ≈ 1260 agents ≈ 0.7
+billion tokens**, roughly 190 hours at five parallel agents.
 
-Линейный член масштабируется честно. Ломаются три вещи: `r(b)` — связность растёт быстрее
-размера; `β` — сквозной контекст распухает; и качество, которое при том же бюджете падает.
+The linear term scales honestly. Three things break: `r(b)` — coupling grows faster than size;
+`β` — the cross-cutting context swells; and quality, which at the same budget falls.
 
-**Метрика решения — не цена, а цена находки.**
+**The decision metric is not the cost but the cost of a finding.**
 
 ```
-CPF = C_ревью / число находок, доживших до починки
+CPF = C_review / number of findings that survived to a fix
 ```
 
-Знаменатель именно такой: отвергнутая находка стоила столько же, сколько принятая, а
-ценности не принесла.
+The denominator is exactly that: a rejected finding cost as much as an accepted one, and brought
+no value.
 
-**Правило остановки.** Метод перестаёт окупаться не по доле просмотренного, а когда `CPF`
-блока превышает стоимость поимки того же дефекта уздой в CI, тестом или авто-ревью на
-изменениях. Практический критерий: блок, где три круга подряд не дали находки **нового
-рода** (не очередного экземпляра известного корня), закрывается обзором, а не полным
-проходом.
+**The stopping rule.** The method stops paying off not by the share reviewed, but when a block's
+`CPF` exceeds the cost of catching the same defect by a guard in CI, a test or auto-review on
+changes. The practical criterion: a block where three rounds in a row gave no finding **of a new
+kind** (not another instance of a known root) is closed by an overview, not by a full pass.
 
-**Куда уходят токены — разбор 24.09** ([`docs/token-economy.md`](docs/token-economy.md)).
-Цена блока не зависит от его размера, статичный префикс промпта — единицы тысяч токенов из
-сотен; значит, расход уходит на результаты инструментов: вывод прогонов, `grep`, повторные
-чтения. Восемь гипотез в порядке ожидаемой экономии, у каждой — чем мерить:
-базовый замер (без него остальное — гадание) → промахи кэша по TTL субагентов (35–50 минут
-на блок против TTL в 5 минут) → фильтр вывода ворот хуком → «один файл — одно чтение» и
-заметки на диске (по чужим данным −9…50% входа) → дельта-проход для добора и ревью правок →
-сигнатуры вместо полных `ref_paths` → дешёвая модель на исполнителе, не на охотнике → урезать
-проверяющего на блоках без серьёзных находок. Чего не делать — там же: не сжимать контекст
-охотника, не убирать проверяющего, не переводить охотника на дешёвую модель, не резать блоки
-мельче ради экономии (цена от объёма не зависит, значит больше блоков — дороже).
+**Where the tokens go — the analysis of 24.09** ([`docs/token-economy.md`](docs/token-economy.md)).
+The cost of a block does not depend on its size, the static prompt prefix is units of thousands
+of tokens out of hundreds; so the spend goes on tool results: run output, `grep`, repeated
+reads. Eight hypotheses in order of expected saving, each with how to measure it:
+a baseline measurement (without it the rest is guesswork) → cache misses by subagent TTL (35–50
+minutes per block versus a TTL of 5 minutes) → filtering gate output with a hook → "one file —
+one read" and notes on disk (by others' data −9…50% of input) → a delta pass for top-up import
+and fix review → signatures instead of full `ref_paths` → a cheap model on the fixer, not on the
+hunter → trim the verifier on blocks without serious findings. What not to do — there too: do
+not compact the hunter's context, do not remove the verifier, do not move the hunter to a cheap
+model, do not cut blocks smaller to save (the cost does not depend on volume, so more blocks are
+more expensive).
 
-**Как делать.**
+**How to do it.**
 
-1. **Логировать расход на блок** — токены и время, в журнал, автоматически. Сейчас это
-   делается руками и потому делается не всегда.
-2. **Замерить `β` и `α`** на двух блоках заведомо разного размера.
-3. **Бюджет на блок с автообрывом.** При тридцатикратном разбросе один блок может стоить как
-   двадцать, и узнаём мы об этом постфактум. Форма известна: мягкий предел → предупреждение,
-   жёсткий → остановка, плюс размыкатель по скорости расхода и по растущему контексту.
-4. **Порядок обхода: риск первым, частота изменений вторым.** Наш нынешний порядок выбран по
-   цене ошибки (доступ, ядро, запись, деньги) — это правильнее, чем идти по хотспотам:
-   хотспот ловит дефект, а цена ошибки ловит **необратимость**. Частоту изменений брать
-   вторичным ключом внутри равного риска.
-   **Замерено 23.09 на первом проекте** — как предсказание, а не задним числом: история
-   поделена пополам, по первой половине ранжирование, по второй — куда пришлись починки.
-   Верхние 10% файлов собирают 34% будущих починок по частоте правок, 29% по размеру, 6%
-   случайно; произведение «частота × размер» к частоте ничего не добавило. Совпадает с
-   литературой (Nagappan & Ball 2005, Moser 2008, Graves 2000). Команда `order` печатает
-   блоки по риску, внутри — по суммарной частоте правок их файлов за окно.
-5. **Считать `CPF` по блокам** и печатать в статусе. Это единственное число, по которому
-   можно решать, продолжать ли сплошной проход.
+1. **Log the spend per block** — tokens and time, into the journal, automatically. Right now
+   this is done by hand and therefore not always.
+2. **Measure `β` and `α`** on two blocks of deliberately different size.
+3. **A per-block budget with auto-cutoff.** At a thirty-fold spread one block may cost as much as
+   twenty, and we learn about it after the fact. The form is known: a soft limit → a warning, a
+   hard one → a stop, plus a breaker by spend rate and by growing context.
+4. **Traversal order: risk first, change frequency second.** Our current order is chosen by the
+   cost of an error (access, core, writes, money) — that is more correct than going by hotspots:
+   a hotspot catches a defect, the cost of an error catches **irreversibility**. Take change
+   frequency as the secondary key within equal risk.
+   **Measured 23.09 on the first project** — as a prediction, not in hindsight: the history was
+   split in half, ranking from the first half, from the second — where the fixes landed. The top
+   10% of files collect 34% of future fixes by change frequency, 29% by size, 6% at random; the
+   product "frequency × size" added nothing to frequency. Agrees with the literature (Nagappan &
+   Ball 2005, Moser 2008, Graves 2000). The `order` command prints blocks by risk, within — by
+   the total change frequency of their files over a window.
+5. **Compute `CPF` per block** and print it in the status. This is the only number by which one
+   can decide whether to continue the exhaustive pass.
 
-**Закрыто, когда.** Известны `β` и `α` из замера, расход пишется автоматически, у блока есть
-бюджет с автообрывом, а `CPF` считается и участвует в решении о следующем блоке.
+**Closed when.** `β` and `α` are known from a measurement, the spend is written automatically,
+a block has a budget with auto-cutoff, and `CPF` is computed and takes part in the decision on the
+next block.
 
-**Ловушки.**
-- **Соблазн сэкономить дешёвой моделью.** На синтетике разница почти незаметна, а на реальных
-  изменениях лучший результат падает на 92% — вывод «дешёвая не хуже» верен только в режиме,
-  где обе почти не работают.
-- **Усреднять цену блока.** При разбросе в 30 раз среднее не описывает ничего; планировать
-  надо по верхнему квантилю.
-- **Считать `CPF` по всем находкам.** Только по дожившим до починки, иначе метрика вознаграждает
-  многословие.
-- **Экстраполировать линейно за пределы проверенного.** Формула честна внутри диапазона, в
-  котором калибровалась, а `r(b)` в ней — заглушка.
-
----
-
-## Направление 10. Что остаётся, когда каталог ревью удалён
-
-**Зачем.** Метод заканчивается сносом собственного каталога — и это правильно: документы
-ревью, чьи статусы никто не обновляет, описывают починенное как открытое. Отрасль эту беду
-измеряет: находки старше года называют долгом безопасности, половина организаций его несёт, а
-средний возраст открытой находки в отдельных отраслях доходит до 276 дней.
-
-Но в прежней редакции метод противоречил сам себе: порядок работы требовал **не удалять**
-отвергнутые находки — «иначе следующее ревью найдёт то же самое», — а финал удалял их вместе
-с каталогом. Противоречие устранено, и это стоит держать как отдельное направление: решить,
-что именно переживает снос, оказалось содержательной задачей.
-
-**Что уже известно.**
-
-- **Повторная проверка у аудиторов — узкая и дешёвая фаза, а не новый проход.** Формулировка
-  прямая: «retesting is only re-evaluating the previously reported issues, not searching for
-  new issues». Цифры одного реального случая: исходный аудит — 45 дней, повторная проверка
-  через семь месяцев — **5 дней**, около одиннадцати процентов усилий. И результат не
-  отдельный документ: обновляется **исходный отчёт**, каждой находке ставится «починено»,
-  «не починено» или «риск принят».
-- **Порога «изменилось N% кода» не существует, и это записано прямым текстом** в стандарте
-  преемственности доверия: способа определить по размеру изменения, велико ли его влияние,
-  нет. Широкая правка может не задеть ничего важного, точечная — изменить всё.
-- Оттуда же три вещи, которых у нас не было: **накопление мелких изменений — самостоятельный
-  повод** для пересмотра; **истёкшее время — отдельный критерий**, независимо от содержания
-  правок; результат повторной проверки становится **новой базой сравнения**.
-- **Регуляторика задаёт такт и список событий, а не процент:** «не реже раза в двенадцать
-  месяцев и после значимых изменений», где значимое определено перечнем.
-- **Протухшие трекеры лечат автоматикой**, и лучший вариант — не закрытие, а возврат: в
-  Chromium находки старше 90 дней уходят в архив, а часть — обратно в «неразобранное».
-
-**Как делать.**
-
-1. **Один неизменяемый файл-итог переживает снос.** В нём нет статусов, которые могут
-   протухнуть, потому что он описывает прошлое:
-   - дата и **коммит-база** — от какой ревизии всё считалось;
-   - блоки и их критерии приёмки — что именно считалось проверенным;
-   - **отвергнутые находки с причинами** и принятые риски — ровно то, что иначе будет найдено
-     заново;
-   - чем закрыт каждый класс: узда, тест, правило.
-2. **«Протухло» становится проверяемым:** `git log <коммит-база>..HEAD` по файлам блока
-   показывает, сколько изменилось с тех пор, как их читали глазами. Без коммит-базы это
-   неопределимо в принципе.
-3. **Поводы пройти заново — событиями, а не процентами:** изменилась граница системы; появился
-   новый класс угроз; накопилось много мелких правок; прошёл срок (ориентир — год).
-4. **Повторный проход заводит новую карточку блока**, а не переоткрывает старую.
-
-**Закрыто, когда.** Есть команда, которая собирает итог и печатает его одним файлом, а по
-итогу прошлого ревью можно за минуту сказать, какие блоки устарели сильнее всего.
-
-**Цена.** Малая: итог собирается из того, что уже лежит в реестре и состоянии.
-
-**Ловушки.**
-- Оставить вместо итога живой трекер — вернуться ровно к той болезни, от которой метод
-  избавляется сносом каталога.
-- Забыть коммит-базу: без неё итог красив и бесполезен.
-- Считать повторный проход дешёвым автоматически: он дешёв, **если** есть от чего
-  отталкиваться, и стоит как первый, если итог не сохранён.
-
----
-## Направление 11. Фаза починки как гейт
-
-**Зачем.** Метод находит быстрее, чем проект чинит, и это не особенность одного проекта.
-Первый проект: 77 находок на 5 блоках, починено 9 (12%). Там же сплошной пофайловый проход
-в первом варианте не довёл до починки ни одной из сотен карточек, а замечания ИИ-ревьюера в
-PR за два месяца накопились до 1147 неразобранных тредов. Находка, которая не доехала до
-починки, — долг, и через месяц реестр описывает код, которого уже нет.
-
-**Что уже известно.** В том же проекте сработало правило волны: следующая волна не
-стартует, пока серьёзное из предыдущей не в основной ветке. Лучше всех до починки доводят
-методы, где находка и правка идут одним заходом (линзы, вертикали, аудит с планом фаз).
-
-**Как делать.**
-
-1. В `blocks.json` — порог `fix_gate` (по умолчанию `high`).
-2. `set-status <ID> running` отказывает, если у пройденных блоков есть открытые находки
-   уровня порога и выше, и называет их. Выход — починить, отложить с причиной (`deferred`)
-   или отвергнуть; «отложено» требует причину и попадает в итог.
-3. `status` печатает долг починки отдельной строкой: сколько открыто по уровням и у скольких
-   блоков.
-4. `check` предупреждает, если открытая находка старше N дней (по `imported_at`).
-
-**Закрыто, когда.** Гейт стоит, долг виден в статусе, и на следующем проекте доля починенного
-к моменту старта следующего блока не ниже 80% для порога.
-
-**Цена.** Малая: одна проверка при смене статуса и строка в статусе.
-
-**Ловушки.**
-- Превратить `deferred` в мусорную корзину. Отложенное с причиной — законно, без причины —
-  отказ, и в итоге отложенные перечисляются поимённо.
-- Ставить порог на `medium`: тогда ревью встанет на мелочах, и гейт начнут обходить.
+**Pitfalls.**
+- **The temptation to save with a cheap model.** On synthetic data the difference is nearly
+  invisible, and on real changes the best result falls by 92% — the conclusion "the cheap one is
+  no worse" holds only in a regime where both barely work.
+- **Averaging the cost of a block.** At a 30-fold spread the mean describes nothing; planning must
+  go by the upper quantile.
+- **Counting `CPF` over all findings.** Only over those that survived to a fix, otherwise the
+  metric rewards verbosity.
+- **Extrapolating linearly beyond what was checked.** The formula is honest inside the range it
+  was calibrated in, and `r(b)` in it is a stub.
 
 ---
 
-## Направление 12. Стыки между блоками: карта связанности изменений
+## Direction 10. What remains when the review directory is deleted
 
-**Зачем.** Блок — единица, внутри которой агент видит всё; стык между двумя блоками не видит
-никто. Замер на первом проекте: из 553 пар файлов, которые меняются вместе не меньше трёх
-раз, **423 (76%) лежат в разных блоках**. Большая часть — общие узлы (схема БД, словари), но
-и без них остаётся **38 сильных пар**, и среди них — ровно те места, где проект уже
-обжигался: права между токеном и инструментом агента, доменная модель и её хранилище (тихая
-потеря полей).
+**Why.** The method ends with deleting its own directory — and that is right: review documents
+whose statuses nobody updates describe the fixed as open. The industry measures this trouble:
+findings older than a year are called security debt, half of organisations carry it, and the mean
+age of an open finding in some industries reaches 276 days.
 
-**Что уже известно.** Связанность изменений (Gall 1998; Zimmermann et al., ROSE, TSE 2005)
-находит зависимости, не видимые анализом кода: в трёх лучших подсказках — нужное место правки
-в >70% случаев. Группы связанных файлов объясняют 20–61% усилий на сопровождение (Xiao, Cai,
-Kazman, ICSE 2016). Считается из `git log` за минуты, без зависимостей.
+But in the previous edition the method contradicted itself: the working procedure required **not
+deleting** rejected findings — "otherwise the next review will find the same thing" — while the
+finale deleted them together with the directory. The contradiction has been removed, and it is
+worth keeping as a separate direction: deciding what exactly survives the deletion turned out to
+be a substantive task.
 
-**Как делать.**
+**What is already known.**
 
-1. Команда `coupling`: пары файлов из разных блоков, совместных правок ≥ K и доля ≥ 50%;
-   массовые коммиты (больше M файлов) и общие узлы (файл, связанный с ≥ 6 блоками)
-   отсекаются и печатаются отдельно.
-2. Для каждой пары — предложение: добавить соседа в `ref_paths` блока, а в манифест —
-   гипотезу о переходе («значение X, уходя из A, доходит до B без потерь»).
-3. Кластер пар между двумя блоками — сигнал завести **блок-стык** (вертикаль): одна цепочка
-   от входа до хранения, с одним названным экземпляром данных на всём пути.
-4. Карта пересчитывается при `coverage` и попадает в итог.
+- **Re-verification at auditors is a narrow and cheap phase, not a new pass.** The wording is
+  direct: "retesting is only re-evaluating the previously reported issues, not searching for
+  new issues". The numbers of one real case: the original audit — 45 days, the re-verification
+  seven months later — **5 days**, about eleven percent of the effort. And the result is not a
+  separate document: **the original report** is updated, each finding gets "fixed", "not fixed"
+  or "risk accepted".
+- **A threshold "N% of the code changed" does not exist, and this is written in plain text** in
+  the assurance continuity standard: there is no way to determine from the size of a change how
+  large its impact is. A broad edit may touch nothing important, a targeted one may change
+  everything.
+- From there, three things we did not have: **accumulation of small changes is a reason in its
+  own right** for a re-examination; **elapsed time is a separate criterion**, regardless of the
+  content of the edits; the result of a re-verification becomes **the new baseline for
+  comparison**.
+- **Regulation sets a cadence and a list of events, not a percentage:** "no less than once every
+  twelve months and after significant changes", where significant is defined by a list.
+- **Stale trackers are cured by automation**, and the best variant is not closing but returning:
+  in Chromium findings older than 90 days go to the archive, and some — back to "untriaged".
 
-**Закрыто, когда.** Команда есть, пары входят в `ref_paths` и гипотезы, и хотя бы один
-блок-стык прошёл полный цикл с находками.
+**How to do it.**
 
-**Цена.** Малая: разбор `git log` и печать.
+1. **One immutable summary file survives the deletion.** It has no statuses that can go stale,
+   because it describes the past:
+   - the date and the **base commit** — from which revision everything was counted;
+   - the blocks and their acceptance criteria — what exactly counted as checked;
+   - **rejected findings with reasons** and accepted risks — exactly what will otherwise be found
+     anew;
+   - how each class is closed: a guard, a test, a rule.
+2. **"Stale" becomes checkable:** `git log <base commit>..HEAD` over the block's files shows how
+   much changed since they were read by eye. Without the base commit this is undefinable in
+   principle.
+3. **Reasons to pass again — as events, not percentages:** the system boundary changed; a new
+   class of threats appeared; many small edits accumulated; the term elapsed (guideline — a year).
+4. **A repeated pass opens a new block card**, not a reopening of the old one.
 
-**Ловушки.**
-- Шум массовых правок (кодмоды, форматирование) рождает ложные пары — отсечка по размеру
-  коммита обязательна.
-- Новый код без истории пар не даёт: карта дополняет нарезку блоков, а не заменяет её.
-- Общие узлы связаны со всем; включать их в `ref_paths` каждого блока — значит раздуть
-  контекст без пользы.
+**Closed when.** There is a command that assembles the summary and prints it as one file, and
+from the summary of a past review one can say within a minute which blocks have gone stale the
+most.
+
+**Cost.** Small: the summary is assembled from what already lies in the register and the state.
+
+**Pitfalls.**
+- Leaving a live tracker in place of the summary — a return to exactly the disease the method
+  gets rid of by deleting the directory.
+- Forgetting the base commit: without it the summary is pretty and useless.
+- Assuming a repeated pass is cheap automatically: it is cheap **if** there is something to start
+  from, and costs as much as the first if the summary was not saved.
+
+---
+## Direction 11. The fix phase as a gate
+
+**Why.** The method finds faster than the project fixes, and this is not a peculiarity of one
+project. The first project: 77 findings on 5 blocks, 9 fixed (12%). In the same project the
+exhaustive file-by-file pass in its first variant brought not one of hundreds of cards to a fix,
+and the AI reviewer's comments in PRs accumulated over two months to 1147 untriaged threads. A
+finding that did not reach a fix is debt, and in a month the register describes code that no
+longer exists.
+
+**What is already known.** In the same project the wave rule worked: the next wave does not
+start until the serious items of the previous one are in the main branch. The methods that bring
+things to a fix best are those where the finding and the fix go in one pass (lenses, vertical
+slices, an audit with a phase plan).
+
+**How to do it.**
+
+1. In `blocks.json` — a threshold `fix_gate` (default `high`).
+2. `set-status <ID> running` refuses if the passed blocks have open findings at the threshold
+   level and above, and names them. The way out — fix, defer with a reason (`deferred`) or
+   reject; "deferred" requires a reason and goes into the summary.
+3. `status` prints the fix debt as a separate line: how many are open by level and in how many
+   blocks.
+4. `check` warns if an open finding is older than N days (by `imported_at`).
+
+**Closed when.** The gate is in place, the debt is visible in the status, and on the next project
+the share fixed by the time the next block starts is no lower than 80% for the threshold.
+
+**Cost.** Small: one check on status change and a line in the status.
+
+**Pitfalls.**
+- Turning `deferred` into a rubbish bin. Deferred with a reason is lawful, without a reason — a
+  refusal, and in the summary the deferred are listed by name.
+- Setting the threshold at `medium`: then the review will stall on small stuff, and people will
+  start going around the gate.
 
 ---
 
-## Направление 13. Модель угроз как тип блока
+## Direction 12. Seams between blocks: a change coupling map
 
-**Зачем.** Блоки доступа и границ доверия сейчас проходятся теми же гипотезами, что и
-остальные. Для безопасности есть отраслевой стандарт — модель угроз по потокам данных:
-нарисовать, откуда приходят данные и где пересекают границы доверия, и пройти каждую
-границу по классам угроз (STRIDE: подмена, искажение, отказ от действия, раскрытие, отказ в
-обслуживании, повышение прав).
+**Why.** A block is a unit inside which the agent sees everything; the seam between two blocks
+is seen by nobody. The measurement on the first project: of 553 file pairs that change together
+at least three times, **423 (76%) lie in different blocks**. Most are shared hubs (the DB
+schema, dictionaries), but even without them **38 strong pairs** remain, and among them — exactly
+the places where the project has already been burnt: permissions between a token and an agent
+tool, the domain model and its storage (silent loss of fields).
 
-**Что уже известно.** Shostack, *Threat Modeling* (2014); практика Microsoft SDL. Данных
-немного и они отрезвляют: на студентах полнота 0,36 при точности 0,81 (Scandariato et al.,
-2015, по пересказу). То есть метод не заменяет чтение кода, а даёт **список вопросов**,
-которые иначе не зададут.
+**What is already known.** Change coupling (Gall 1998; Zimmermann et al., ROSE, TSE 2005) finds
+dependencies invisible to code analysis: in the three best suggestions — the needed place to
+change in >70% of cases. Groups of coupled files explain 20–61% of maintenance effort (Xiao, Cai,
+Kazman, ICSE 2016). Computed from `git log` in minutes, without dependencies.
 
-**Как делать.**
+**How to do it.**
 
-1. Заготовка манифеста `assets/threat-model.example.md`: диаграмма потоков текстом (кто →
-   что → куда, где граница доверия), и по каждой границе — гипотезы по шести классам STRIDE.
-2. Гипотезы нумеруются как обычно и проходят тот же гейт вердиктов.
-3. Итог блока — не только находки, но и сама диаграмма: она переживает снос каталога ревью
-   и уходит в документацию проекта.
+1. A `coupling` command: file pairs from different blocks, joint changes ≥ K and a share ≥ 50%;
+   mass commits (more than M files) and shared hubs (a file linked to ≥ 6 blocks) are cut off
+   and printed separately.
+2. For each pair — a suggestion: add the neighbour to the block's `ref_paths`, and to the
+   manifest — a hypothesis about the transition ("value X, leaving A, reaches B without loss").
+3. A cluster of pairs between two blocks is a signal to open a **seam block** (a vertical slice):
+   one chain from input to storage, with one named instance of data along the whole path.
+4. The map is recomputed on `coverage` and goes into the summary.
 
-**Закрыто, когда.** Заготовка есть, и один блок доступа прошёл по ней с находками, которых не
-было при обычном манифесте.
+**Closed when.** The command exists, pairs go into `ref_paths` and hypotheses, and at least one
+seam block has gone through the full cycle with findings.
 
-**Цена.** Малая для набора, заметная для человека: диаграмму потоков рисует тот, кто знает
-систему.
+**Cost.** Small: parsing `git log` and printing.
 
-**Ловушки.**
-- Диаграмма, нарисованная по памяти, а не по коду, — модель угроз для другой системы.
-  Потоки сверяются с кодом охотником, расхождение — находка.
-- Шесть классов на каждую границу быстро дают сотню гипотез; брать только применимые,
-  остальные закрывать вердиктом «неприменима» с причиной.
-
----
-
-## Направление 14. Банк линз — источник гипотез для манифестов
-
-**Зачем.** Линза — одно свойство, проверенное по всему коду: доступ, деньги, приватность,
-целостность данных, надёжность, производительность, тесты как актив, правда документации.
-В первом проекте линзы за день находили повышение прав, утечку лимита расходов и тихую
-потерю данных. В наборе линзы уже есть в двух видах — сквозные блоки фазы 1 (блок «доступ»
-и есть линза безопасности) и модель угроз (направление 13), — но **вопросы каждой линзы
-пишутся в манифест заново**. В первом проекте их 26 (16 для сайта, 10 для ядра), с
-первоисточниками: OWASP ASVS, Google SRE, чек-лист ревью Google, Rust API Guidelines,
-protobuf Dos and Don'ts.
-
-**Что уже известно.**
-
-- **Чек-лист сам по себе не лучше чтения без метода; сценарии — лучше** (Porter, Votta,
-  Basili, TSE 1995; метаанализ чтения с позиции — без явного эффекта, Ciolkowski 2009). Наши
-  линзы работали не как галочки, а как вопросы в форме «вход → ожидание → проба». Банк
-  обязан хранить их в этой форме.
-- **Линза не исчерпывает область:** денежная линза дала 6 находок, блок с гипотезами по той
-  же области через два месяца — 21, без пересечений (`docs/review-methods.md`, раздел 2).
-  Поэтому банк — источник гипотез для блока, а не замена блоку.
-- **Второй знаменатель покрытия уже есть** — гипотезы с вердиктами; банк только упрощает их
-  написание и делает сравнимыми между проектами.
-
-**Как делать.**
-
-1. `references/lenses/<свойство>.md` — по файлу на свойство: 10–20 вопросов в форме
-   гипотезы (что проверить, чем доказать, что считается находкой), у каждого источник.
-   Первые: доступ, деньги, приватность, целостность данных, надёжность, тесты как актив,
-   правда документации, граница доверия.
-2. Заготовка манифеста получает раздел «из каких линз взяты гипотезы»; `prompt` ничего не
-   меняет — гипотезы уже в манифесте.
-3. Отчёт о покрытии по гипотезам печатает, какие линзы блок применил; линза, ни разу не
-   применённая ни одним блоком проекта, — предупреждение при завершении ревью (свойство,
-   которое никто не проверял).
-4. Прогон на PR: те же файлы годятся как вопросник для ревью одного диффа — в первом
-   проекте 12 линз, розданные четырём агентам на один PR, дали 14 находок сверх авто-ревью.
-
-**Закрыто, когда.** Банк из восьми линз с источниками лежит в `references/lenses/`, хотя бы
-два блока написали манифесты по нему, и отчёт о покрытии называет неприменённые линзы.
-
-**Цена.** Малая для инструмента; основная работа — перевести 26 проектных линз в общую
-форму и вычистить проектное.
-
-**Ловушки.**
-- Превратить банк в чек-лист, который агент проходит галочками, — это ровно то, что не
-  работает по данным. Вопрос без «чем доказать» в банк не попадает.
-- Считать линзу пройденной, потому что её гипотезы стоят в манифесте: гипотеза закрывается
-  вердиктом, а не присутствием.
-- Тащить в банк проектное («лимит совета — 20 в месяц»): банк общий, число — из инвариантов.
+**Pitfalls.**
+- The noise of mass changes (codemods, formatting) produces false pairs — a cut-off by commit
+  size is mandatory.
+- New code without history gives no pairs: the map complements the block cut, it does not
+  replace it.
+- Shared hubs are linked to everything; putting them into every block's `ref_paths` means
+  bloating the context to no benefit.
 
 ---
 
-## Мелкое, но замеренное: скорость `check`
+## Direction 13. A threat model as a block type
 
-На реальном ревью (1750 файлов, 5 пройденных блоков, 77 находок) `check` идёт ~7 секунд:
-2251 вызов git, из них 958 — `hash-object` по одному файлу на отпечатки, ещё 1204 —
-`ls-files` на каждый шаблон путей. Пока терпимо, но растёт с числом пройденных блоков и
-шириной `ref_paths`. Лечение известное и без новых зависимостей: отпечатки — одним
-`git hash-object --stdin-paths` на все файлы разом, состав — одним `ls-files --stage` с
-разбором шаблонов в Python (`fnmatch` с семантикой pathspec). Делать, когда `check` станет
-дольше, чем его готовы ждать перед коммитом.
+**Why.** Access and trust-boundary blocks are currently passed with the same hypotheses as the
+rest. For security there is an industry standard — a threat model by data flows: draw where the
+data comes from and where it crosses trust boundaries, and walk each boundary by threat class
+(STRIDE: spoofing, tampering, repudiation, information disclosure, denial of service, elevation
+of privilege).
 
-## Чего делать не нужно
+**What is already known.** Shostack, *Threat Modeling* (2014); the practice of Microsoft SDL.
+The data is scant and sobering: on students recall 0.36 at precision 0.81 (Scandariato et al.,
+2015, from a retelling). So the method does not replace reading code, but gives **a list of
+questions** that otherwise would not be asked.
 
-- **Превращать в ревьюера изменений.** Ниша плотно занята, и метод не про это: ревью диффа и
-  сплошная инвентаризация — разные задачи с разной экономикой. Тот же анализатор даёт около
-  нуля исправлений пакетным прогоном по базе и свыше 70% на изменениях; наше место — разовая
-  инвентаризация с выходом в узду, а не непрерывный режим.
-- **Пакет в общем репозитории пакетов.** С 0.4.0 набор — скилл, и ставится копией
-  (`npx skills add`), в проект — ради того, чтобы версия оснастки была прибита к репозиторию
-  вместе с состоянием: ревью идёт месяцами, и обновление «само» здесь — дефект.
-- **Собрания для сведения находок.** Независимое чтение важнее обсуждения: собрания инспекций
-  добавляют к индивидуальному чтению почти ничего (Votta 1993; Porter, Votta, Basili 1995).
-  Сведение у нас делает проверяющий по файлам, а не обсуждение агентов.
-- **Сплошной проход «файл за файлом по каталогу» как режим.** На первом проекте 90% его
-  находок оказались повторами двадцати корней, а прямых замеров отдачи такого прохода в
-  литературе нет. Блоки с гипотезами решают ту же задачу полноты дешевле.
-- **Зависимости.** Любая тянет за собой окружение в чужой проект. Граница — стандартная
-  библиотека и `git`.
-- **Веб-интерфейс и база.** Для реестров находок с дедупликацией и жизненным циклом уже есть
-  зрелые платформы. Наше состояние живёт в git, потому что должно переживать перезапуск
-  сессии и читаться глазами в диффе.
-- **Автоматический поиск без человека в цикле.** Точность ИИ-ревьюера на реальных изменениях —
-  3.56%, доля ложных на реальных уязвимостях — 84.82%. Приёмка человеком не временная мера, а
-  часть конструкции.
-- **Награждать первенство.** Во всех соревновательных аудитах от этого отказались: первенство
-  поощряет скорость, а нужна точность.
-- **Экономить дешёвой моделью на проверке.** На синтетике разница незаметна, на реальном коде
-  лучший результат падает на 92%.
+**How to do it.**
+
+1. A manifest template `assets/threat-model.example.md`: a flow diagram as text (who → what →
+   where, where the trust boundary is), and for each boundary — hypotheses across the six STRIDE
+   classes.
+2. The hypotheses are numbered as usual and go through the same verdict gate.
+3. The block's output is not only the findings but the diagram itself: it outlives deleting the
+   review directory and goes into the project's documentation.
+
+**Closed when.** The template exists, and one access block has been passed with it, with findings
+that were not there with an ordinary manifest.
+
+**Cost.** Small for the kit, noticeable for the human: the flow diagram is drawn by someone who
+knows the system.
+
+**Pitfalls.**
+- A diagram drawn from memory rather than from the code is a threat model for another system.
+  The flows are checked against the code by the hunter, a divergence is a finding.
+- Six classes per boundary quickly give a hundred hypotheses; take only the applicable ones, close
+  the rest with a verdict "not applicable" with a reason.
 
 ---
 
-## Порядок
+## Direction 14. A lens bank — a source of hypotheses for manifests
 
-Пересобран 23.09 по сравнению методов: главная дыра оказалась не в поиске, а в том, что
-найденное не доезжает до починки, и в стыках, которые блоки режут по устройству.
+**Why.** A lens is one property checked across all the code: access, money, privacy, data
+integrity, reliability, performance, tests as an asset, truth of documentation. In the first
+project lenses found in a day an elevation of privilege, a spend-limit leak and silent data loss.
+The kit already has lenses in two forms — the cross-cutting blocks of phase 1 (the "access" block
+is the security lens) and the threat model (direction 13) — but **the questions of each lens are
+written into the manifest anew**. In the first project there are 26 of them (16 for the site,
+10 for the core), with primary sources: OWASP ASVS, Google SRE, Google's review checklist, Rust
+API Guidelines, protobuf Dos and Don'ts.
 
-**Сейчас (дёшево и закрывает то, что уже болит):**
+**What is already known.**
 
-0. **Направление 9, замер токенов** — один блок как есть с разложением расхода по осям
-   (кэш, вывод инструментов, перечитывания). Без него все гипотезы экономии — гадание, а
-   самая дешёвая из них (TTL кэша субагентов) закрывается одним прогоном.
-1. **Направление 11** — фаза починки как гейт. Одна проверка; без неё каждая следующая
-   находка — долг. Причина у `deferred` и ревью правок перед `closed` уже есть (0.5.0).
-2. **Направление 12** — карта связанности изменений. Минуты счёта, и у нарезки блоков
-   появляются данные о стыках.
-3. **Направление 9, пункт 4** — команда `order`: риск первым, частота правок вторым (замер
-   есть).
-4. **Направление 10** — итог, переживающий снос каталога.
+- **A checklist by itself is no better than reading without a method; scenarios are better**
+  (Porter, Votta, Basili, TSE 1995; the meta-analysis of perspective-based reading — no clear
+  effect, Ciolkowski 2009). Our lenses worked not as tick-boxes but as questions in the form
+  "input → expectation → probe". The bank must store them in this form.
+- **A lens does not exhaust an area:** the money lens gave 6 findings, a block with hypotheses on
+  the same area two months later — 21, with no overlap (`docs/review-methods.md`, section 2).
+  So the bank is a source of hypotheses for a block, not a replacement for the block.
+- **The second coverage denominator already exists** — hypotheses with verdicts; the bank only
+  simplifies writing them and makes them comparable between projects.
 
-**Дальше (требует замера или работы человека):**
+**How to do it.**
 
-5. **Направление 1** — сначала дешёвая выборка (59 файлов закрытых блоков, другой моделью),
-   потом корпус с известным ответом.
-6. **Направление 13** — модель угроз для ближайшего блока доступа; **направление 14** —
-   банк линз: первые восемь из проектных 26, в форме гипотез.
-7. **Направление 8, пункты 1–4** — двое ведут ревью одновременно.
-8. **Направление 3** — прогон ворот по корню; поиск вариантов как узда.
+1. `references/lenses/<property>.md` — one file per property: 10–20 questions in hypothesis
+   form (what to check, how to prove, what counts as a finding), each with a source. The first
+   ones: access, money, privacy, data integrity, reliability, tests as an asset, truth of
+   documentation, trust boundary.
+2. The manifest template gets a section "which lenses the hypotheses are taken from"; `prompt`
+   changes nothing — the hypotheses are already in the manifest.
+3. The coverage report by hypotheses prints which lenses the block applied; a lens never applied
+   by any block of the project is a warning at the end of the review (a property nobody checked).
+4. A run on a PR: the same files work as a questionnaire for reviewing one diff — in the first
+   project 12 lenses handed out to four agents on one PR gave 14 findings on top of the
+   auto-review.
 
-**Потом, по мере надобности:**
+**Closed when.** A bank of eight lenses with sources lies in `references/lenses/`, at least two
+blocks have written manifests from it, and the coverage report names the unapplied lenses.
 
-9. Направления 2, 4, 5, 6, 7, 9 (остальное) — переносимость, третий слой покрытия,
-   калибровка искателя, архив прогона, многорепозиторность, экономика. Каждое полезно, но ни
-   одно не закрывает дыру, которая мешает сегодня.
+**Cost.** Small for the tool; the main work is translating the 26 project lenses into a common
+form and cleaning out the project-specific.
+
+**Pitfalls.**
+- Turning the bank into a checklist the agent ticks through — that is exactly what does not work
+  by the data. A question without "how to prove" does not get into the bank.
+- Counting a lens as passed because its hypotheses stand in the manifest: a hypothesis is closed
+  by a verdict, not by presence.
+- Dragging the project-specific into the bank ("the council limit — 20 a month"): the bank is
+  shared, the number comes from the invariants.
 
 ---
 
-## Как пользоваться этим документом
+## Small but measured: the speed of `check`
 
-У каждого направления один формат: **зачем** (из факта, а не из желания), **что уже
-известно** (наш опыт и чужой, с источниками), **как делать**, **закрыто когда**, **цена**,
-**ловушки**. Если добавляете направление — держите формат: без раздела «закрыто когда» оно
-превращается в пожелание, а без «ловушек» его повторят с теми же ошибками.
+On a real review (1750 files, 5 passed blocks, 77 findings) `check` takes ~7 seconds: 2251 git
+calls, of which 958 are `hash-object` one file at a time for fingerprints, another 1204 are
+`ls-files` per path pattern. Tolerable for now, but it grows with the number of passed blocks
+and the width of `ref_paths`. The cure is known and needs no new dependencies: fingerprints — a
+single `git hash-object --stdin-paths` for all files at once, composition — a single
+`ls-files --stage` with pattern parsing in Python (`fnmatch` with pathspec semantics). Do it when
+`check` becomes longer than people are willing to wait before a commit.
 
-Источники по каждому пункту — в [`docs/prior-art.md`](docs/prior-art.md), наши цифры — в
-[`docs/measurements.md`](docs/measurements.md). Соседи на GitHub по каждому направлению и
-чек-лист открытия репозитория — в [`docs/open-source.md`](docs/open-source.md). Если цифра в этом файле разошлась с ними,
-верны те: здесь она может устареть, там она снята с методикой.
+## What not to do
+
+- **Turning it into a change reviewer.** The niche is densely occupied, and the method is not
+  about that: diff review and an exhaustive inventory are different tasks with different
+  economics. The same analyser yields about zero fixes in a batch run over the codebase and over
+  70% on changes; our place is a one-off inventory with an exit into a guard, not a continuous
+  mode.
+- **A package in a shared package registry.** Since 0.4.0 the kit is a skill and is installed as
+  a copy (`npx skills add`), into the project — so that the tooling version is pinned to the
+  repository together with the state: a review runs for months, and an update "by itself" here is
+  a defect.
+- **Meetings to consolidate findings.** Independent reading matters more than discussion:
+  inspection meetings add almost nothing to individual reading (Votta 1993; Porter, Votta,
+  Basili 1995). Consolidation with us is done by the verifier over the files, not by a discussion
+  between agents.
+- **An exhaustive "file by file through a directory" pass as a mode.** On the first project 90%
+  of its findings turned out to be repeats of twenty roots, and there are no direct measurements
+  of the yield of such a pass in the literature. Blocks with hypotheses solve the same
+  completeness task cheaper.
+- **Dependencies.** Each drags an environment into someone else's project. The boundary is the
+  standard library and `git`.
+- **A web interface and a database.** For findings registers with deduplication and a lifecycle
+  there are already mature platforms. Our state lives in git because it must survive a session
+  restart and be readable by eye in a diff.
+- **Automatic search without a human in the loop.** The precision of an AI reviewer on real
+  changes is 3.56%, the share of false on real vulnerabilities is 84.82%. Human acceptance is not
+  a temporary measure but part of the design.
+- **Rewarding being first.** All competitive audits abandoned it: being first encourages speed,
+  and what is needed is precision.
+- **Saving with a cheap model on verification.** On synthetic data the difference is invisible,
+  on real code the best result falls by 92%.
+
+---
+
+## Order
+
+Reassembled 23.09 after the comparison of methods: the main hole turned out to be not in the
+search but in the fact that what is found does not reach a fix, and in the seams that blocks cut
+by design.
+
+**Now (cheap and closes what already hurts):**
+
+0. **Direction 9, the token measurement** — one block as is, with the spend broken down by axis
+   (cache, tool output, re-reads). Without it all the saving hypotheses are guesswork, and the
+   cheapest of them (the subagent cache TTL) is closed by a single run.
+1. **Direction 11** — the fix phase as a gate. One check; without it every next finding is debt.
+   The reason on `deferred` and fix review before `closed` are already there (0.5.0).
+2. **Direction 12** — the change coupling map. Minutes of computation, and the block cut gets
+   data about seams.
+3. **Direction 9, item 4** — the `order` command: risk first, change frequency second (the
+   measurement exists).
+4. **Direction 10** — the summary that outlives deleting the directory.
+
+**Next (requires a measurement or human work):**
+
+5. **Direction 1** — first the cheap sample (59 files of closed blocks, by another model), then
+   the corpus with known answers.
+6. **Direction 13** — a threat model for the nearest access block; **direction 14** — the lens
+   bank: the first eight of the project's 26, in hypothesis form.
+7. **Direction 8, items 1–4** — two people run the review at once.
+8. **Direction 3** — a run of the gates by root; variant analysis as a guard.
+
+**Later, as needed:**
+
+9. Directions 2, 4, 5, 6, 7, 9 (the rest) — portability, the third layer of coverage, seeker
+   calibration, the run archive, multi-repository, economics. Each is useful, but none closes the
+   hole that hurts today.
+
+---
+
+## How to use this document
+
+Every direction has one format: **why** (from a fact, not from a wish), **what is already
+known** (our experience and others', with sources), **how to do it**, **closed when**, **cost**,
+**pitfalls**. If you add a direction — keep the format: without a "closed when" section it turns
+into a wish, and without "pitfalls" it will be repeated with the same mistakes.
+
+The sources for each item are in [`docs/prior-art.md`](docs/prior-art.md), our figures are in
+[`docs/measurements.md`](docs/measurements.md). Neighbours on GitHub for each direction and the
+checklist for opening the repository are in [`docs/open-source.md`](docs/open-source.md). If a figure in this file diverges from them,
+they are right: here it can go stale, there it was taken with a method.

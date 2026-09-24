@@ -1,199 +1,205 @@
-# Замеры
+[Русская версия](ru/measurements.md)
 
-Всё, что про этот метод известно из фактов, а не из рассуждений. Здесь же — методика и
-границы, за которыми цифру переносить нельзя.
+# Measurements
 
-## 0. На чём метод обкатан
+Everything known about this method from facts rather than reasoning. Also here: the
+methodology and the boundaries beyond which a number must not be carried.
 
-Три проекта, все на TypeScript, все принадлежат одному человеку — это важная граница, см.
-оговорку в конце раздела. Названия не раскрываются: проекты приватные, и к методу их имена
-ничего не добавляют.
+## 0. What the method has been run on
 
-| проект | файлов | блоков | пройдено | находок | починено | отвергнуто | дублей |
+Three projects, all TypeScript, all owned by one person — an important boundary, see the
+caveat at the end of the section. Names are not disclosed: the projects are private, and their
+names add nothing to the method.
+
+| project | files | blocks | done | findings | fixed | rejected | duplicates |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| А | 467 | 27 | **27** | 313 | 81.8% | 2.6% | 1.6% |
-| Б | 252 | 13 | 8 | 210 | 77.1% | 3.8% | 2.4% |
-| В | 1803 | 67 | 4 | 64 | — | ~3% | 6% |
+| A | 467 | 27 | **27** | 313 | 81.8% | 2.6% | 1.6% |
+| B | 252 | 13 | 8 | 210 | 77.1% | 3.8% | 2.4% |
+| C | 1803 | 67 | 4 | 64 | — | ~3% | 6% |
 
-**Первое ревью доведено до конца:** в проекте А пройдены все 27 блоков, 256 находок
-починены, 44 отложены с решением, 8 отвергнуты с причиной.
+**The first review has been carried to the end:** in project A all 27 blocks are done, 256
+findings fixed, 44 deferred with a decision, 8 rejected with a reason.
 
-**Доля отвергнутого стабильна на трёх независимых проектах — около 3%.** Это тот же
-результат, который дал замер с подложными находками (раздел 2), но полученный другим путём и
-на порядок большей выборке: 587 находок против 12. Охотник, обязанный предъявлять сценарий
-отказа, приносит мало мусора — и это свойство метода, а не удача одного прогона.
+**The share of rejected findings is stable across three independent projects — about 3%.**
+This is the same result the planted-findings measurement gave (section 2), but obtained a
+different way and on a sample an order of magnitude larger: 587 findings against 12. A hunter
+obliged to present a failure scenario brings little junk — and that is a property of the
+method, not the luck of a single run.
 
-**Плотность находок:** 0.67 и 0.83 находки на файл под ревью. Блок в среднем — 17–27 файлов.
+**Finding density:** 0.67 and 0.83 findings per file under review. A block averages 17–27 files.
 
-**Распределение по серьёзности** (проект Б, где оно размечено полностью): 3 critical,
-30 high, 69 medium, 108 low. Две трети находок — не срочные; метод окупается не критическими
-дырами, а тем, что показывает всю картину сразу.
+**Distribution by severity** (project B, where it is fully labelled): 3 critical, 30 high,
+69 medium, 108 low. Two thirds of findings are not urgent; the method pays for itself not
+through critical holes but by showing the whole picture at once.
 
-⚠️ **Чего эти цифры не доказывают.** Все три проекта — TypeScript, все писаны одним
-человеком, и часть кода в них писал тот же ИИ, что потом его и ревьюил. Переносимость
-*между проектами* подтверждена; переносимость *на другой язык, другую команду и чужой код* —
-нет.
+⚠️ **What these numbers do not prove.** All three projects are TypeScript, all written by one
+person, and part of the code in them was written by the same AI that later reviewed it.
+Transferability *between projects* is confirmed; transferability *to another language, another
+team and someone else's code* — is not.
 
-Будущим сессиям: **дополняйте таблицы, а не переписывайте**. Замер без методики и без
-оговорок — не замер.
+To future sessions: **extend the tables, do not rewrite them**. A measurement without a
+methodology and without caveats is not a measurement.
 
-## 1. Сколько стоит блок
+## 1. What a block costs
 
-Замеры сняты на проекте В (сентябрь 2026).
+Measured on project C (September 2026).
 
-| блок | объём | находок | агентов | токенов | время |
+| block | size | findings | agents | tokens | time |
 |---|---|---:|---:|---:|---:|
-| доступ и видимость | 58 файлов, 4017 строк | 12 | 2 | 576 тыс. | ~35 мин |
-| доменное ядро | 13 файлов | 14 | 2 | 446 тыс. | ~34 мин |
-| запись и версии | 42 файла | 17 | 2 | 679 тыс. | ~48 мин |
-| деньги и квоты | 10 файлов, 782 строки | 18 | 3 | 557 тыс.¹ | ~35 мин |
+| access and visibility | 58 files, 4017 lines | 12 | 2 | 576k | ~35 min |
+| domain core | 13 files | 14 | 2 | 446k | ~34 min |
+| writes and versions | 42 files | 17 | 2 | 679k | ~48 min |
+| money and quotas | 10 files, 782 lines | 18 | 3 | 557k¹ | ~35 min |
 
-¹ Считался в режиме замера двух схем: два охотника (204 + 222 тыс.) и проверяющий (131 тыс.).
-Обычный проход того же блока — охотник плюс проверяющий, около 335 тыс.
+¹ Counted in the two-scheme measurement mode: two hunters (204k + 222k) and a verifier (131k).
+A normal pass over the same block — hunter plus verifier — is about 335k.
 
-**Что из этого следует.** Блок стоит 400–700 тысяч токенов и 35–50 минут, и цена слабо
-зависит от числа файлов: блок из 13 файлов обошёлся дороже блока из 58, потому что его
-проверка требовала исполнения. Планировать стоит по числу блоков, а не по объёму кода.
+**What follows from this.** A block costs 400–700 thousand tokens and 35–50 minutes, and the
+price depends weakly on the number of files: a 13-file block cost more than a 58-file one,
+because checking it required execution. Plan by the number of blocks, not by the volume of
+code.
 
-⚠️ Перенос на другие проекты не проверен: все четыре блока — один проект, один язык, одна
-модель (Opus) в обеих ролях.
+⚠️ Transfer to other projects is unverified: all four blocks are one project, one language, one
+model (Opus) in both roles.
 
-## 2. Проверяющий против подложных находок
+## 2. The verifier against planted findings
 
-**Вопрос.** Доля отвергнутого у нас была 6% (2 находки из 34). Это точность охотника или
-сговорчивость проверяющего?
+**Question.** Our share of rejected findings was 6% (2 findings out of 34). Is that the
+hunter's precision or the verifier's compliance?
 
-**Методика.** Шесть настоящих находок блока перемешаны с шестью сочинёнными так, чтобы
-каждая опровергалась исполнением (правило, которое якобы отсутствует; регистр схемы,
-который якобы не учитывается; граница хоста, которая якобы проверяется подстрокой).
-Порядок перемешан, происхождение проверяющему не сообщалось. Набор прогнан дважды —
-двумя моделями независимо.
+**Method.** Six real findings from a block were mixed with six invented ones, each written so
+that execution would refute it (a rule that supposedly is missing; a schema case that
+supposedly is not handled; a host boundary that supposedly is checked by substring). The order
+was shuffled, the origin was not disclosed to the verifier. The set was run twice — by two
+models independently.
 
 | | Opus | Sonnet |
 |---|---|---|
-| подложных отвергнуто | 6 из 6 | 6 из 6 |
-| подтверждено настоящих | 4 | 3 |
-| отвергнуто настоящих | 2 | 3 |
+| planted rejected | 6 of 6 | 6 of 6 |
+| real confirmed | 4 | 3 |
+| real rejected | 2 | 3 |
 
-**Вывод.** Ложь не прошла ни одна. Шесть процентов отказов объясняются точностью охотника,
-а не сговорчивостью проверяющего — **при условии, что проверка идёт исполнением**.
+**Conclusion.** Not one lie got through. The six percent rejection rate is explained by the
+hunter's precision, not by the verifier's compliance — **provided the check is done by
+execution**.
 
-**Оговорка, которая важнее вывода.** Две отвергнутые настоящие находки оказались уже
-починенными — реестр об этом не знал. А единственное расхождение моделей разрешилось не в
-пользу той, что «нашла дефект»: обе ошиблись, потому что рабочая копия соседнего
-репозитория отставала на 12 суток. Проверяющий честно исполнил всё, что обещал, на
-вчерашнем коде.
+**A caveat that matters more than the conclusion.** The two rejected real findings turned out
+to be already fixed — the register did not know that. And the single disagreement between the
+models was not resolved in favour of the one that "found the defect": both were wrong, because
+the working copy of the neighbouring repository was 12 days behind. The verifier faithfully
+executed everything it promised — on yesterday's code.
 
-## 3. Две схемы при равном бюджете
+## 3. Two schemes at equal budget
 
-**Вопрос.** Связка «охотник + проверяющий» стоит вдвое дороже одиночного прохода. Бьёт ли
-она самого дешёвого соперника — два независимых прохода с объединением находок?
+**Question.** The "hunter + verifier" pair costs twice a single pass. Does it beat the cheapest
+rival — two independent passes with the findings merged?
 
-**Методика.** Один блок пройден дважды: охотник A по обычному промпту, охотник B по тому же
-промпту, но с обратным порядком чтения (дешёвый аналог «перетасовки», снимающий эффект
-позиции). Оба вслепую. Проверяющий получил объединение из 18 находок перемешанным, не зная,
-кто что нашёл, с заданием искать дубликаты и противоречия.
+**Method.** One block run twice: hunter A on the normal prompt, hunter B on the same prompt but
+with the reading order reversed (a cheap analogue of "shuffling", removing the position
+effect). Both blind. The verifier received the union of 18 findings shuffled, not knowing who
+found what, with the task of looking for duplicates and contradictions.
 
-| | находок | токенов |
+| | findings | tokens |
 |---|---:|---:|
-| охотник A | 10 | 204 тыс. |
-| охотник B | 8 | 222 тыс. |
-| проверяющий по 18 | +3 своих | 131 тыс. |
+| hunter A | 10 | 204k |
+| hunter B | 8 | 222k |
+| verifier over 18 | +3 of its own | 131k |
 
-**Вердикты: 17 подтверждено, 1 правдоподобна, 0 отвергнуто.**
+**Verdicts: 17 confirmed, 1 plausible, 0 rejected.**
 
-**Результаты.**
-- Второй охотник принёс **4 новые находки**; остальные 4 оказались дубликатами первого по
-  корню (совпали четыре пары, включая одну и ту же строку у обоих).
-- Проверяющий за **вдвое меньшие деньги** проверил все 18, нашёл 3 свои, поправил детали
-  трёх и свёл дубликаты.
-- И сделал то, чего пара охотников не умеет: **разрешил прямое противоречие** между ними
-  (один утверждал, что предохранитель работает только у одного провайдера, второй — что он
-  бьёт по всем; развилка проходила по наличию ключа).
+**Results.**
+- The second hunter brought **4 new findings**; the other 4 turned out to be duplicates of the
+  first by root (four pairs matched, including the very same line in both).
+- The verifier, for **half the money**, checked all 18, found 3 of its own, corrected details
+  in three and merged the duplicates.
+- And it did what a pair of hunters cannot: **resolved a direct contradiction** between them
+  (one claimed the circuit breaker works only for one provider, the other that it hits all of
+  them; the fork ran along the presence of a key).
 
-**Вывод.** Ценность второй роли — не фильтр, а углубление. Ноль отвергнутых из 18 означает,
-что фильтровать было нечего.
+**Conclusion.** The value of the second role is not a filter but deepening. Zero rejected out
+of 18 means there was nothing to filter.
 
-## 4. Прирост проверяющего на трёх блоках
+## 4. The verifier's gain over three blocks
 
-| | находок |
+| | findings |
 |---|---:|
-| дали охотники | 32 |
-| добавили проверяющие | +10 (31%) |
-| отвергли проверяющие | 2 (6%) |
+| brought by hunters | 32 |
+| added by verifiers | +10 (31%) |
+| rejected by verifiers | 2 (6%) |
 
-Плюс не поддающееся счёту: на одном блоке проверяющий пересобрал таблицу маршрутов
-независимо и нашёл **7 пропущенных из 38**; на другом прогнал 8 мутаций и показал, что
-набор тестов не стерёг ни одной находки.
+Plus what cannot be counted: on one block the verifier independently rebuilt the route table
+and found **7 missed out of 38**; on another it ran 8 mutations and showed that the test suite
+guarded none of the findings.
 
-## 5. Сколько ловит основной проход — первая оценка пропусков
+## 5. How much the main pass catches — a first estimate of misses
 
-**Вопрос.** Главное, чего мы про метод не знали: какую долю дефектов он пропускает. Прямо это
-не измерить — знаменатель недоступен. Но у двух законченных ревью есть данные, которых
-хватает на **оценку снизу**: в реестре записано, кем найдена каждая находка, и часть из них
-всплыла уже ПОСЛЕ того, как блок был закрыт — при починке, при ревью диффа, при повторном
-проходе.
+**Question.** The main thing we did not know about the method: what share of defects it misses.
+It cannot be measured directly — the denominator is unavailable. But two completed reviews
+have data sufficient for a **lower-bound estimate**: the register records who found each
+finding, and some of them surfaced AFTER the block was closed — during fixing, during diff
+review, during a repeat pass.
 
-**Методика.** Находки разделены по происхождению: основной проход (охотник и проверяющий)
-против всего, что нашлось позже в том же коде. Доля второго — нижняя граница пропусков
-основного прохода: это дефекты, которые он мог найти и не нашёл.
+**Method.** Findings are split by origin: the main pass (hunter and verifier) against
+everything found later in the same code. The share of the latter is the lower bound of the
+main pass's misses: these are defects it could have found and did not.
 
-| | проект А | проект Б |
+| | project A | project B |
 |---|---:|---:|
-| всего находок | 313 | 210 |
-| **основной проход** | **62%** | **77%** |
-| повторный проход (добор) | 13% | — |
-| найдено исполнителем при починке | 12% | 5% |
-| найдено при ревью диффа | 12% | 11% |
-| внешнее авто-ревью | — | 7% |
+| findings total | 313 | 210 |
+| **main pass** | **62%** | **77%** |
+| repeat pass (top-up) | 13% | — |
+| found by the fixer while fixing | 12% | 5% |
+| found during diff review | 12% | 11% |
+| external auto-review | — | 7% |
 
-Разброс объясняется тем, что в проекте А была отдельная фаза повторного прохода, которой в
-проекте Б не было. Без неё доли сходятся: **71% и 77%**.
+The spread is explained by project A having a separate repeat-pass phase, which project B did
+not. Without it the shares converge: **71% and 77%**.
 
-**Главное — не доля, а её состав.**
+**The main thing is not the share but its composition.**
 
-| серьёзность | проект А | проект Б |
+| severity | project A | project B |
 |---|---|---|
-| крупные находки, пойманные основным проходом | 86% (44 из 51) | 88% (29 из 33) |
-| что всплывает позже | в основном низкие и средние | то же |
+| major findings caught by the main pass | 86% (44 of 51) | 88% (29 of 33) |
+| what surfaces later | mostly low and medium | same |
 
-**Вывод.** Основной проход находит около трёх четвертей того, что в итоге будет найдено, и
-**почти девять из десяти крупных находок**. Пропуски смещены в сторону мелочи — это ровно то
-поведение, которого от метода и хотят: дорогое ловится сразу, дешёвое догоняется позже, при
-починке и при ревью диффа.
+**Conclusion.** The main pass finds about three quarters of what will eventually be found, and
+**almost nine out of ten major findings**. The misses are skewed towards small stuff — exactly
+the behaviour one wants from the method: the expensive gets caught at once, the cheap gets
+picked up later, during fixing and diff review.
 
-⚠️ **Чего эта цифра не говорит.** Это оценка снизу: знаменатель — «всё, что нашли в итоге», а
-не «всё, что есть». Дефекты, не найденные никем, в неё не входят, и сколько их — по-прежнему
-неизвестно. Полноценный замер — в [`../ROADMAP.md`](../ROADMAP.md), направление 1; здесь
-измерено то, что видно из данных двух законченных ревью.
+⚠️ **What this number does not say.** It is a lower bound: the denominator is "everything found
+in the end", not "everything there is". Defects found by no one are not in it, and how many
+there are is still unknown. The full measurement is in [`../ROADMAP.md`](../ROADMAP.md),
+direction 1; here what is measured is what can be seen from the data of two completed reviews.
 
-## 6. Чего мы не мерили
+## 6. What we did not measure
 
-- **Сколько метод пропускает НАСОВСЕМ.** Раздел 5 даёт оценку снизу по двум законченным
-  ревью; дефекты, не найденные никем, в неё по построению не входят. Процедура полноценного
-  замера — в [`../ROADMAP.md`](../ROADMAP.md), направление 1.
-- **Стоимость починки.** Все цифры выше — про поиск. Круги «починил → прочитали дифф» у
-  автора набора стоили в шесть раз дороже обзорного прохода, но это его замер, не наш.
-- **Поведение на другом языке и в чужом проекте.**
-- **Разные модели в разных ролях.** Единственная попытка (Sonnet проверяющим) дала
-  расхождение в одном случае из двенадцати, и то не в его пользу — но и не против: он
-  оказался прав по итогу, хотя аргумент привёл неверный.
+- **How much the method misses FOR GOOD.** Section 5 gives a lower bound over two completed
+  reviews; defects found by no one are excluded from it by construction. The procedure for a
+  full measurement is in [`../ROADMAP.md`](../ROADMAP.md), direction 1.
+- **The cost of fixing.** All numbers above are about searching. The "fixed → diff read" rounds
+  cost the kit's author six times more than the survey pass, but that is his measurement, not
+  ours.
+- **Behaviour in another language and in someone else's project.**
+- **Different models in different roles.** The only attempt (Sonnet as verifier) produced a
+  disagreement in one case out of twelve, and not in its favour — but not against it either:
+  it turned out to be right in the end, though the argument it gave was wrong.
 
-## Для сравнения: чужие числа
+## For comparison: other people's numbers
 
-Не наши замеры, а ориентиры из публикаций — чтобы понимать масштаб (разбор и источники в
-[`comparison-with-practice.md`](comparison-with-practice.md)).
+Not our measurements but reference points from publications — to understand the scale
+(analysis and sources in [`comparison-with-practice.md`](comparison-with-practice.md)).
 
-| что | значение |
+| what | value |
 |---|---|
-| precision ИИ-ревьюера на реальных PR | 3.56% |
-| false discovery rate LLM-детектора на реальных CVE | 84.82% |
-| лучший инструмент на независимом наборе | не больше 63% известных проблем |
-| все ревью-агенты вместе | ~40% задач |
-| та же модель: грязный датасет против чистого | F1 68% → 3% |
-| синтетические мутации против реальных багфиксов | F1 0.847 → 0.066 |
-| Google в проде | целевая precision 50%, успех = 7.5% комментариев закрыты правкой |
-| аудит людьми | 6–9 инженеро-недель на репозиторий |
+| precision of an AI reviewer on real PRs | 3.56% |
+| false discovery rate of an LLM detector on real CVEs | 84.82% |
+| best tool on an independent set | no more than 63% of known problems |
+| all review agents together | ~40% of tasks |
+| same model: dirty dataset vs clean | F1 68% → 3% |
+| synthetic mutations vs real bug fixes | F1 0.847 → 0.066 |
+| Google in production | target precision 50%, success = 7.5% of comments closed by an edit |
+| audit by humans | 6–9 engineer-weeks per repository |
 
-Последняя строка — причина, по которой метод вообще имеет смысл: то, что стоит
-человеко-недель, здесь стоит часа. При точности, которая ниже человеческой.
+The last row is the reason the method makes sense at all: what costs person-weeks costs an
+hour here. At a precision below human.
