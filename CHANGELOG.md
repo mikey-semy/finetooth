@@ -9,6 +9,13 @@ with a review already under way.
 
 ## [Unreleased]
 
+### Added
+
+- `RELEASING.md`: semantic versioning with a zero major, at most one release a week, four
+  mechanical gates before a tag (tests with mutations, `skills-ref validate`, a run on a live
+  project, a complete CHANGELOG), no direct pushes to `master` for anyone. Written after four
+  releases in one day showed that the version number had stopped meaning anything.
+
 ## [0.7.0] — 2026-09-24
 
 The release that makes the kit an open-source project: English is the primary language,
