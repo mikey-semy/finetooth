@@ -157,6 +157,26 @@ MSG = {
   "md_title": "# Review findings", "md_gen": "> This file is GENERATED from `findings.jsonl` by `{cli} findings`.", "md_noedit": "> Do not edit by hand — edit the jsonl and regenerate.",
   "md_open": "Open: **{live}** of {total} records.", "md_sev": "## {sev} ({open} open / {total})", "md_cols": "| id | block | status | location | what is wrong |",
   "journal_head": "# Review journal\n\n",
+  "sum_title": "# {project} — review summary",
+  "sum_intro": "This file outlives `docs/review/`: it describes the past and holds no status that can go stale. Base commit — the revision everything below was read against. To see how far each block has drifted since: `{cli} summary --aged <this file>`.",
+  "sum_base": "**Date:** {date}  \n**Base commit:** `{sha}` ({branch})  \n**Blocks:** {closed} closed of {total}; **findings:** {total_f} — fixed {fixed}, rejected {rejected}, deferred {deferred}, duplicates {dups}, still open {open}",
+  "sum_blocks": "## Blocks and what counted as checked",
+  "sum_blocks_head": "| block | title | status | finished | files | reviewed at | acceptance criterion |",
+  "sum_rejected": "## Rejected findings — do not find them again",
+  "sum_rejected_none": "No rejected findings.",
+  "sum_deferred": "## Accepted risks (deferred with a reason)",
+  "sum_deferred_none": "Nothing deferred.",
+  "sum_classes": "## What closed each class",
+  "sum_classes_rules": "Guards (a test or a rule that keeps the class closed):",
+  "sum_classes_fixes": "Fixes by commit:",
+  "sum_classes_none": "No guards recorded; fixes, if any, are listed above by commit.",
+  "sum_open": "## Still open at the time of the summary",
+  "sum_open_none": "Nothing open.",
+  "sum_seams": "## Seams between blocks (from `coupling`)",
+  "sum_machine": "## For the tool — do not edit",
+  "aged_head": "Drift since the base commit `{sha}` ({n} commits on the branch):",
+  "aged_row": "  {block:<6} commits: {commits:<5} files: {files:<5} {title}",
+  "aged_none": "nothing changed under the blocks' paths since the base — the summary still describes the tree",
   "backfill_note": "Fingerprints stamped retroactively at commit {head}: blocks {blocks}; findings {n}. Changes before this commit are not tracked.",
   "setup_note": "Static definition of the blocks. Progress lives in state.json, findings in findings.jsonl. Array order = execution order.",
   "excl_apparatus": "review apparatus, not its subject", "excl_skill": "the review skill — tooling, not the subject of review",
@@ -186,6 +206,26 @@ MSG = {
   "md_title": "# Находки ревью", "md_gen": "> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `{cli} findings`.", "md_noedit": "> Не редактируй его руками — правь jsonl и перегенерируй.",
   "md_open": "Открыто: **{live}** из {total} записей.", "md_sev": "## {sev} ({open} открыто / {total})", "md_cols": "| id | блок | статус | место | что не так |",
   "journal_head": "# Дневник ревью\n\n",
+  "sum_title": "# {project} — итог ревью",
+  "sum_intro": "Этот файл переживает снос `docs/review/`: он описывает прошлое и не держит статусов, которые могут протухнуть. Коммит-база — ревизия, относительно которой всё ниже читалось. Насколько каждый блок уехал с тех пор: `{cli} summary --aged <этот файл>`.",
+  "sum_base": "**Дата:** {date}  \n**Коммит-база:** `{sha}` ({branch})  \n**Блоки:** закрыто {closed} из {total}; **находки:** {total_f} — починено {fixed}, отвергнуто {rejected}, отложено {deferred}, дублей {dups}, ещё открыто {open}",
+  "sum_blocks": "## Блоки и что считалось проверенным",
+  "sum_blocks_head": "| блок | название | статус | закрыт | файлов | отпечаток | критерий приёмки |",
+  "sum_rejected": "## Отвергнутые находки — не искать заново",
+  "sum_rejected_none": "Отвергнутых находок нет.",
+  "sum_deferred": "## Принятые риски (отложено с причиной)",
+  "sum_deferred_none": "Отложенного нет.",
+  "sum_classes": "## Чем закрыт каждый класс",
+  "sum_classes_rules": "Узды (тест или правило, которое держит класс закрытым):",
+  "sum_classes_fixes": "Починки по коммитам:",
+  "sum_classes_none": "Узды не записаны; починки, если есть, перечислены выше по коммитам.",
+  "sum_open": "## Ещё открыто на момент итога",
+  "sum_open_none": "Открытого нет.",
+  "sum_seams": "## Стыки между блоками (из `coupling`)",
+  "sum_machine": "## Для инструмента — не править",
+  "aged_head": "Дрейф от коммита-базы `{sha}` ({n} коммитов на ветке):",
+  "aged_row": "  {block:<6} коммитов: {commits:<5} файлов: {files:<5} {title}",
+  "aged_none": "под путями блоков ничего не менялось с базы — итог по-прежнему описывает дерево",
   "backfill_note": "Отпечатки проставлены задним числом на коммите {head}: блоки {blocks}; находок {n}. Изменения до этого коммита не отслежены.",
   "setup_note": "Статическое определение блоков. Прогресс живёт в state.json, находки — в findings.jsonl. Порядок массива = порядок исполнения.",
   "excl_apparatus": "аппарат ревью, а не его предмет", "excl_skill": "скилл ревью — оснастка, а не предмет ревью",
@@ -958,6 +998,150 @@ def cmd_order(args) -> int:
               f"reorder blocks.json if you agree, or state `risk` where the frequency is misleading")
     else:
         print("\nthe declared order already matches risk and change frequency")
+    return 0
+
+
+# ------------------------------------------------------------------------- summary
+
+ACCEPTANCE_HEADING = re.compile(r"^#{1,6}\s*.*(критери\w* приёмки|acceptance criteri)", re.I)
+SUMMARY_MARK = "<!-- finetooth-summary "
+SUMMARY_DEFAULT = "docs/review-summary.md"
+
+
+def acceptance_of(b: dict) -> str:
+    """The manifest's acceptance criterion, collapsed to one line for the table."""
+    m = REVIEW / "blocks" / f"{b['id']}-{b['slug']}.md"
+    if not m.exists():
+        return "—"
+    body = section_body(m.read_text(encoding="utf-8"), ACCEPTANCE_HEADING)
+    if not body:
+        return "—"
+    text = " ".join(ln.strip() for ln in body if ln.strip())
+    text = text.replace("|", "\\|")
+    return text if len(text) <= 300 else text[:297] + "…"
+
+
+def git_head() -> tuple[str, str]:
+    sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True,
+                         text=True, check=False).stdout.strip()
+    branch = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
+                            capture_output=True, text=True, check=False).stdout.strip()
+    return sha, branch
+
+
+def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
+    sha, branch = git_head()
+    by_status = {k: 0 for k in FINDING_STATUS}
+    for f in rows:
+        by_status[f.get("status", "open")] = by_status.get(f.get("status", "open"), 0) + 1
+    closed = sum(1 for b in defn["blocks"] if st["blocks"].get(b["id"], {}).get("status") == "closed")
+    out = [T("sum_title", project=defn.get("project", "?")), "",
+           T("sum_intro", cli=CLI), "",
+           T("sum_base", date=now()[:10], sha=sha[:12], branch=branch, closed=closed,
+             total=len(defn["blocks"]), total_f=len(rows), fixed=by_status["fixed"],
+             rejected=by_status["rejected"], deferred=by_status["deferred"],
+             dups=by_status["duplicate"], open=by_status["open"]), ""]
+    out += [T("sum_blocks"), "", T("sum_blocks_head"), "|---|---|---|---|---|---|---|"]
+    for b in defn["blocks"]:
+        s = st["blocks"].get(b["id"], {})
+        n_files = len(git_files(b.get("paths", []))) if b.get("paths") else 0
+        out.append(f"| {b['id']} | {b['title']} | {s.get('status', 'todo')} | "
+                   f"{(s.get('finished') or '')[:10]} | {n_files} | `{s.get('reviewed_sha') or '—'}` | "
+                   f"{acceptance_of(b)} |")
+    out.append("")
+    def finding_line(f: dict, reason_key: str | None) -> str:
+        where = f"`{f.get('file')}:{f.get('line')}`" if f.get("line") else f"`{f.get('file')}`"
+        line = f"- **{f.get('id')}** ({f.get('severity')}) {where} — {f.get('claim', '').strip()}"
+        if reason_key and f.get(reason_key):
+            line += f"  \n  *{f[reason_key].strip()}*"
+        return line
+    rejected = [f for f in rows if f.get("status") == "rejected"]
+    out += [T("sum_rejected"), ""]
+    out += [finding_line(f, "reject_reason") for f in rejected] or [T("sum_rejected_none")]
+    out.append("")
+    deferred = [f for f in rows if f.get("status") == "deferred"]
+    out += [T("sum_deferred"), ""]
+    out += [finding_line(f, "defer_reason") for f in deferred] or [T("sum_deferred_none")]
+    out.append("")
+    out += [T("sum_classes"), ""]
+    rules: dict[str, list[str]] = {}
+    for f in rows:
+        if f.get("rule"):
+            rules.setdefault(f["rule"], []).append(f.get("id", "?"))
+    fixed = [f for f in rows if f.get("status") == "fixed"]
+    if rules:
+        out.append(T("sum_classes_rules"))
+        out += [f"- `{rule}` — {', '.join(ids)}" for rule, ids in sorted(rules.items())]
+        out.append("")
+    if fixed:
+        out.append(T("sum_classes_fixes"))
+        out += [f"- {f.get('id')} → `{f.get('fix_commit') or ', '.join(f.get('fixed_in', []))}`"
+                for f in fixed]
+        out.append("")
+    if not rules and not fixed:
+        out += [T("sum_classes_none"), ""]
+    open_rows = [f for f in rows if f.get("status") == "open"]
+    out += [T("sum_open"), ""]
+    out += [finding_line(f, None) for f in open_rows] or [T("sum_open_none")]
+    out.append("")
+    if COUPLING_FILE.exists():
+        lines = COUPLING_FILE.read_text(encoding="utf-8").splitlines()[1:]
+        if lines:
+            out += [T("sum_seams"), ""]
+            out += ["- " + " ↔ ".join(f"{c[1]} `{c[0]}`" for c in
+                    [(x.split("\t")[0], x.split("\t")[1]), (x.split("\t")[2], x.split("\t")[3])])
+                    + f" ({x.split(chr(9))[4]}×)" for x in lines[:50]]
+            out.append("")
+    machine = {"base": sha, "blocks": {b["id"]: {"title": b["title"], "paths": b.get("paths", [])}
+                                        for b in defn["blocks"]}}
+    out += [T("sum_machine"), "", SUMMARY_MARK + json.dumps(machine, ensure_ascii=False) + " -->", ""]
+    return "\n".join(out)
+
+
+def cmd_summary(args) -> int:
+    """The one file that outlives docs/review/: what was checked, against which revision,
+    what was rejected and why, what closes each class. With --aged: how far each block has
+    drifted from the summary's base commit — the only thing a re-run needs to start from."""
+    if args.aged:
+        path = Path(args.aged)
+        if not path.is_absolute():
+            path = ROOT / path
+        if not path.exists():
+            die(f"no such summary: {path}")
+        text = path.read_text(encoding="utf-8")
+        i = text.find(SUMMARY_MARK)
+        if i < 0:
+            die(f"{path.name} carries no machine block — was it written by `summary`?")
+        machine = json.loads(text[i + len(SUMMARY_MARK):text.index(" -->", i)])
+        base = machine["base"]
+        n = subprocess.run(["git", "-C", str(ROOT), "rev-list", "--count", f"{base}..HEAD"],
+                           capture_output=True, text=True, check=False).stdout.strip() or "0"
+        print(T("aged_head", sha=base[:12], n=n))
+        drift = []
+        for bid, info in machine["blocks"].items():
+            if not info.get("paths"):
+                continue
+            log = subprocess.run(["git", "-C", str(ROOT), "log", "--format=%H", "--name-only",
+                                  f"{base}..HEAD", "--", *info["paths"]],
+                                 capture_output=True, text=True, check=False).stdout
+            commits = {ln for ln in log.splitlines() if re.fullmatch(r"[0-9a-f]{40}", ln)}
+            files = {ln for ln in log.splitlines() if ln and not re.fullmatch(r"[0-9a-f]{40}", ln)}
+            if commits:
+                drift.append((len(commits), len(files), bid, info.get("title", "")))
+        if not drift:
+            print(T("aged_none"))
+            return 0
+        for commits, files, bid, title in sorted(drift, reverse=True):
+            print(T("aged_row", block=bid, commits=commits, files=files, title=title))
+        return 0
+    defn, st, rows = blocks(), state(), findings()
+    text = render_summary(defn, st, rows)
+    out = Path(args.out)
+    if not out.is_absolute():
+        out = ROOT / out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text + "\n", encoding="utf-8")
+    print(f"written: {out.relative_to(ROOT) if out.is_relative_to(ROOT) else out}")
     return 0
 
 
@@ -2741,6 +2925,9 @@ def main() -> int:
     c.add_argument("--write", action="store_true", help="also write docs/review/coupling.tsv")
     c = sub.add_parser("order", help="blocks in the order worth walking them: risk first, change frequency second")
     c.add_argument("--since", help="only commits since this date (git --since)")
+    c = sub.add_parser("summary", help="the one file that outlives docs/review/; --aged <file>: drift since its base commit")
+    c.add_argument("--out", default=SUMMARY_DEFAULT, help=f"where to write (default {SUMMARY_DEFAULT}, outside docs/review/)")
+    c.add_argument("--aged", metavar="FILE", help="read a summary and print how much each block changed since its base commit")
 
     c = sub.add_parser("roots", help="finding roots: how many instances and what closes the class")
     c.add_argument("block", nargs="?")
@@ -2762,7 +2949,7 @@ def main() -> int:
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
-        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order,
+        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order, "summary": cmd_summary,
         "setup": cmd_setup,
     }[args.cmd](args)
 

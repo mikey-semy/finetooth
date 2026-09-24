@@ -133,11 +133,15 @@ more than a week behind the server.
 
 ## When the review is finished
 
-All blocks `closed`, no open findings, every rejected one has a reason. Then the
-`docs/review/` directory **is deleted whole in one change**, and what lasts moves out: rules
-into the root instructions file, decisions into ADRs, checks into tests. One file remains —
-the summary: the date and the base commit, the blocks and their criteria, the rejected
-findings with reasons, what closed each defect class. Without it the next review starts from zero.
+All blocks `closed`, no open findings, every rejected one has a reason. Then
+`review summary` writes the one file that outlives the directory (`docs/review-summary.md`
+by default): the date and the base commit, the blocks and their acceptance criteria, the
+rejected findings with reasons, the accepted risks, what closed each defect class. Only then
+the `docs/review/` directory **is deleted whole in one change**, and what lasts moves out:
+rules into the root instructions file, decisions into ADRs, checks into tests. Later,
+`review summary --aged docs/review-summary.md` says how far each block has drifted since the
+base commit — the only thing a re-run needs to start from. Without the summary the next
+review starts from zero.
 
 ## Files of the skill
 

@@ -458,6 +458,14 @@ with six or more blocks), and prints the cross-block pairs with a ready `ref_pat
 hypothesis for the manifest; clusters of pairs between the same two blocks are where a seam
 block is due. `--write` keeps the pairs in `docs/review/coupling.tsv`.
 
+**What outlives the review directory.** The method ends by deleting its own directory — a
+register nobody updates describes fixed things as open. `review summary` writes one immutable
+file outside it: the date and the **base commit**, the blocks with their acceptance criteria and
+fingerprints, the rejected findings with reasons (so the next review does not find them again),
+the accepted risks, and what closed each class (guards, commits). `review summary --aged <file>`
+answers, from `git log` alone, how far each block has drifted since that commit — an auditor's
+re-test starts from there, not from zero.
+
 **Order of walking.** `review order` ranks the blocks by the cost of failure first (`risk` on
 the block) and by change frequency second — measured on the first project as a prediction:
 the top 10% of files by change frequency collected 34% of the later fixes, by size 29%, at
