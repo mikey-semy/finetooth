@@ -292,20 +292,37 @@ def save_json(path: Path, data) -> None:
 NOT_A_FILE_MODES = ("160000",)
 
 
-def listed(pathspecs: list[str] | None) -> set[str]:
-    """Tracked files — real files, without submodules and symlinks."""
+def index_rows(pathspecs: list[str] | None) -> list[tuple[str, str, str]]:
+    """Index entries matching the pathspecs: (mode, blob sha, path).
+
+    The patterns come from `blocks.json`, which is edited by hand, and git refuses to
+    parse some of them (a typo in the pathspec magic the kit itself invites projects to
+    use for exclusions). A refusal from git used to reach the user as a traceback with
+    exit 1 — which reads as "the state is red", not as "your pattern is malformed".
+    """
     cmd = ["git", "-C", str(ROOT), "ls-files", "--stage", "-z"]
     if pathspecs is not None:
         cmd += ["--"] + pathspecs
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    files = set()
-    for row in out.split("\0"):
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if out.returncode != 0:
+        where = ", ".join(f"`{p}`" for p in pathspecs or []) or "(no patterns)"
+        die(f"git refuses the pattern(s) {where}: {out.stderr.strip() or 'unknown error'}\n"
+            f"The patterns are the `paths`, `ref_paths` and `exclusions` fields of "
+            f"docs/review/blocks.json — fix the one git names and re-run. "
+            f"They are git pathspecs: `src/**/*.ts`, `:(exclude)src/generated/**`.")
+    rows = []
+    for row in out.stdout.split("\0"):
         if not row:
             continue
         head, _, path = row.partition("\t")
-        if head.split(" ", 1)[0] not in NOT_A_FILE_MODES:
-            files.add(path)
-    return files
+        mode, _, rest = head.partition(" ")
+        rows.append((mode, rest.split(" ", 1)[0], path))
+    return rows
+
+
+def listed(pathspecs: list[str] | None) -> set[str]:
+    """Tracked files — real files, without submodules (a symlink is a file here, see above)."""
+    return {path for mode, _, path in index_rows(pathspecs) if mode not in NOT_A_FILE_MODES}
 
 
 def untracked_files(specs: list[str]) -> list[str]:
@@ -334,7 +351,15 @@ def all_files() -> set[str]:
 
 
 def file_sha(rel: str) -> str | None:
-    """Fingerprint of a file's contents — the same one git computes, without extra dependencies."""
+    """Fingerprint of a file's contents — the same one git computes, without extra dependencies.
+
+    Taken from the working tree while the file is laid out there (that is the text a human
+    and an agent actually read), and FROM THE INDEX when it is not. The index branch is not
+    an exotic case: a sparse checkout does not lay out part of the tree at all, and a file
+    deleted without committing is still listed by `ls-files`. Without it such a file
+    contributed only its NAME to the block fingerprint — its contents could be rewritten
+    and `check` would never say "block files changed after the review".
+    """
     if not rel or rel.startswith("("):
         return None
     p = ROOT / rel
@@ -342,11 +367,24 @@ def file_sha(rel: str) -> str | None:
         # `hash-object` would follow the link and hash the target: re-pointing to a file
         # with the same contents would go unnoticed. What is hashed is what the symlink is.
         return "link:" + hashlib.sha1(os.readlink(p).encode("utf-8")).hexdigest()
-    if not p.is_file():
+    if p.is_file():
+        out = subprocess.run(["git", "-C", str(ROOT), "hash-object", "--", rel],
+                             capture_output=True, text=True)
+        return out.stdout.strip() or None
+    # `:(literal)` — the path is a name, not a pattern: a `[handle]` in it is a directory,
+    # not a character class.
+    rows = index_rows([f":(literal){rel}"])
+    entry = next((r for r in rows if r[2] == rel), None)
+    if entry is None or entry[0] in NOT_A_FILE_MODES:
         return None
-    out = subprocess.run(["git", "-C", str(ROOT), "hash-object", "--", rel],
-                         capture_output=True, text=True)
-    return out.stdout.strip() or None
+    if entry[0] == "120000":
+        # A symlink not laid out on disk: the index holds its target as the blob. Hashed
+        # the same way as the laid-out branch, so the fingerprint does not jump when a
+        # sparse checkout lays the link out.
+        blob = subprocess.run(["git", "-C", str(ROOT), "show", f":{rel}"],
+                              capture_output=True, check=False).stdout
+        return "link:" + hashlib.sha1(blob).hexdigest()
+    return entry[1]
 
 
 def block_sha(b: dict) -> str:
@@ -809,18 +847,73 @@ COUPLING_FILE = REVIEW / "coupling.tsv"
 
 
 def commit_file_sets(since: str | None = None) -> list[set[str]]:
-    """The set of files touched by every commit on the current history (first parent only:
-    a merge lists everything the branch brought, and that is not a joint change)."""
-    cmd = ["git", "-C", str(ROOT), "log", "--first-parent", "--no-merges", "--name-only",
-           "--format=%x00"]
+    """The set of files touched by every commit on the current history, UNDER TODAY'S NAMES
+    (first parent only: a merge lists everything the branch brought, and that is not a joint
+    change).
+
+    Two things `--name-only` alone gets wrong, both measured on this repository's own
+    history. A rename is printed as the new path only, so a file's churn is cut at every
+    move — `review.py` has 41 first-parent commits and 9 under its current path, and the
+    block that owns it was ranked on a fifth of its real change frequency. And a non-ASCII
+    path comes out C-quoted (`"src/\\320\\274…"`), so it never matches what `ls-files -z`
+    reports and is invisible to `coupling` altogether.
+
+    `--name-status -z -M` answers both: `-z` gives raw NUL-separated paths, and the rename
+    records let the old name be translated into the current one. The log is walked
+    newest-first, so a rename `old → new` seen at a commit renames everything OLDER than it.
+    """
+    # `\x01` marks the start of a commit record: with `-z` every field is NUL-terminated,
+    # so the commit line cannot be told from a path by the separator alone.
+    cmd = ["git", "-C", str(ROOT), "log", "--first-parent", "--no-merges", "--name-status",
+           "-z", "-M", "--format=%x01%H"]
     if since:
         cmd.append(f"--since={since}")
     out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    tokens = [t for t in out.split("\0") if t]
     sets: list[set[str]] = []
-    for chunk in out.split("\0"):
-        files = {ln.strip() for ln in chunk.splitlines() if ln.strip()}
-        if files:
-            sets.append(files)
+    current: set[str] | None = None
+    renames: list[tuple[str, str]] = []   # (old, new) of the commit being read
+    # old path -> the name that path bears today
+    alias: dict[str, str] = {}
+
+    def close() -> None:
+        if current:
+            sets.append(set(current))
+        for old, new in renames:
+            alias[old] = alias.get(new, new)
+
+    i = 0
+    after_header = False
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.startswith("\x01"):
+            close()
+            current, renames = set(), []
+            i += 1
+            after_header = True
+            continue
+        if current is None:            # output before the first commit record
+            i += 1
+            continue
+        # git terminates the `--format` line with a newline of its own, which `-z` leaves
+        # glued to the first status letter of the commit: `…<sha>\0` + `\nR100\0old\0new\0`.
+        status, paths = (tok[1:] if after_header and tok.startswith("\n") else tok), []
+        after_header = False
+        take = 2 if status[:1] in ("R", "C") else 1
+        for j in range(1, take + 1):
+            if i + j < len(tokens):
+                paths.append(tokens[i + j])
+        i += 1 + len(paths)
+        if not paths:
+            continue
+        if take == 2 and len(paths) == 2:
+            old, new = paths
+            renames.append((old, new))
+            current.add(alias.get(new, new))
+        else:
+            p = paths[-1]
+            current.add(alias.get(p, p))
+    close()
     return sets
 
 
@@ -1121,11 +1214,14 @@ def cmd_summary(args) -> int:
         for bid, info in machine["blocks"].items():
             if not info.get("paths"):
                 continue
-            log = subprocess.run(["git", "-C", str(ROOT), "log", "--format=%H", "--name-only",
-                                  f"{base}..HEAD", "--", *info["paths"]],
+            # `-z` and an `\x01` marker for the commit line: without them a non-ASCII path
+            # comes out C-quoted and the same file is counted under two names.
+            log = subprocess.run(["git", "-C", str(ROOT), "log", "--format=%x01%H", "--name-only",
+                                  "-z", f"{base}..HEAD", "--", *info["paths"]],
                                  capture_output=True, text=True, check=False).stdout
-            commits = {ln for ln in log.splitlines() if re.fullmatch(r"[0-9a-f]{40}", ln)}
-            files = {ln for ln in log.splitlines() if ln and not re.fullmatch(r"[0-9a-f]{40}", ln)}
+            tokens = [t for t in log.split("\0") if t]
+            commits = {t[1:] for t in tokens if t.startswith("\x01")}
+            files = {t for t in tokens if not t.startswith("\x01")}
             if commits:
                 drift.append((len(commits), len(files), bid, info.get("title", "")))
         if not drift:
@@ -1762,18 +1858,16 @@ def block_lines(pathspecs: list[str]) -> tuple[int, int]:
     lines, of which 19 181 belonged to `package-lock.json`, excluded back when the blocks
     were set up. The number came out three times the real one and demanded cutting what
     nobody reads anyway. What must be counted is exactly the set the block gets to work on.
+
+    ⚠️ COUNTED BY `file_lines`, not by a second counter of its own. Its own `open()` read
+    the disk — so a file living in the index but not laid out (sparse checkout, deleted
+    without committing) dropped out of the count, and a binary file was counted as lines,
+    which is exactly what `file_lines` was taught not to do.
     """
     defn = blocks()
     excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
     files = git_files(pathspecs) - excluded
-    total = 0
-    for f in files:
-        try:
-            with open(ROOT / f, encoding="utf-8", errors="ignore") as fh:
-                total += sum(1 for _ in fh)
-        except OSError:
-            pass
-    return len(files), total
+    return len(files), sum(file_lines(f) or 0 for f in files)
 
 
 def cmd_restamp(args) -> int:
@@ -2440,14 +2534,18 @@ def cmd_check(args) -> int:
             # neighbouring project pointed at a commit that did not touch the named file at
             # all: the fix was made in another module, and the record stayed as it was. By
             # hand nobody checks that — and nobody did for half a year.
+            # `-z`: without it git C-quotes a non-ASCII path (`"src/\320\274…"`) and no
+            # finding on a Cyrillic-named file could ever be marked fixed — the gate stayed
+            # red on a truthful state for ever. Paths are compared as git prints them with
+            # `ls-files -z`, that is raw and NUL-separated.
             touched = subprocess.run(
-                ["git", "-C", str(ROOT), "show", "--name-only", "--format=", f["fix_commit"]],
+                ["git", "-C", str(ROOT), "show", "--name-only", "-z", "--format=", f["fix_commit"]],
                 capture_output=True, text=True,
             )
             if touched.returncode != 0:
                 problems.append(f"finding {fid}: commit {f['fix_commit']} is not in the repository")
             elif f.get("file") and not ({f["file"], *f.get("fixed_in", [])}
-                                        & set(touched.stdout.splitlines())):
+                                        & {p for p in touched.stdout.split("\0") if p}):
                 problems.append(
                     f"finding {fid}: commit {f['fix_commit']} does not touch {f['file']} — "
                     f"either the mark belongs to another finding, or the fix was made elsewhere: "

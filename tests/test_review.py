@@ -2431,5 +2431,153 @@ class ReportShapeTest(unittest.TestCase):
         self.assertNotIn("not named by full", out.stdout)
 
 
+class GitTruthTest(unittest.TestCase):
+    """Правда о файлах берётся из индекса, а пути — NUL-разделёнными."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def test_файл_из_индекса_не_выложенный_на_диск_даёт_отпечаток_и_строки(self):
+        """Разреженная выкладка (и файл, удалённый без коммита): `ls-files` его перечисляет,
+        а отпечаток сводился к одному имени — содержимое можно было переписать, и «файлы
+        блока изменились после просмотра» не срабатывало никогда."""
+        self.s.write("src/one.ts", "одна\nдве\nтри\n")
+        self.s.write("src/two.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.assertEqual(self.s.run("check").returncode, 0, self.s.run("check").stdout)
+        before = self.s.run("sizes").stdout
+
+        (self.s.root / "src" / "one.ts").unlink()          # индекс не тронут
+        self.assertIn("src/one.ts", self.s.git("ls-files").stdout)
+        self.assertEqual(self.s.run("sizes").stdout, before, "строки взяты из индекса")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+        # а правка содержимого в индексе отпечаток меняет
+        self.s.write("src/one.ts", "переписали целиком\n")
+        self.s.commit("правка после просмотра")
+        self.s.run("coverage")
+        self.assertIn("changed after the review", self.s.run("check").stdout)
+
+    def test_двоичный_файл_не_считается_строками_в_пороге(self):
+        """Порог читаемости мерил картинку как две тысячи строк."""
+        self.s.write("src/one.ts", "a\n")
+        (self.s.root / "src" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00\xff" * 4000)
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("sizes").stdout
+        self.assertRegex(out, r"H1\s+read\s+2\s+1\b", out)
+
+    def test_находка_на_пути_с_кириллицей_закрывается_коммитом(self):
+        """`git show --name-only` экранирует не-ASCII путь, и находку на таком файле нельзя
+        было пометить починенной никогда; путь с пробелом при этом проходил."""
+        self.s.write("src/модуль.ts", "a\n")
+        self.s.write("src/обычный файл.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "\n".join(json.dumps(r, ensure_ascii=False) for r in [
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/модуль.ts", "claim": "кириллица", "scenario": "с"},
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/обычный файл.ts", "claim": "пробел", "scenario": "с"}]) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/модуль.ts", "починено\n")
+        self.s.write("src/обычный файл.ts", "починено\n")
+        self.s.commit("починка")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        for fid in ("H1-001", "H1-002"):
+            self.assertEqual(self.s.run("set-finding", fid, "fixed", "--commit", sha).returncode, 0)
+        self.s.run("findings")
+        out = self.s.run("check").stdout
+        self.assertNotIn("does not touch", out)
+
+    def test_коммит_не_касающийся_кириллического_файла_по_прежнему_ловится(self):
+        self.s.write("src/модуль.ts", "a\n")
+        self.s.write("src/другой.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps(
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/модуль.ts", "claim": "кириллица", "scenario": "с"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/другой.ts", "правка мимо находки\n")
+        self.s.commit("не та починка")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
+        self.s.run("findings")
+        out = self.s.run("check").stdout
+        self.assertIn("does not touch src/модуль.ts", out)
+
+    def test_переименование_не_обрывает_историю_изменений_блока(self):
+        """`--name-only` печатает только новое имя: частота изменений блока обрывалась на
+        каждом переезде файла, а `order` ранжировал блок по огрызку истории."""
+        self.s.write("src/a.ts", "0\n")
+        self.s.write("src/b.ts", "0\n")
+        self.s.blocks(paths=["src/a.ts", "src/renamed.ts"], extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+            "goal": "г", "paths": ["src/b.ts"], "ref_paths": []}])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+
+        def touch(name: str) -> None:
+            p = self.s.root / "src" / name
+            p.write_text(p.read_text(encoding="utf-8") + "1\n", encoding="utf-8")
+            self.s.git("add", "-A")
+            self.s.git("commit", "-q", "-m", "t")
+        for _ in range(4):
+            touch("a.ts")
+        self.s.git("mv", "src/a.ts", "src/renamed.ts")
+        self.s.git("commit", "-q", "-m", "переезд")
+        self.s.run("init")
+        out = self.s.run("order").stdout
+        # стартовый + 4 правки под старым именем + переезд = 6 коммитов у H1
+        self.assertRegex(out, r"H1\s+—\s+todo\s+6\b", out)
+
+    def test_шаблон_который_git_отказывается_разобрать_объясняет_себя(self):
+        """Опечатка в магии pathspec — это отказ с именем файла, а не трейсбек."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"][0]["paths"] = [":(нетмагии)src"]
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        for cmd in ("check", "coverage"):
+            out = self.s.run(cmd)
+            with self.subTest(cmd=cmd):
+                self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+                self.assertNotIn("Traceback", out.stderr)
+                self.assertIn("blocks.json", out.stderr)
+
+    def test_законный_шаблон_с_исключением_по_прежнему_работает(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/generated/x.ts", "x\n")
+        self.s.blocks(paths=["src", ":(exclude)src/generated/**"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("src/one.ts", out.stdout)
+        self.assertNotIn("src/generated/x.ts", out.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
