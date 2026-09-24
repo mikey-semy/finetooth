@@ -1,5 +1,16 @@
 # Working on the kit itself
 
+> ## ⏳ A whole-repository review of the kit itself is in progress — read `docs/review/README.md` first
+>
+> The kit is being reviewed with its own method, block by block (T1 the tool, T2 the prompts,
+> T3 the tests as a gate, T4 the repository contract). All of its state lives on disk, not in
+> a conversation: `python3 skills/finetooth/scripts/review.py status` says where it stands and
+> which block is next. Do not start a fresh review of your own and do not fix findings outside
+> its rules — both are described in that README.
+>
+> When the review closes, `docs/review/` is deleted in one PR and this banner goes with it;
+> what lasts moves into this file, into the knowledge base and into tests.
+
 This file is for the agent that edits **the kit itself**, not one that runs a review with it.
 It is read in every session, so it is short.
 
