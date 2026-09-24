@@ -26,7 +26,13 @@ OUT="${TMPDIR:-/tmp}/finetooth-runs"; mkdir -p "$OUT"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 PROMPT="$OUT/$BLOCK.$ROLE.$STAMP.prompt.md"
 STREAM="$OUT/$BLOCK.$ROLE.$STAMP.stream.jsonl"
-$REVIEW prompt "$BLOCK" --role "$ROLE" "$@" > "$PROMPT"
+# A failing `review prompt` (an unknown block, a template with a hole) must not leave a
+# zero-byte prompt file behind for the next run to find.
+$REVIEW prompt "$BLOCK" --role "$ROLE" "$@" > "$PROMPT" || PROMPT_RC=$?
+if [ -n "${PROMPT_RC:-}" ]; then
+  rm -f "$PROMPT"
+  exit "$PROMPT_RC"
+fi
 echo "prompt: $PROMPT ($(wc -c < "$PROMPT") bytes); cap: $CAP turns; stream: $STREAM"
 set +e
 claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
@@ -37,6 +43,14 @@ set -e
 echo "claude exit: $RC"
 python3 "$HERE/../scripts/axes.py" "$STREAM"
 LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)"
+# The journal is the only memory the next session has. A run that died or was cut off at
+# the turn cap used to be written there as an ordinary completed one — "hunter — spend: 0
+# min, None turns … $0.00" — with no word that the assignment was truncated, and the block
+# read as hunted. The exit code goes into the line; what the stream itself says about the
+# ending (no result event, a non-success subtype) axes.py has already put there.
+if [ "$RC" -ne 0 ]; then
+  LINE="RUN FAILED (claude exit $RC — the assignment was NOT completed) · $LINE"
+fi
 $REVIEW log "$BLOCK" "$ROLE — $LINE"
 python3 - "$STREAM" <<'PY'
 import json, sys

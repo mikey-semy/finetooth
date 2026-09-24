@@ -2956,5 +2956,124 @@ class ThresholdTest(unittest.TestCase):
         self.assertIn("95th percentile of this repository", out)
 
 
+class SpendTest(unittest.TestCase):
+    """Замер расхода — то, из чего выведены потолки ходов. Обрезанный прогон не имеет
+    права выглядеть в дневнике как обычный завершённый."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _stream(self, with_result: bool = True, truncated: bool = False,
+                subtype: str = "success") -> Path:
+        ev = lambda o: json.dumps(o, ensure_ascii=False)
+        usage = {"input_tokens": 1, "cache_creation_input_tokens": 100,
+                 "cache_read_input_tokens": 900, "output_tokens": 5}
+        lines = [ev({"type": "assistant", "message": {
+            "id": "m1", "model": "test", "usage": usage,
+            "content": [{"type": "tool_use", "id": "t1", "name": "Read",
+                         "input": {"file_path": "/x/a.ts"}}]}})]
+        if with_result:
+            lines.append(ev({"type": "result", "subtype": subtype, "num_turns": 42,
+                             "duration_ms": 600000, "total_cost_usd": 3.41,
+                             "usage": {"output_tokens": 21000}, "result": "готово"}))
+        text = "\n".join(lines) + "\n"
+        if truncated:
+            text = text[:-20]
+        p = self.s.root / "stream.jsonl"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def _axes(self, path: Path, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"),
+                               str(path), *args], capture_output=True, text=True)
+
+    def test_поток_без_события_result_не_выдаётся_за_измерение(self):
+        """«0 min, None turns, $0.00» в формате настоящего замера записывало дорогой
+        обрезанный прогон как бесплатный."""
+        out = self._axes(self._stream(with_result=False), "--journal")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("NO RESULT EVENT", out.stdout)
+        self.assertIn("? turns", out.stdout)
+        self.assertIn("cost estimate unknown", out.stdout)
+        self.assertNotIn("$0.00", out.stdout)
+
+    def test_обрезанная_последняя_строка_не_роняет_замер(self):
+        out = self._axes(self._stream(truncated=True), "--journal")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("unreadable line", out.stdout)
+
+    def test_прогон_обрезанный_потолком_ходов_назван_обрезанным(self):
+        out = self._axes(self._stream(subtype="error_max_turns"), "--journal")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("RUN CUT OFF", out.stdout)
+        self.assertIn("error_max_turns", out.stdout)
+
+    def test_целый_поток_по_прежнему_читается_как_замер(self):
+        out = self._axes(self._stream(), "--journal")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("RUN CUT OFF", out.stdout)
+        self.assertNotIn("NO RESULT EVENT", out.stdout)
+        self.assertIn("10 min, 42 turns", out.stdout)
+        self.assertIn("cost estimate $3.41", out.stdout)
+
+    def _run_role(self, exit_code: int) -> tuple[subprocess.CompletedProcess, str]:
+        """run-role.sh с заглушкой вместо `claude`: настоящий клиент здесь не нужен,
+        нужен его код возврата и поток, который он оставляет."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        stub_dir = self.s.root / "stub"
+        stub_dir.mkdir()
+        stub = stub_dir / "claude"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf \'%s\\n\' \'{"type":"assistant","message":{"id":"m1","model":"test",'
+            '"usage":{"input_tokens":1,"cache_creation_input_tokens":0,'
+            '"cache_read_input_tokens":0,"output_tokens":1},"content":[]}}\'\n'
+            f"exit {exit_code}\n", encoding="utf-8")
+        stub.chmod(0o755)
+        env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}",
+                   REVIEW=f"{sys.executable} {TOOL}",
+                   TMPDIR=str(self.s.root / "runs"))
+        (self.s.root / "runs").mkdir()
+        out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "hunter"],
+                             cwd=self.s.root, capture_output=True, text=True, env=env)
+        journal = (self.s.root / "docs/review/journal.md")
+        return out, journal.read_text(encoding="utf-8") if journal.exists() else ""
+
+    def test_упавший_прогон_записан_в_дневник_как_упавший(self):
+        """Дневник — единственная память следующей сессии; обрезанный прогон был записан
+        в нём как обычная строка расхода, и блок читался как пройденный."""
+        out, journal = self._run_role(exit_code=1)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("RUN FAILED", journal)
+        self.assertIn("claude exit 1", journal)
+
+    def test_несобравшийся_промпт_не_оставляет_пустого_файла(self):
+        """`review prompt` отказал — в TMPDIR оставался нулевой файл промпта."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        runs = self.s.root / "runs"
+        runs.mkdir()
+        env = dict(os.environ, REVIEW=f"{sys.executable} {TOOL}", TMPDIR=str(runs))
+        out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "НЕТБЛОКА", "hunter"],
+                             cwd=self.s.root, capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        left = list((runs / "finetooth-runs").glob("*.prompt.md"))
+        self.assertEqual(left, [], "нулевой файл промпта остался в TMPDIR")
+
+    def test_успешный_прогон_записан_обычной_строкой(self):
+        out, journal = self._run_role(exit_code=0)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("hunter — ", journal)
+        self.assertNotIn("RUN FAILED", journal)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,12 +24,20 @@ def read_stream(path: str) -> dict:
     pending: dict[str, tuple[str, dict]] = {}
     result = None
     model = None
+    unreadable = 0
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
                 continue
-            ev = json.loads(line)
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                # A killed run leaves its last line half-written. Dying on it costs the
+                # journal line, the agent's reply and the run's exit code — everything the
+                # measurement was for. The loss is counted and reported, not swallowed.
+                unreadable += 1
+                continue
             t = ev.get("type")
             if t == "assistant":
                 m = ev["message"]
@@ -60,12 +68,27 @@ def read_stream(path: str) -> dict:
             usage[k] += u.get(k, 0) or 0
     # the per-message output count is a stream artefact; the result carries the real one
     ru = (result or {}).get("usage") or {}
-    output = ru.get("output_tokens", sum((u.get("output_tokens", 0) or 0) for u in per_msg.values()))
+    output = ru.get("output_tokens") if result else None
     total_in = usage["input_tokens"] + usage["cache_creation_input_tokens"] + usage["cache_read_input_tokens"]
+    # What the run ENDED as. Without a `result` event there is no measurement at all — the
+    # turns, the duration and the cost are unknown, and printing 0 turns and $0.00 in the
+    # format of a real measurement recorded an expensive truncated run as a free one. A
+    # `result` with a subtype other than `success` is the client's own word that the run was
+    # cut off (the turn cap, an error) — the turn cap is the safety switch, and its trips
+    # must be visible in the journal.
+    subtype = (result or {}).get("subtype")
+    if result is None:
+        outcome = "NO RESULT EVENT — the run was killed or the stream is truncated"
+    elif (result or {}).get("is_error") or (subtype and subtype != "success"):
+        outcome = f"RUN CUT OFF — {subtype or 'error'}"
+    else:
+        outcome = ""
+    if unreadable:
+        outcome = (outcome + "; " if outcome else "") + f"{unreadable} unreadable line(s)"
     return {
         "model": model, "messages": len(per_msg), "turns": (result or {}).get("num_turns"),
         "duration_s": round(((result or {}).get("duration_ms") or 0) / 1000),
-        "cost_usd": (result or {}).get("total_cost_usd"),
+        "cost_usd": (result or {}).get("total_cost_usd"), "outcome": outcome,
         "input": total_in, "cache_read": usage["cache_read_input_tokens"],
         "cache_write": usage["cache_creation_input_tokens"], "uncached": usage["input_tokens"],
         "output": output, "tool_calls": dict(tool_calls), "tool_bytes": dict(tool_bytes),
@@ -75,13 +98,21 @@ def read_stream(path: str) -> dict:
 
 
 def journal_line(a: dict) -> str:
+    """One line for `review log`. What is not measured is printed as `?`, never as zero:
+    the journal is the only memory the next session has, and `0 min, None turns, $0.00`
+    reads there as a cheap completed run, not as a run that was cut off."""
     cache = (a["cache_read"] / a["input"] * 100) if a["input"] else 0
     calls = sum(a["tool_calls"].values())
-    return (f"spend: {a['duration_s'] // 60} min, {a['turns']} turns, {calls} tool calls, "
+    turns = a["turns"] if a["turns"] is not None else "?"
+    minutes = f"{a['duration_s'] // 60}" if a["duration_s"] else "?"
+    output = f"{a['output'] / 1e3:.0f}k" if a["output"] is not None else "?"
+    cost = f"${a['cost_usd']:.2f}" if a["cost_usd"] is not None else "unknown"
+    return ((f"{a['outcome']} · " if a["outcome"] else "")
+            + f"spend: {minutes} min, {turns} turns, {calls} tool calls, "
             f"input {a['input'] / 1e6:.1f}M tokens ({cache:.0f}% from cache, "
-            f"{a['cache_write'] / 1e3:.0f}k written), output {a['output'] / 1e3:.0f}k, "
+            f"{a['cache_write'] / 1e3:.0f}k written), output {output}, "
             f"re-reads {sum(n - 1 for n in a['rereads'].values())}, "
-            f"cost estimate ${a['cost_usd'] or 0:.2f}, model {a['model']}")
+            f"cost estimate {cost}, model {a['model']}")
 
 
 def main() -> int:
@@ -92,14 +123,19 @@ def main() -> int:
     if "--journal" in sys.argv:
         print(journal_line(a))
         return 0
-    print(f"model: {a['model']}; turns: {a['turns']}; duration: {a['duration_s']} s; "
-          f"cost estimate: ${a['cost_usd'] or 0:.2f}")
+    if a["outcome"]:
+        print(f"⚠️  {a['outcome']}: the numbers below are what the stream still holds, "
+              f"not the run's spend")
+    print(f"model: {a['model']}; turns: {a['turns'] if a['turns'] is not None else '?'}; "
+          f"duration: {a['duration_s']} s; cost estimate: "
+          + (f"${a['cost_usd']:.2f}" if a["cost_usd"] is not None else "unknown"))
     share = (lambda k: f"{a[k] / a['input'] * 100:5.1f}%" if a["input"] else "    -")
     print(f"input total   {a['input']:>12,}")
     print(f"  from cache  {a['cache_read']:>12,}  {share('cache_read')}")
     print(f"  to cache    {a['cache_write']:>12,}  {share('cache_write')}")
     print(f"  uncached    {a['uncached']:>12,}  {share('uncached')}")
-    print(f"output        {a['output']:>12,}")
+    print(f"output        {a['output']:>12,}" if a["output"] is not None
+          else f"output        {'?':>12}")
     print("tool calls:")
     for name, n in sorted(a["tool_calls"].items(), key=lambda x: -x[1]):
         print(f"  {name:<10} {n:>5} calls  {a['tool_bytes'].get(name, 0):>10,} result bytes")
