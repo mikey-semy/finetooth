@@ -3075,5 +3075,52 @@ class SpendTest(unittest.TestCase):
         self.assertNotIn("RUN FAILED", journal)
 
 
+class GuardGrepTest(unittest.TestCase):
+    """Узда проекта-пользователя: один маркер — одно послабление, а несуществующий путь
+    — отказ, а не тишина."""
+
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="finetooth-guard-"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.pkg = self.dir / "internal" / "billing"
+        self.pkg.mkdir(parents=True)
+
+    def _run(self, *paths: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(SKILL / "assets" / "guard-grep.sh"), "--pattern", r"\.Publish\(",
+             "--marker", "outbox-allowed:", "--", *paths],
+            capture_output=True, text=True)
+
+    def test_один_маркер_освобождает_один_вызов(self):
+        """Ровно тот дефект, ради замены которого скрипт и написан: `grep -B` склеивал
+        соседние попадания, и маркер первого освобождал второе."""
+        (self.pkg / "a.go").write_text(
+            "package billing\n// outbox-allowed: причина\nbroker.Publish(1)\n"
+            "broker.Publish(2)\nbroker.Publish(3)\nbroker.Publish(4)\n", encoding="utf-8")
+        out = self._run(str(self.pkg))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertNotIn("a.go:3", out.stdout, "вызов под маркером освобождён")
+        for line in (4, 5, 6):
+            self.assertIn(f"a.go:{line}", out.stdout, out.stdout)
+
+    def test_каждому_вызову_свой_маркер_и_дерево_чистое(self):
+        (self.pkg / "a.go").write_text(
+            "package billing\n// outbox-allowed: раз\nbroker.Publish(1)\n"
+            "// outbox-allowed: два\nbroker.Publish(2)\n"
+            "broker.Publish(3) // outbox-allowed: три\n", encoding="utf-8")
+        out = self._run(str(self.pkg))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertEqual(out.stdout, "")
+
+    def test_переименованный_пакет_роняет_ворота_а_не_молчит(self):
+        (self.pkg / "a.go").write_text("package billing\nbroker.Publish(1)\n", encoding="utf-8")
+        self.assertEqual(self._run(str(self.pkg)).returncode, 1)
+        (self.pkg).rename(self.dir / "internal" / "payments")
+        out = self._run(str(self.pkg))
+        self.assertEqual(out.returncode, 2, out.stdout)
+        self.assertIn("no such path", out.stderr)
+        self.assertIn("not the same as a clean tree", out.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

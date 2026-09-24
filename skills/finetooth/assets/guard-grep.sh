@@ -11,7 +11,10 @@
 # three lines below it. The escape hatch freed the neighbour instead of itself.
 #
 # Here each hit is paired with the marker by LINE NUMBER, inside its own file,
-# so a marker covers exactly the call it was written above and nothing else.
+# and a marker is SPENT on the first hit it covers, so it exempts exactly the call
+# it was written above and nothing else. Without that last part the rewrite
+# reproduced the very defect it replaced: one marker freed every hit in the window
+# below it — three calls out of four went unreported behind a single hatch.
 #
 # Usage:
 #   guard-grep.sh --pattern <ERE> --marker <text> [--exclude <ERE>]
@@ -24,9 +27,9 @@
 #   --skip      filename glob to leave out entirely, repeatable (e.g. "*_test.go")
 #
 # Prints one `path:line: source` per violation and exits 1; silent with exit 0
-# when the tree is clean. It scans files, not directories, so a path that does
-# not exist is simply skipped — a gate must not go green because someone moved
-# a package.
+# when the tree is clean. A path that does not exist is a REFUSAL (exit 2), not a
+# skip: a gate must not go green because someone renamed a package, and a typo in
+# a Makefile path must not be indistinguishable from a clean tree.
 set -euo pipefail
 
 pattern=""
@@ -61,12 +64,23 @@ for skip in ${skips+"${skips[@]}"}; do
 	find_args+=(! -name "$skip")
 done
 
+missing=()
+for path in "$@"; do
+	[ -e "$path" ] || missing+=("$path")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+	echo "guard-grep: no such path: ${missing[*]}" >&2
+	echo "guard-grep: the gate scanned nothing, which is not the same as a clean tree." >&2
+	echo "guard-grep: fix the path in the gate that calls this script (a renamed package?)," >&2
+	echo "guard-grep: or drop it from the gate if the code it guarded is gone." >&2
+	exit 2
+fi
+
 files=()
 while IFS= read -r -d '' file; do
 	files+=("$file")
 done < <(
 	for path in "$@"; do
-		[ -e "$path" ] || continue
 		find "$path" "${find_args[@]}" -print0
 	done
 )
@@ -85,15 +99,22 @@ BEGIN {
 	exclude = ENVIRON["GG_EXCLUDE"]
 	window  = ENVIRON["GG_WINDOW"] + 0
 }
-FNR == 1 { delete line }
+FNR == 1 { delete line; delete spent }
 { line[FNR] = $0 }
 $0 ~ pattern {
 	if (exclude != "" && $0 ~ exclude) next
 	# The marker may sit on the hit itself (a trailing comment) or in the
 	# window of lines directly above it — and nowhere else.
 	if (index($0, marker) > 0) next
-	for (i = FNR - window; i < FNR; i++) {
-		if (i > 0 && index(line[i], marker) > 0) next
+	# ONE marker, ONE call. Searched upwards from the nearest line, and the
+	# marker that covers this hit is spent: the next hit below it needs its own.
+	# A marker that freed every hit in its window is the grep -B defect this
+	# script exists to replace.
+	for (i = FNR - 1; i >= FNR - window; i--) {
+		if (i > 0 && !spent[i] && index(line[i], marker) > 0) {
+			spent[i] = 1
+			next
+		}
 	}
 	printf "%s:%d: %s\n", FILENAME, FNR, $0
 	found = 1
