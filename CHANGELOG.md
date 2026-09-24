@@ -9,6 +9,10 @@ with a review already under way.
 
 ## [Unreleased]
 
+### Removed
+
+- `docs/` and `ROADMAP.md` moved to the private knowledge base `finetooth-hq`: measurements, prior art, method comparison, token economy, the open-source plan and the roadmap. The public repository keeps what a user of the kit needs. The banner moved to `.github/banner.png`.
+
 ### Added
 
 - Branch model: `master` for releases, `dev` for integration (default branch), feature branches from `dev`; CI runs on both.
@@ -406,10 +410,10 @@ Plus the first real portability bug, found before it bit anyone.
 - **Checks carried over from the experience of neighbouring projects**: the fix commit must
   exist and touch the finding's file; a block status written in bypassing `set-status`; a manifest
   shorter than two hundred characters; `running` without a timestamp or with an unreadable one.
-- Documents: [`docs/measurements.md`](docs/measurements.md) — all measurements with the method
-  and the limits of transfer; [`docs/prior-art.md`](docs/prior-art.md) — who has already solved
+- Documents: `measurements` (knowledge base) — all measurements with the method
+  and the limits of transfer; `prior-art` (knowledge base) — who has already solved
   the plan's tasks and how it went for them, including the section "what cannot be used to
-  measure"; [`ROADMAP.md`](ROADMAP.md) — seven directions and what is not worth doing.
+  measure"; the roadmap (knowledge base) — seven directions and what is not worth doing.
 - A banner in the README: the three roles the method stands on.
 
 ### Measured
@@ -433,7 +437,7 @@ Plus the first real portability bug, found before it bit anyone.
 ## [0.1.0] — 2026-09-21
 
 The first release of this repository. The kit came ready-made from the author of a neighbouring
-project (an archive of 16.09.2026, the analysis is in [`docs/how-it-works.md`](docs/how-it-works.md));
+project (an archive of 16.09.2026, the analysis is in `how-it-works` (knowledge base));
 here it is brought into a state where it can be installed into any project, and checked against
 world practice.
 
@@ -470,7 +474,7 @@ world practice.
 - **The `{{PROJECT}}` and `{{GATES}}` substitutions** from `blocks.json` — the prompt template
   no longer greets the agent on behalf of someone else's project.
 - **`make` targets** (`example/makefile-snippet.mk`) and the same list for `package.json`.
-- Documents: [`docs/comparison-with-practice.md`](docs/comparison-with-practice.md) — a check of
+- Documents: `comparison-with-practice` (knowledge base) — a check of
   the method against the methodology of audit firms, the practice of Google and Meta, industrial
   AI reviewers, science and neighbours in the niche on GitHub.
 

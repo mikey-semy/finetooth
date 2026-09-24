@@ -18,7 +18,7 @@ and directory layout, and the project root is taken from the working directory, 
 file's location.
 
 The design and intent are in [`README.md`](README.md), the check against world practice in
-[`docs/comparison-with-practice.md`](docs/comparison-with-practice.md), the history in
+`comparison-with-practice` in the knowledge base (private repository `finetooth-hq`), the history in
 [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Rules that must not be broken here
@@ -43,7 +43,7 @@ The design and intent are in [`README.md`](README.md), the check against world p
    body of `SKILL.md` is shorter than 500 lines; details go to `references/`, links from
    `SKILL.md` go one level deep.
 7. **File names in Latin letters**; content in English, with Russian copies in `README.ru.md`
-   and `docs/ru/`.
+   (`README.ru.md`, `CHANGELOG.ru.md`); research, measurements and the roadmap live in the private knowledge base `finetooth-hq`.
 8. **A change to a mechanism is a change to a prompt.** If a gate has started requiring
    something new, the role template must say so: the agent will not guess it from an error
    message that a human will see.
