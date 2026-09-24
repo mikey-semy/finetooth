@@ -1,0 +1,29 @@
+name: Дефект инструмента
+description: check зеленеет на ложном состоянии, prompt собирает не то, команда падает
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: вывод `python3 <скилл>/scripts/review.py version`
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как воспроизвести
+      description: команды по порядку на свежем временном репозитории — как в tests/test_review.py
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидалось и что вышло
+    validations:
+      required: true
+  - type: textarea
+    id: state
+    attributes:
+      label: Состояние (если относится)
+      description: куски blocks.json / state.json / findings.jsonl без чужих данных
