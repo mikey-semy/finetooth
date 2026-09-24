@@ -415,6 +415,7 @@ docs/ru/                          Russian copies of the docs
 README.ru.md                      this file in Russian
 AGENTS.md                         rules for whoever edits the kit itself
 CONTRIBUTING.md                   how to contribute: DCO, test + mutation, no dependencies
+RELEASING.md                      how versions are numbered and what a release must prove
 NOTICE.md                         origin and rights: two authors, consent to MIT
 SECURITY.md                       how to report a vulnerability and what counts as one
 CODE_OF_CONDUCT.md                Contributor Covenant 2.1
