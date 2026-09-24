@@ -1,0 +1,104 @@
+{
+  "review_id": "finetooth-review",
+  "kit_version": "0.7.0",
+  "project": "finetooth",
+  "lang": "en",
+  "cli": "python3 skills/finetooth/scripts/review.py",
+  "gates": [
+    "python3 -m unittest discover -s tests",
+    "skills-ref validate skills/finetooth"
+  ],
+  "note": "Static definition of the blocks. Progress lives in state.json, findings in findings.jsonl. Array order = execution order.",
+  "exclusions": [
+    {
+      "pattern": "docs/review/**",
+      "reason": "review apparatus, not its subject"
+    },
+    {
+      "pattern": ".github/*.png",
+      "reason": "images (logo)"
+    }
+  ],
+  "blocks": [
+    {
+      "id": "T1",
+      "slug": "tool",
+      "phase": 1,
+      "title": "The tool: review.py, axes.py, run-role.sh",
+      "role": "reviewer",
+      "goal": "Find the ways check goes green on a wrong state, parsers that match shape instead of meaning, git interactions that read the disk or break on legal paths, fingerprints that miss their subject, and strings present in one language only.",
+      "paths": [
+        "skills/finetooth/scripts/**",
+        "skills/finetooth/assets/run-role.sh",
+        "skills/finetooth/assets/guard-grep.sh"
+      ],
+      "ref_paths": [
+        "tests/test_review.py",
+        "skills/finetooth/references/**"
+      ]
+    },
+    {
+      "id": "T2",
+      "slug": "prompts",
+      "phase": 1,
+      "title": "Prompts, samples and the skill contract",
+      "role": "reviewer",
+      "goal": "Find where the role templates (en/ru) diverge from each other or from what check demands, where samples contradict the tool, and where SKILL.md promises what the tool does not do.",
+      "paths": [
+        "skills/finetooth/SKILL.md",
+        "skills/finetooth/LICENSE",
+        "skills/finetooth/references/**",
+        "skills/finetooth/assets/*.md",
+        "skills/finetooth/assets/*.json",
+        "skills/finetooth/assets/*.mk",
+        "examples/**"
+      ],
+      "ref_paths": [
+        "skills/finetooth/scripts/review.py"
+      ]
+    },
+    {
+      "id": "T3",
+      "slug": "tests",
+      "phase": 2,
+      "title": "Tests as the gate: are the checks proven",
+      "role": "reviewer",
+      "proof": "measured",
+      "goal": "Prove or disprove the claim in CONTRIBUTING: every check has a test and every test is proven by a mutation. The artefacts are mutation runs, not a reading.",
+      "paths": [
+        "tests/**"
+      ],
+      "ref_paths": [
+        "skills/finetooth/scripts/review.py"
+      ]
+    },
+    {
+      "id": "T4",
+      "slug": "repo-contract",
+      "phase": 2,
+      "title": "Documentation and the repository contract",
+      "role": "reviewer",
+      "goal": "Find where README/CHANGELOG (en/ru) promise behaviour the tool does not have, where the two languages diverge in substance, and where CI, templates and release rules contradict RELEASING/CONTRIBUTING.",
+      "paths": [
+        "README.md",
+        "README.ru.md",
+        "CHANGELOG.md",
+        "CHANGELOG.ru.md",
+        "CONTRIBUTING.md",
+        "RELEASING.md",
+        "SECURITY.md",
+        "NOTICE.md",
+        "CODE_OF_CONDUCT.md",
+        "CODE_OF_CONDUCT.ru.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "LICENSE",
+        ".gitignore",
+        ".github/**"
+      ],
+      "ref_paths": [
+        "skills/finetooth/SKILL.md"
+      ]
+    }
+  ]
+}

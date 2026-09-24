@@ -1663,13 +1663,17 @@ class ReviewToolTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.commit()
+        # У самого набора есть своё ревью (docs/review/ в репозитории скилла) — запуск в
+        # чужом дереве не должен его ни создать, ни тронуть.
+        kit_state = KIT / "docs" / "review" / "state.json"
+        before = kit_state.read_bytes() if kit_state.exists() else None
         self.s.run("init")
         out = subprocess.run(["python3", str(TOOL), "status"], cwd=self.s.root / "src",
                              capture_output=True, text=True, check=False)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("H1", out.stdout, "из подкаталога — тот же корень")
-        self.assertFalse((KIT / "docs" / "review" / "state.json").exists(),
-                         "состояние не должно уехать в репозиторий, где лежит скилл")
+        after = kit_state.read_bytes() if kit_state.exists() else None
+        self.assertEqual(before, after, "состояние не должно уехать в репозиторий, где лежит скилл")
 
     def test_вне_репозитория_инструмент_отказывает(self):
         plain = Path(tempfile.mkdtemp(prefix="finetooth-plain-"))
