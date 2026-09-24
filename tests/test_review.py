@@ -960,13 +960,21 @@ class ReviewToolTest(unittest.TestCase):
 
     def test_шаблоны_ролей_говорят_где_писать_вердикт(self):
         """Правка механизма — правка промпта: разборщик перестал читать вердикты внутри
-        ограды кода, и шаблоны обоих языков обязаны сказать об этом. Иначе гейт краснеет
+        цитаты, и шаблоны обоих языков обязаны назвать все её формы. Иначе гейт краснеет
         на честном отчёте, а это дефект набора, а не агента."""
         refs = SKILL / "references"
-        self.assertIn("outside code blocks", (refs / "hunter.md").read_text(encoding="utf-8"))
-        self.assertIn("вне блоков кода", (refs / "hunter.ru.md").read_text(encoding="utf-8"))
-        self.assertIn("outside code blocks", (refs / "verify.md").read_text(encoding="utf-8"))
-        self.assertIn("вне блоков кода", (refs / "verify.ru.md").read_text(encoding="utf-8"))
+        forms = {"": ("outside code blocks and quotations", "indented by four spaces",
+                      "`>`", "html comment"),
+                 ".ru": ("вне блоков кода и цитат", "отступом в четыре пробела",
+                         "`>`", "html-комментарий")}
+        for role in ("hunter", "verify"):
+            for lang, said in forms.items():
+                name = f"{role}{lang}.md"
+                # шаблон свёрстан по ширине: перенос строки внутри фразы — не пропуск
+                text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8"))
+                for form in said:
+                    with self.subTest(шаблон=name, форма=form):
+                        self.assertIn(form, text, f"{name}: форма цитаты не названа")
 
     def test_axes_считает_usage_раз_на_сообщение_и_перечитывания(self):
         """stream-json дробит одно сообщение на несколько событий с ОДНИМ usage: считать
@@ -2311,6 +2319,32 @@ class ReportShapeTest(unittest.TestCase):
         self.assertRegex(out, r"H1\.1\s+checked")
         self.assertIn("closed 1/1", out)
         self.assertNotIn("different verdicts", self.s.run("check").stdout)
+
+    def test_вердикт_внутри_отступа_или_цитаты_не_вердикт(self):
+        """Ограда — одна из четырёх форм, которыми markdown цитирует образец. Отчёт,
+        пересказавший своё задание блоком с отступом, цитатой `>` или html-комментарием,
+        закрывал гипотезы, не ответив ни на одну."""
+        for name, body in (
+                ("отступ", "Ответов ниже нет.\n\n    - H1.1 — проверена: <чем доказано>\n"),
+                ("цитата", "Ответов ниже нет.\n\n> - H1.1 — проверена: <чем доказано>\n"),
+                ("комментарий", "Ответов ниже нет.\n\n<!-- - H1.1 — проверена: образец -->\n")):
+            with self.subTest(форма=name):
+                self._stand("# охотник\n\n## Гипотезы\n\n" + body + self.LIMITS)
+                out = self.s.run("hypotheses", "H1").stdout
+                self.assertIn("NO VERDICT", out)
+                self.assertIn("closed 0/1", out)
+
+    def test_вердикт_под_своей_гипотезой_с_отступом_по_прежнему_вердикт(self):
+        """Обратная сторона: доказательство отчёт пишет вложенным списком под гипотезой, и
+        такой отступ — продолжение пункта, а не образец. Считать его цитатой значит
+        покраснеть на честном отчёте."""
+        self._stand("# охотник\n\n## Гипотезы\n\n"
+                    "- Разбор вердиктов\n"
+                    "    - H1.1 — проверена: матрица из 21 входа, все совпали.\n"
+                    + self.LIMITS)
+        out = self.s.run("hypotheses", "H1").stdout
+        self.assertRegex(out, r"H1\.1\s+checked")
+        self.assertIn("closed 1/1", out)
 
     def test_слово_вердикта_в_обратных_кавычках_цитата(self):
         """«в отчёте написано `не проверена`, а на деле я проверил» — цитата слова."""
@@ -3697,17 +3731,39 @@ class SourceRuleTest(unittest.TestCase):
                 offenders.append((node.lineno, items))
         self.assertEqual(offenders, [], "вызов git со списком путей без -z")
 
-    def test_ограды_кода_распознаются_одним_местом(self):
-        """УЗДА КЛАССА «ограда кода не распознана».
+    # Распознавание цитаты живёт в этих двух функциях; всё остальное зовёт `quoted_lines`.
+    QUOTE_TRACKERS = ("fenced_lines", "quoted_lines")
+    # Разборчики markdown, каждый из которых обязан считать цитату цитатой: правка одного
+    # без остальных — это ровно то расхождение, из-за которого `~~~` знал только один.
+    MARKDOWN_PARSERS = ("demote", "section_body", "section_items_full", "verdict_mentions")
+
+    def test_цитаты_распознаются_одним_местом(self):
+        """УЗДА КЛАССА «цитата не распознана».
 
         Каждый разборщик имел своё представление об ограде, и `~~~` не знал никто: правка
-        одного места не чинила остальные. Распознавание живёт в `fenced_lines`, и своих
-        детекторов быть не должно.
+        одного места не чинила остальные. Форм цитаты четыре — ограда, отступ, `>` и
+        html-комментарий, — и каждая по очереди закрывала гипотезу, которую никто не
+        отвечал. Распознавание живёт в одном месте, своих детекторов быть не должно, а
+        разборщики обязаны звать общий трекер поимённо.
         """
         self.assertNotIn('startswith("```")', self.SOURCE,
-                         "своё распознавание ограды — зовите fenced_lines()")
-        self.assertGreaterEqual(self.SOURCE.count("fenced_lines("), 4,
-                                "разборщики обязаны звать общий трекер ограды")
+                         "своё распознавание ограды — зовите quoted_lines()")
+        tree = ast.parse(self.SOURCE)
+        detectors = {"FENCE", "BLOCKQUOTE", "LIST_OPEN", "CODE_INDENT",
+                     "COMMENT_OPEN", "COMMENT_CLOSE"}
+        strangers, deaf = [], []
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+            calls = {n.func.id for n in ast.walk(fn)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+            if fn.name not in self.QUOTE_TRACKERS and names & detectors:
+                strangers.append((fn.name, sorted(names & detectors)))
+            if fn.name in self.MARKDOWN_PARSERS and "quoted_lines" not in calls:
+                deaf.append(fn.name)
+        self.assertEqual(strangers, [], "своё распознавание цитаты — зовите quoted_lines()")
+        self.assertEqual(deaf, [], "разборщик markdown не зовёт общий трекер цитаты")
 
     def test_записи_коммитов_разбираются_одним_местом(self):
         """УЗДА КЛАССА «поток `git log -z` разобран своими руками».

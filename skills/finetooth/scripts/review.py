@@ -1450,6 +1450,81 @@ def fenced_lines(lines: list[str]) -> list[bool]:
     return out
 
 
+# A fence is one of FOUR ways markdown quotes an example, and a report uses all four: the
+# fence was closed first, and a hypothesis verdict restated as an indented example or
+# quoted from the template with `>` still closed a hypothesis nobody had answered.
+# A blockquote at any indentation — inside a list item a quote is indented with it.
+BLOCKQUOTE = re.compile(r"^\s*>")
+# A list marker, so that a nested item is not read as indented code: inside a list item
+# the code column moves to the item's own content column, four spaces further in
+# (CommonMark 4.4 and 5.2). Without this, every sub-item of a hypothesis became an example.
+LIST_OPEN = re.compile(r"^(\s*)([-*+]|\d+[.)])(\s+)")
+# Four spaces past the enclosing content column — the CommonMark indented code block.
+CODE_INDENT = 4
+COMMENT_OPEN, COMMENT_CLOSE = "<!--", "-->"
+
+
+def quoted_lines(lines: list[str]) -> list[bool]:
+    """For every line: is it QUOTED rather than said — an example, not the report's answer.
+
+    Four forms, all of them ordinary markdown and all of them written by real reports: a
+    fenced block, an indented code block, a blockquote, an HTML comment. ONE tracker for
+    the whole tool: while every parser had its own idea of what a code block is, `demote`
+    pushed a heading inside a tilde fence down a level and `section_body` cut the manifest's
+    hypotheses short at a `# comment` inside one.
+
+    An indented code block cannot interrupt a paragraph (a blank line must come first) and
+    it measures its indent from the enclosing list item's content column — otherwise a
+    hypothesis's own sub-items, which is how a report writes its proof, would all be read
+    as examples and the gate would refuse an honest report.
+    """
+    out: list[bool] = []
+    in_comment = False
+    content_col = 0      # where the innermost open list item's content begins
+    prev_blank = True    # an indented code block may only start after a blank line
+    for ln, fenced in zip(lines, fenced_lines(lines)):
+        if fenced:
+            out.append(True)
+            prev_blank = False
+            continue
+        rest = ln
+        if in_comment:
+            _, sep, after = ln.partition(COMMENT_CLOSE)
+            in_comment = not sep
+            rest = after if sep else ""
+        while not in_comment and COMMENT_OPEN in rest:
+            before, _, tail = rest.partition(COMMENT_OPEN)
+            _, sep, after = tail.partition(COMMENT_CLOSE)
+            in_comment = not sep
+            rest = before + after if sep else before
+        # What is left of the line outside the comments decides: a line that is nothing but
+        # a comment is a quotation, a sentence with a note after it is still a sentence.
+        if rest != ln and not rest.strip():
+            out.append(True)
+            prev_blank = False
+            continue
+        if not ln.strip():
+            out.append(False)
+            prev_blank = True
+            continue
+        if BLOCKQUOTE.match(ln):
+            out.append(True)
+            prev_blank = False
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        if prev_blank and indent >= content_col + CODE_INDENT:
+            out.append(True)    # indented code: the list context it sits in is untouched
+            continue
+        out.append(False)
+        prev_blank = False
+        mark = LIST_OPEN.match(ln)
+        if mark:
+            content_col = len(mark.group(0))
+        elif indent == 0:
+            content_col = 0     # a paragraph at the margin closes every open list
+    return out
+
+
 def demote(md: str) -> str:
     """Push an embedded document one heading level down.
 
@@ -1460,7 +1535,7 @@ def demote(md: str) -> str:
     """
     lines = md.split("\n")
     out = []
-    for line, inside in zip(lines, fenced_lines(lines)):
+    for line, inside in zip(lines, quoted_lines(lines)):
         if not inside and line.startswith("#"):
             line = "#" + line
         out.append(line)
@@ -2426,7 +2501,7 @@ def section_body(md: str, heading: re.Pattern) -> list[str] | None:
     body: list[str] | None = None
     depth = 0
     lines = md.split("\n")
-    for line, fenced in zip(lines, fenced_lines(lines)):
+    for line, fenced in zip(lines, quoted_lines(lines)):
         if not fenced and line.startswith("#"):
             level = len(line) - len(line.lstrip("#"))
             if body is None:
@@ -2449,7 +2524,7 @@ def section_items_full(md: str, heading: re.Pattern) -> list[str]:
     """
     lines = section_body(md, heading) or []
     marks = []
-    for i, (ln, fenced) in enumerate(zip(lines, fenced_lines(lines))):
+    for i, (ln, fenced) in enumerate(zip(lines, quoted_lines(lines))):
         if not fenced and LIST_ITEM.match(ln):
             # TOP-level items are counted: a nested list under a hypothesis is its details,
             # not a new hypothesis, and a list line inside a code block is an example.
@@ -2509,7 +2584,7 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     table_about_hypotheses = False
     prev_was_row = False
     lines = text.split("\n")
-    for line, fenced in zip(lines, fenced_lines(lines)):
+    for line, fenced in zip(lines, quoted_lines(lines)):
         # A fenced block is an EXAMPLE, not an answer. The role template hands the agent the
         # shape of a verdict line inside a ```markdown fence, with the block id already
         # substituted; a report that quotes that skeleton and answers nothing closed every

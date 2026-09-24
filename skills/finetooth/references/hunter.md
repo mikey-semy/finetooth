@@ -90,11 +90,13 @@ A hypothesis without a verdict fails the state check: this is the second denomin
 coverage next to the file map. A file can be opened and nothing understood — but the
 question "can an organization member invite the owner" either has an answer or it does not.
 
-**Write the verdict as an ordinary line of the report, outside code blocks.** Everything
-inside a ``` or ~~~ fence is read as an example, not as an answer — including the three
-lines above, if you copy them across as they stand. A verdict word alone in backticks
-(`` `checked` ``) is a quotation of the word, not a verdict either; a whole verdict line in
-backticks is one.
+**Write the verdict as an ordinary line of the report, outside code blocks and quotations.**
+Everything markdown treats as quoted is read as an example, not as an answer — a ``` or ~~~
+fence, a block indented by four spaces, a line behind `>`, an `<!-- html comment -->` —
+including the three lines above, if you copy them across as they stand. A verdict word
+alone in backticks (`` `checked` ``) is a quotation of the word, not a verdict either; a
+whole verdict line in backticks is one. A sub-item under your own verdict is not a
+quotation: proof written indented under the line still belongs to it.
 
 ## Tree freshness
 
