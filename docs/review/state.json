@@ -1,13 +1,16 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-24T13:08:29Z",
+  "updated_at": "2026-09-24T15:21:16Z",
   "blocks": {
     "T1": {
-      "status": "todo",
-      "started": null,
+      "status": "verified",
+      "started": "2026-09-24T14:23:40Z",
       "finished": null,
       "reports": [],
-      "note": ""
+      "note": "",
+      "reviewed_sha": "fc4179bf13a251f4",
+      "refs_sha": "734bdac9e1334bb6",
+      "hypotheses_sha": "4ab68e42761325b3"
     },
     "T2": {
       "status": "todo",
