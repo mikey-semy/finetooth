@@ -1,9 +1,9 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-24T15:21:16Z",
+  "updated_at": "2026-09-24T15:21:52Z",
   "blocks": {
     "T1": {
-      "status": "verified",
+      "status": "fixing",
       "started": "2026-09-24T14:23:40Z",
       "finished": null,
       "reports": [],

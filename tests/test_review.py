@@ -992,6 +992,22 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
         self.assertNotIn("is cited, but", self.s.run("check").stdout)
 
+    def test_подстановка_в_тексте_находки_не_роняет_prompt(self):
+        """Находка про шаблон цитирует `{{FILES}}` — это цитата, а не незаполненное место."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "шаблон оставляет {{FILES}} и {{HUNTER_NOTE}} без значения",
+            "scenario": "агент видит {{FILES}} как задание"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        out = self.s.run("prompt", "H1", "--role", "fix")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("{{HUNTER_NOTE}}", out.stdout)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])

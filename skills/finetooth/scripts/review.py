@@ -1339,12 +1339,14 @@ def cmd_prompt(args) -> int:
         "{{GATES}}": "\n".join(f"- `{g}`" for g in defn.get("gates", []))
         or T("gates_missing"),
     }
+    # An unfilled substitution would reach the agent as the text "{{SOMETHING}}" — and it
+    # would read it as an assignment. Checked on the TEMPLATE, not on the assembled text:
+    # substituted content (a finding about a template, a manifest quoting one) legally
+    # carries "{{FILES}}" as a quotation, and the assembled check refused the fix prompt
+    # of the kit's own review for exactly that.
+    left = sorted(set(PLACEHOLDER.findall(body)) - set(subs) - {"{{DIFF}}"})
     for k, v in subs.items():
         body = body.replace(k, v)
-    # An unfilled substitution would reach the agent as the text "{{SOMETHING}}" — and it
-    # would read it as an assignment. Checked BEFORE the diff is pasted: curly braces are
-    # legal in someone else's code.
-    left = sorted(set(PLACEHOLDER.findall(body)) - {"{{DIFF}}"})
     if left:
         die(f"template {template.name} has substitutions left without a value: {', '.join(left)}")
     if args.role == "fixreview":
