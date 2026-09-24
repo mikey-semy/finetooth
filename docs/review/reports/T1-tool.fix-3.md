@@ -244,17 +244,22 @@ evidence. Its own class — a path written another way — is held by the four `
    `ReviewToolTest.test_критерий_приёмки_в_итоге_без_вставленного_образца` — the sentence stays,
    the fence does not. Red on the reverted fix (build ok):
    `AssertionError: '```markdown' unexpectedly found in …`, and the class guard red beside it.
-2. **The unreleased changelog bullet pointing at `fenced_lines`** (this commit), in both
+2. **The unreleased changelog bullet pointing at `fenced_lines`** (`2b8c7be`), in both
    languages: the function it named no longer exists, and the entry is still unreleased. Only
    the name inside the parentheses changed; no heading, no version, no released text. Held by
    nothing but the rule that a name in the changelog is a name in the code — no test, and it
    is named here for that reason.
-3. **The over-long scenario of finding T1-033 trimmed** in `findings.jsonl` (757 characters
-   against the limit of 700), and `findings.md` regenerated — the same register bookkeeping
-   the previous round did for T1-030, and the same cause: `import` writes a row that `check`
-   then refuses, saying nothing at import time. That is the new finding round 2 named rather
-   than fixed, and it is still open as a finding of a different kind, not a fix inside
-   someone else's.
+3. **The over-long scenario of finding T1-033 trimmed** in `findings.jsonl` (`2b8c7be`, 757
+   characters against the limit of 700), and `findings.md` regenerated — the same register
+   bookkeeping the previous round did for T1-030, and the same cause: `import` writes a row
+   that `check` then refuses, saying nothing at import time. That is the new finding round 2
+   named rather than fixed, and it is still open as a finding of a different kind, not a fix
+   inside someone else's.
+4. **`SKILL.md` says what `axes.py --reply` is for** (`a15fa7f`). A change to a mechanism is a
+   change to what an agent reads: the flag was added in `02cfa59` and the file that describes
+   the scripts did not know about it. No test — the file's own rules (name, description,
+   length, links one level deep) are held by `SkillFormatTest` and by `skills-ref validate`,
+   both green after the edit.
 
 ## Rejected findings
 
