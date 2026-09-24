@@ -19,8 +19,14 @@ with a review already under way.
 
 - `docs/` and `ROADMAP.md` moved to the private knowledge base `finetooth-hq`: measurements, prior art, method comparison, token economy, the open-source plan and the roadmap. The public repository keeps what a user of the kit needs. The old banner is gone with it — replaced by the logo.
 
+### Breaking
+
+- **The fix gate.** `set-status <ID> running` now refuses while findings of `high` severity or above are open in the blocks already passed. A review in progress with such findings: fix them (`set-finding … fixed --commit`), defer with a reason, reject — or record the decision to run without the gate as `"fix_gate": "none"` in `blocks.json`. Roadmap direction 11: the method finds faster than a project fixes (first project: 77 findings on 5 blocks, 9 fixed).
+
 ### Added
 
+- `fix_gate` in `blocks.json` (`critical|high|medium|low|none`, default `high`); `status` prints the fix debt as its own line (how many open at the gate level, in which blocks); `check` warns about open findings older than 7 days by `imported_at` — the same week the stale-tree check allows. Mutations: gate check disabled → `test_гейт_починки_не_пускает_следующий_блок…` red; debt line removed → `test_статус_показывает_долг_починки` red; age warning removed → `test_check_предупреждает_о_находке_старше_недели` red; same-block exception removed → the gate test red on re-entering the block.
+- Fix-review template: "of the findings above, N inside the code the previous round changed, M outside" — the number a human needs to stop a loop of rounds (issue #9).
 - Logo (`.github/logo-light.png`, `.github/logo-dark.png`), shown in the README with the GitHub theme switch.
 - Branch model: `master` for releases, `dev` for integration (default branch), feature branches from `dev`; CI runs on both.
 - `RELEASING.md`: semantic versioning with a zero major, at most one release a week, four

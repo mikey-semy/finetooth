@@ -81,7 +81,11 @@ one of your own:
    fixer. Findings are moved with `review set-finding <ID…> fixed --commit <sha>` (several ids
    at once); a defect class with a third instance is closed by a guard
    (`--rule <path to the test or rule>`), not by a list of fixes. Deferring is allowed only
-   with a reason (`deferred --reason`).
+   with a reason (`deferred --reason`). **The fix gate:** `review set-status <next ID> running`
+   refuses while findings at `fix_gate` severity or above (`high` by default, set in
+   `blocks.json`; `"none"` switches it off) are open in the blocks already passed — the
+   method finds faster than a project fixes, and a finding that never reaches a fix is debt.
+   `review status` shows this debt as its own line.
 8. **Fix reviewer** — a fresh agent that did not write the fixes:
    `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope <half>]`.
    The diff is pasted into the prompt whole; two agents on two halves of the diff is fine. Its
@@ -111,6 +115,7 @@ a file without a block and a stale coverage map; a file of a readable block not 
 path in any report (what was read — as a list, what was not — in the coverage limits); a
 hypothesis without a verdict or with conflicting verdicts; a hunter report without a
 "Coverage limits" section and an empty verifier report; a deferred finding without a reason;
+an open finding older than a week (a warning);
 a block in `blocked` without a note; phases out of order; a block closed with fixes but
 without a fix review; a block and a finding closed on a different version of the code
 (fingerprints — `review restamp` if the changes are unrelated, `review backfill` for records

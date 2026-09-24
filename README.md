@@ -449,3 +449,11 @@ CHANGELOG.md                      version history
 
 Block statuses: `todo → running → hunted → verified → triaged → fixing → closed` (plus
 `blocked`). Finding statuses: `open`, `fixed`, `rejected`, `duplicate`, `deferred`.
+
+**The fix gate.** The method finds faster than a project fixes (the first project: 77 findings
+on 5 blocks, 9 fixed), and a finding that never reaches a fix is debt — a month later the
+register describes code that no longer exists. So `set-status <ID> running` refuses while
+findings at `fix_gate` severity or above (`high` by default; `"fix_gate": "none"` in
+`blocks.json` switches it off) are open in the blocks already passed. The way out is to fix,
+defer with a reason or reject — never to ignore. `status` prints the debt as its own line, and
+`check` warns about open findings older than a week.
