@@ -1526,6 +1526,17 @@ def quoted_lines(lines: list[str]) -> list[bool]:
     return out
 
 
+def unquoted(lines: list[str]) -> list[str]:
+    """The lines a text SAYS — its quotations dropped.
+
+    A gate that reads a report's SUBSTANCE must read the report's own words. A verifier
+    report whose whole body was the template's example inside a ```markdown fence — nothing
+    verified, nothing stated — satisfied every substance gate, and the block stayed
+    `verified` with `check` printing "review state is consistent".
+    """
+    return [ln for ln, quote in zip(lines, quoted_lines(lines)) if not quote]
+
+
 def demote(md: str) -> str:
     """Push an embedded document one heading level down.
 
@@ -2431,22 +2442,27 @@ def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
 
     The file's existence proved only that the file was created: an empty `*.verify.md`
     alongside a full hunter report moved the block to `verified` without an independent check.
+    A file full of quotations is that same empty file: the template's example restated
+    inside a fence verifies nothing and states nothing, so what the gate weighs is what the
+    report SAYS — headings and quotations are not it.
     """
-    body = [ln for ln in rep.read_text(encoding="utf-8").splitlines()
+    body = [ln for ln in unquoted(rep.read_text(encoding="utf-8").splitlines())
             if ln.strip() and not ln.lstrip().startswith("#")]
     if not body:
         return (f"verifier report {rep.name} is empty — there is a file, there is no verification; "
-                f"each finding needs a verdict, the block needs a coverage state")
+                f"each finding needs a verdict, the block needs a coverage state, and both as "
+                f"ordinary lines: a fenced, indented, `>`-quoted or commented-out block is an example")
     text = "\n".join(body)
     if has_findings and not FINDING_VERDICT.search(text):
         return (f"verifier report {rep.name} has no verdict on any finding — "
-                f"confirmed / plausible / rejected / duplicate with reasoning")
+                f"confirmed / plausible / rejected / duplicate with reasoning, as an "
+                f"ordinary line and not inside a fence or a quotation")
     # Coverage is a separate question, not replaced by verdicts: what was found says
     # nothing about what remained unreviewed.
     if not COVERAGE_VERDICT.search(
             "\n".join(ln for ln in body if not COVERAGE_PLACEHOLDER.search(ln))):
         return (f"verifier report {rep.name} has no coverage verdict — is it complete and "
-                f"what is left")
+                f"what is left, as an ordinary line and not inside a fence or a quotation")
     return None
 
 
@@ -3124,12 +3140,15 @@ def cmd_check(args) -> int:
                     f"{b['id']}: the hunter report has no 'Coverage limits' section — "
                     f"what was deliberately not read and why"
                 )
-            elif not [ln for ln in body if ln.strip() and not LIMITS_PLACEHOLDER.search(ln)]:
+            elif not [ln for ln in unquoted(body)
+                      if ln.strip() and not LIMITS_PLACEHOLDER.search(ln)]:
                 # A heading without text is the same silence as no heading: neither what
-                # was not reviewed is named, nor that there is nothing of the kind.
+                # was not reviewed is named, nor that there is nothing of the kind. A
+                # section holding only the template's fenced example is that same silence.
                 problems.append(
                     f"{b['id']}: the 'Coverage limits' section of the hunter report is empty — "
-                    f"name what was not read or say outright that there is nothing"
+                    f"name what was not read or say outright that there is nothing, as an "
+                    f"ordinary line and not inside a fence or a quotation"
                 )
 
     # A defect class that repeated three times is closed by a guard, not by three fixes:

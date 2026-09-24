@@ -96,7 +96,9 @@ fence, a block indented by four spaces, a line behind `>`, an `<!-- html comment
 including the three lines above, if you copy them across as they stand. A verdict word
 alone in backticks (`` `checked` ``) is a quotation of the word, not a verdict either; a
 whole verdict line in backticks is one. A sub-item under your own verdict is not a
-quotation: proof written indented under the line still belongs to it.
+quotation: proof written indented under the line still belongs to it. The same holds for
+**everything the state check reads in the report**, the coverage-limits section below
+included — a section holding only a quoted example is read as an empty one.
 
 ## Tree freshness
 

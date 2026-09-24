@@ -351,6 +351,74 @@ class ReviewToolTest(unittest.TestCase):
                        verify=FULL_VERIFY)
         self.assertNotIn("Coverage limits", self.s.run("check").stdout)
 
+    def test_отчёт_проверяющего_из_одних_цитат_не_проводит_блок(self):
+        """Файл, полный цитат, — тот же пустой файл: образец из шаблона, перенесённый в
+        ограду, ничего не проверяет и ни о чём не сообщает, а блок оставался проверенным."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "тут дефект",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify="")
+        quoted = ("# проверяющий\n\nШаблон просит написать так:\n\n"
+                  "```markdown\n- H1-001 — подтверждена: воспроизвёл.\n"
+                  "Охват полный, непрочитанного нет.\n```\n")
+        self.s.write("docs/review/reports/H1-demo.verify.md", quoted)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("no verdict on any finding", out.stdout)
+
+    def test_отчёт_проверяющего_с_образцом_рядом_со_словами_проходит(self):
+        """Обратная сторона: ограда с образцом рядом с настоящими словами отчёта — это
+        по-прежнему отчёт, и ворота его не трогают."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n",
+                       verify="# проверяющий\n\nШаблон просит написать так:\n\n"
+                              "```markdown\n- H1-001 — подтверждена: воспроизвёл.\n```\n\n"
+                              "Находок нет, проверять нечего.\nОхват блока полный, "
+                              "непрочитанного не осталось.\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("verifier report", out.stdout)
+
+    def test_раздел_ограничений_из_одной_цитаты_роняет_проверку(self):
+        """Раздел, в котором только образец из шаблона внутри ограды, — то же молчание,
+        что и раздел без текста. И обратная сторона: образец РЯДОМ со сказанным своими
+        словами непросмотренным ничего не ломает."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        for limits, red in (
+                ("## Ограничения охвата\n\n```markdown\n- src/legacy.ts — не читал\n```\n", True),
+                ("## Ограничения охвата\n\nдо почтовых шаблонов не дошёл\n\n"
+                 "```markdown\n- src/legacy.ts — не читал\n```\n", False)):
+            with self.subTest(красное=red):
+                self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                                      + limits, verify=FULL_VERIFY)
+                out = self.s.run("check").stdout
+                said = "'Coverage limits' section of the hunter report is empty"
+                self.assertEqual(said in out, red, out)
+
     def test_живой_язык_отчёта_понимается(self):
         """«Гипотеза 2 не подтвердилась» и таблица «| 1 | … | опровергнута |» — тоже вердикты."""
         self.s.write("src/one.ts", "a\n")
@@ -996,6 +1064,21 @@ class ReviewToolTest(unittest.TestCase):
                 for form in said:
                     with self.subTest(шаблон=name, форма=form):
                         self.assertIn(form, text, f"{name}: форма цитаты не названа")
+
+    def test_шаблоны_ролей_говорят_что_цитата_не_считается_нигде(self):
+        """Правка механизма — правка промпта: цитату перестали считать не только в
+        вердиктах гипотез, но и во всём, что ворота читают по существу — в разделе
+        ограничений охвата и в словах проверяющего о находках и об охвате."""
+        refs = SKILL / "references"
+        said = {"": "everything the state check reads in the report",
+                ".ru": "всего, что проверка состояния читает в отчёте"}
+        for role in ("hunter", "verify"):
+            for lang, rule in said.items():
+                name = f"{role}{lang}.md"
+                # шаблон свёрстан по ширине: перенос строки внутри фразы — не пропуск
+                text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8"))
+                with self.subTest(шаблон=name):
+                    self.assertIn(rule, text, f"{name}: правило о цитате сужено до вердиктов")
 
     def test_axes_считает_usage_раз_на_сообщение_и_перечитывания(self):
         """stream-json дробит одно сообщение на несколько событий с ОДНИМ usage: считать
