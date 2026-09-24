@@ -12,6 +12,7 @@ with a review already under way.
 ### Fixed
 
 - `SKILL.md` description said three roles; there are four (the fix reviewer was added in 0.5.0). The description is what an agent reads to decide whether to apply the skill.
+- `check`: a `paths`/`ref_paths` pattern that matches only untracked files now says so and names the `git add`, instead of "matches no file". Seen on the first live migration: `npx skills add` writes the skill outside the index, and the block that owns it looked empty. Test proven by mutation: `untracked_files` returning `[]` turns the test red.
 
 ### Removed
 

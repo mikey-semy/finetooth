@@ -257,6 +257,14 @@ def listed(pathspecs: list[str] | None) -> set[str]:
     return files
 
 
+def untracked_files(specs: list[str]) -> list[str]:
+    """Files on disk that match the specs but are not in the index (`npx skills add`,
+    a fresh generator, an unpacked archive): `check` would otherwise call them absent."""
+    cmd = ["git", "-C", str(ROOT), "ls-files", "--others", "--exclude-standard", "-z", "--", *specs]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    return [f for f in out.split("\0") if f]
+
+
 def git_files(pathspecs: list[str]) -> set[str]:
     """Tracked files matching git pathspecs.
 
@@ -1946,10 +1954,18 @@ def cmd_check(args) -> int:
         for key in ("paths", "ref_paths"):
             for spec in b.get(key, []):
                 if not git_files([spec]):
-                    problems.append(
-                        f"{b['id']}: {key} pattern `{spec}` matches no file — "
-                        "the block silently shrank"
-                    )
+                    untracked = untracked_files([spec])
+                    if untracked:
+                        problems.append(
+                            f"{b['id']}: {key} pattern `{spec}` matches only untracked files "
+                            f"({len(untracked)}) — the tool sees the index, not the disk: "
+                            f"`git add -- {spec}`"
+                        )
+                    else:
+                        problems.append(
+                            f"{b['id']}: {key} pattern `{spec}` matches no file — "
+                            "the block silently shrank"
+                        )
 
     # 9. coverage
     _, _, unassigned = coverage_map()
