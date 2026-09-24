@@ -982,8 +982,8 @@ def commit_file_sets(since: str | None = None) -> list[set[str]]:
 
     Two things `--name-only` alone gets wrong, both measured on this repository's own
     history. A rename is printed as the new path only, so a file's churn is cut at every
-    move — `review.py` has 41 first-parent commits and 9 under its current path, and the
-    block that owns it was ranked on a fifth of its real change frequency. And a non-ASCII
+    move — `review.py` has 42 first-parent commits and 10 under its current path, and the
+    block that owns it was ranked on a quarter of its real change frequency. And a non-ASCII
     path comes out C-quoted (`"src/\\320\\274…"`), so it never matches what `ls-files -z`
     reports and is invisible to `coupling` altogether.
 
