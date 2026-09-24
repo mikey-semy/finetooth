@@ -1470,6 +1470,7 @@ def cmd_backfill(args) -> int:
 # closed by a written justification, not by silence. The manifest's hypotheses are our
 # questions, and each must receive one of three verdicts.
 HYPOTHESIS_HEADING = re.compile(r"^#{1,6}\s*.*(гипотез|hypothes)", re.IGNORECASE)
+HYPOTHESIS_WORD = re.compile(r"гипотез|hypothes", re.I)
 # The section about what was not reviewed lives under different names: "Coverage limits",
 # "Not read from the block", "What I did NOT do". Demanding a single heading means forcing
 # a finished report to be rewritten for the sake of a word.
@@ -1555,8 +1556,17 @@ def line_verdict(line: str) -> str | None:
     ("not checked") starts earlier than the bare word ("checked") nested inside it.
     """
     low = line.lower()
-    hits = [(i, v) for w, v in VERDICT_WORDS if (i := low.find(w)) >= 0]
+    hits = [(i, v) for w, v in VERDICT_WORDS if (i := verdict_word_at(low, w)) >= 0]
     return min(hits)[1] if hits else None
+
+
+def verdict_word_at(low: str, word: str) -> int:
+    """Position of a verdict word, or -1. `n/a` is a sign, not letters: found inside a path
+    (`curation/adapter.ts`), it declared a checked hypothesis "not applicable"."""
+    if word == "n/a":
+        m = re.search(r"(?<![\w/])n/a(?![\w/])", low)
+        return m.start() if m else -1
+    return low.find(word)
 
 
 def section_body(md: str, heading: re.Pattern) -> list[str] | None:
@@ -1650,7 +1660,26 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     # `H13e`), and the regex "letters, digits, dot" did not catch them — the verdicts of
     # such blocks counted as missing, and they passed only through the fallback forms.
     tagged = re.compile(rf"\b({re.escape(block_id)}\.\d+)\b") if block_id else None
+    in_hypotheses = False
+    hypotheses_depth = 0
+    table_about_hypotheses = False
+    prev_was_row = False
     for line in text.split("\n"):
+        if line.startswith("#"):
+            level = len(line) - len(line.lstrip("#"))
+            if HYPOTHESIS_HEADING.match(line):
+                in_hypotheses, hypotheses_depth = True, level
+            elif in_hypotheses and level <= hypotheses_depth:
+                in_hypotheses = False
+        is_row = line.lstrip().startswith("|")
+        if is_row and not prev_was_row:
+            # The first row of a table says what the numbers in the first column are: a
+            # header naming hypotheses, or no header at all (a bare "| 1 | … | verdict |"
+            # summary). An acceptance table ("| # | place | constraint | ✓ |") is numbered
+            # too, and its rows counted as verdicts on hypotheses 4 and 5.
+            first = line.strip().strip("|").split("|")[0].strip()
+            table_about_hypotheses = bool(HYPOTHESIS_WORD.search(line)) or first.isdigit()
+        prev_was_row = is_row
         verdict = line_verdict(line)
         if not verdict:
             continue
@@ -1668,7 +1697,7 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
         # and the word "hypothesis" is not in the line at all. Without parsing the table the
         # gate would demand a finished report be rewritten for the sake of form, adding
         # nothing to its content.
-        if line.lstrip().startswith("|"):
+        if is_row and (in_hypotheses or table_about_hypotheses):
             first = line.strip().strip("|").split("|")[0].strip()
             if first.isdigit():
                 out.setdefault(f"{block_id}.{first}", []).append(verdict)

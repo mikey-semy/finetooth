@@ -675,7 +675,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
-                              "## Итог\n| 1 | предикат | не проверена |\n"
+                              "## Итог\n| # | гипотеза | итог |\n|---|---|---|\n"
+                              "| 1 | предикат | не проверена |\n"
                               "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
         self.s.commit()
         self.s.run("init")
@@ -684,6 +685,44 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("check").stdout
         self.assertIn("different verdicts", out)
         self.assertIn("H1.1", out)
+
+    def test_нумерованная_таблица_приёмки_не_вердикт_гипотезы(self):
+        """Живой отчёт: таблица «onConflict → ограничение» с номерами строк 4 и 5 считалась
+        вердиктами гипотез 4 и 5, и check требовал «оставить один»."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Таблица 1 — onConflict → ограничение\n"
+                              "| # | место | ограничение | итог |\n|---|---|---|---|\n"
+                              "| 1 | `a.ts:3` | `uq_a` | n/a |\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check").stdout
+        self.assertNotIn("different verdicts", out)
+        hyp = self.s.run("hypotheses", "H1").stdout
+        self.assertIn("checked", hyp)
+        self.assertNotIn("not applicable", hyp)
+
+    def test_n_a_внутри_пути_не_вердикт(self):
+        """`curation/adapter.ts` содержит `n/a` — гипотеза, названная проверенной, становилась
+        «неприменимой»."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n"
+                              "- H1.1 (`features/curation/adapter.ts`) — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        hyp = self.s.run("hypotheses", "H1").stdout
+        self.assertIn("checked", hyp)
+        self.assertNotIn("not applicable", hyp)
 
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
