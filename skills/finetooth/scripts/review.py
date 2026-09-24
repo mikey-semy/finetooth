@@ -1419,37 +1419,15 @@ def cmd_summary(args) -> int:
 
 # ------------------------------------------------------------------------- prompt
 
-# A fence opens with three or more backticks OR three or more tildes, indented by up to
-# three spaces, and closes with at least as many marks of the SAME character and nothing
-# after them. Both forms are ordinary markdown, and a report writes `~~~` exactly when its
-# example itself contains backticks — which an example of this kit's own report always does.
+# A fence opens with three or more backticks OR three or more tildes and closes with at
+# least as many marks of the SAME character and nothing after them. Both forms are ordinary
+# markdown, and a report writes `~~~` exactly when its example itself contains backticks —
+# which an example of this kit's own report always does.
 # ONE tracker for the whole tool: while every parser had its own, `demote` pushed a heading
 # inside a tilde fence down a level, and `section_body` cut the manifest's hypotheses short
 # at a `# comment` inside one — two of four hypotheses silently vanished from the count and
 # from the fingerprint.
-FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
-
-
-def fenced_lines(lines: list[str]) -> list[bool]:
-    """For every line: does it sit inside a fenced code block (the fence lines included)."""
-    out: list[bool] = []
-    char, width = "", 0
-    for ln in lines:
-        m = FENCE.match(ln)
-        if not char:
-            if m:
-                char, width = m.group(1)[0], len(m.group(1))
-                out.append(True)
-                continue
-            out.append(False)
-            continue
-        out.append(True)
-        # The closing fence carries no info string; `~~~` does not close ``` and back.
-        if m and m.group(1)[0] == char and len(m.group(1)) >= width and not m.group(2).strip():
-            char, width = "", 0
-    return out
-
-
+FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})(.*)$")
 # A fence is one of FOUR ways markdown quotes an example, and a report uses all four: the
 # fence was closed first, and a hypothesis verdict restated as an indented example or
 # quoted from the template with `>` still closed a hypothesis nobody had answered.
@@ -1461,6 +1439,13 @@ BLOCKQUOTE = re.compile(r"^\s*>")
 LIST_OPEN = re.compile(r"^(\s*)([-*+]|\d+[.)])(\s+)")
 # Four spaces past the enclosing content column — the CommonMark indented code block.
 CODE_INDENT = 4
+# A fence may be indented up to three spaces past the content column it sits in and no
+# further — the fourth space makes it indented code instead (CommonMark 4.5). Measured from
+# the CONTENT column, not from the margin: a report quotes the verdict skeleton inside a
+# list item, where the fence starts at four spaces or more from the margin and an absolute
+# limit of three did not see it at all — the quoted skeleton closed every hypothesis of the
+# block and `check` printed "review state is consistent".
+FENCE_SLACK = CODE_INDENT - 1
 COMMENT_OPEN, COMMENT_CLOSE = "<!--", "-->"
 
 
@@ -1473,19 +1458,36 @@ def quoted_lines(lines: list[str]) -> list[bool]:
     pushed a heading inside a tilde fence down a level and `section_body` cut the manifest's
     hypotheses short at a `# comment` inside one.
 
-    An indented code block cannot interrupt a paragraph (a blank line must come first) and
-    it measures its indent from the enclosing list item's content column — otherwise a
-    hypothesis's own sub-items, which is how a report writes its proof, would all be read
-    as examples and the gate would refuse an honest report.
+    The fence is tracked in the SAME pass as the list context and not before it, because
+    where a fence may open depends on the list item it sits in: a separate pass can only
+    measure the indent from the margin, and a fence nested in a list item is indented past
+    it. An indented code block cannot interrupt a paragraph (a blank line must come first)
+    and it measures its indent from the same content column — otherwise a hypothesis's own
+    sub-items, which is how a report writes its proof, would all be read as examples and
+    the gate would refuse an honest report.
     """
     out: list[bool] = []
     in_comment = False
     content_col = 0      # where the innermost open list item's content begins
     prev_blank = True    # an indented code block may only start after a blank line
-    for ln, fenced in zip(lines, fenced_lines(lines)):
-        if fenced:
+    char, width, fence_col = "", 0, 0   # the open fence: its mark, its length, its indent
+    for ln in lines:
+        m = FENCE.match(ln)
+        indent = len(m.group(1)) if m else len(ln) - len(ln.lstrip())
+        if char:
             out.append(True)
             prev_blank = False
+            # The closing fence carries no info string; `~~~` does not close ``` and back.
+            if (m and m.group(2)[0] == char and len(m.group(2)) >= width
+                    and not m.group(3).strip() and indent <= fence_col + FENCE_SLACK):
+                char, width = "", 0
+            continue
+        if m and indent <= content_col + FENCE_SLACK:
+            char, width, fence_col = m.group(2)[0], len(m.group(2)), indent
+            out.append(True)
+            prev_blank = False
+            if indent == 0:
+                content_col = 0     # a fence at the margin closes every open list
             continue
         rest = ln
         if in_comment:
@@ -1511,7 +1513,6 @@ def quoted_lines(lines: list[str]) -> list[bool]:
             out.append(True)
             prev_blank = False
             continue
-        indent = len(ln) - len(ln.lstrip())
         if prev_blank and indent >= content_col + CODE_INDENT:
             out.append(True)    # indented code: the list context it sits in is untouched
             continue
