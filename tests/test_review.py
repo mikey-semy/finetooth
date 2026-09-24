@@ -1271,6 +1271,20 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("check")
         self.assertIn("silently shrank", out.stdout)
 
+    def test_шаблон_по_нетрекнутым_файлам_зовёт_git_add(self):
+        """`npx skills add` кладёт файлы мимо индекса — без подсказки «не матчит» читается как
+        «файлов нет», хотя они лежат на диске."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts", "vendor/**"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.write("vendor/tool.py", "x\n")
+        self.s.run("init")
+        out = self.s.run("check")
+        self.assertIn("matches only untracked files (1)", out.stdout)
+        self.assertIn("git add -- vendor/**", out.stdout)
+        self.assertNotIn("silently shrank", out.stdout)
+
     # ------------------------------------------------------------- свежесть дерева
 
     def test_отставшее_от_сервера_дерево_роняет_проверку(self):
