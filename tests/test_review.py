@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import ast
+import collections
 import datetime as dt
 import json
 import re
@@ -3433,13 +3434,18 @@ class GateCoverageTest(unittest.TestCase):
         self.assertIn("is not in the vocabulary", out.stdout)
 
 
-def _check_gates() -> list[tuple[int, str, str]]:
-    """Все ворота `cmd_check`: (строка, problems|warnings, скелет сообщения).
+def _check_gates(source: str | None = None) -> list[tuple[int, str, str]]:
+    """Все ворота `cmd_check`: (строка, problems|warnings, ключ ворот).
 
-    Скелет — это только литеральные куски f-строки, склеенные и ужатые по пробелам: он
-    переживает правку подставляемых значений и меняется, когда меняется сама формулировка.
+    Ключ — это литеральные куски f-строки, склеенные и ужатые по пробелам: он переживает
+    правку подставляемых значений и меняется, когда меняется сама формулировка.
+
+    У трёх ворот сообщение целиком приходит из вспомогательной функции или переменной
+    (`problems.append(why)`), и литералов в нём нет вовсе. Такие ворота названы выражением,
+    которое их сообщение порождает: иначе все они делят один пустой ключ, и следующие
+    ворота, написанные той же формой, совпадут с уже записанными и пройдут незамеченными.
     """
-    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+    tree = ast.parse(source if source is not None else TOOL.read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "cmd_check")
 
@@ -3458,8 +3464,10 @@ def _check_gates() -> list[tuple[int, str, str]]:
                 and node.func.attr == "append"
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ("problems", "warnings")):
-            out.append((node.lineno, node.func.value.id,
-                        re.sub(r"\s+", " ", literal(node.args[0])).strip()[:46]))
+            key = re.sub(r"\s+", " ", literal(node.args[0])).strip()[:46]
+            if not re.search(r"[A-Za-zА-Яа-я]", key):
+                key = "= " + re.sub(r"\s+", " ", ast.unparse(node.args[0]))[:44]
+            out.append((node.lineno, node.func.value.id, key))
     return sorted(out)
 
 
@@ -3483,7 +3491,7 @@ class GateRegistryTest(unittest.TestCase):
         (': no manifest', "test_манифест_пропал_а_блок_в_работе"),
         (': manifest is empty or nearly empty', "test_куцый_манифест_роняет_проверку"),
         (': status , but there is no verifier report — t', "test_пройденный_блок_без_отчёта_проверяющего"),
-        (':', "test_пустой_отчёт_проверяющего_не_проводит_блок"),          # verify_report_problem
+        ('= f"{b[\'id\']}: {why}"', "test_пустой_отчёт_проверяющего_не_проводит_блок"),   # verify_report_problem
         (': state.json declares report , which is not on', "test_объявленный_отчёт_которого_нет_на_диске"),
         (': status , but there is no hunter report — the', "test_статус_дальше_running_без_отчёта_охотника"),
         (': stuck in running without a timestamp — when ', "test_running_без_отметки_времени"),
@@ -3502,7 +3510,7 @@ class GateRegistryTest(unittest.TestCase):
         ('finding : commit does not touch — either the m', "test_коммит_починки_обязан_касаться_файла_находки"),
         ('finding : marked fixed, but no fix commit is g', "test_починено_без_коммита"),
         ('finding : marked duplicate, but not of what ex', "test_дубль_без_указания_чего"),
-        ('', "test_дубль_указывает_на_живую_находку"),                     # dup_problem
+        ('= why', "test_дубль_указывает_на_живую_находку"),                # dup_problem
         ('finding : rejected by the verifier, but still ', "test_отвергнутая_проверяющим_но_открытая"),
         ('finding : status rejected but confidence — the', "test_отказ_меняет_и_уверенность"),
         ('finding : no code fingerprint — changes in und', "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
@@ -3540,14 +3548,19 @@ class GateRegistryTest(unittest.TestCase):
     ]
 
     def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):
-        in_source = {key for _, _, key in _check_gates()}
-        registered = {key for key, _ in self.GATES}
+        # Сравниваются не множества, а СЧЁТЫ: два разных гейта могут дать один ключ
+        # (сообщение целиком из переменной), и на множествах второй такой гейт совпадал
+        # бы с первым и проходил без теста — измерено мутацией.
+        in_source = collections.Counter(key for _, _, key in _check_gates())
+        registered = collections.Counter(key for key, _ in self.GATES)
+        missing = sorted((in_source - registered).elements())
+        extra = sorted((registered - in_source).elements())
         self.assertEqual(
-            sorted(in_source - registered), [],
+            missing, [],
             "ворота без записи в GATES: напишите тест, который краснеет при их снятии, "
             "и впишите его сюда — иначе механизм можно будет убрать, и прогон останется зелёным")
         self.assertEqual(
-            sorted(registered - in_source), [],
+            extra, [],
             "запись в GATES, которой в cmd_check больше нет: ворота переписали — "
             "сверьте тест с новой формулировкой")
 
@@ -3558,6 +3571,47 @@ class GateRegistryTest(unittest.TestCase):
         for key, name in self.GATES:
             with self.subTest(gate=key):
                 self.assertIn(name, known, f"ворота `{key}` ссылаются на несуществующий тест")
+
+    # Сообщение ворот пишут двумя формами: f-строкой на месте и значением, собранным
+    # раньше (`msg = …; problems.append(msg)`) или вспомогательной функцией. Реестр обязан
+    # видеть обе: три ворот самого инструмента написаны второй формой, и следующие напишут
+    # по соседству — копией.
+    VARIABLE_MESSAGE_GATE = '''
+def cmd_check(args):
+    problems = []
+    warnings = []
+    if a != b:
+        msg = f"review_id mismatch"
+        problems.append(msg)
+    if c != d:
+        problems.append(dup_problem(f, dup))
+    return 0
+'''
+
+    def test_ворота_с_сообщением_из_переменной_не_теряются(self):
+        """Ворота, чьё сообщение не литерал, обязаны попасть в реестр отдельной записью.
+
+        Пока ключом был только литеральный скелет, такие ворота получали пустой ключ,
+        совпадали с уже записанными и проходили без единого теста — измерено мутацией:
+        добавленные в `cmd_check` ворота с `problems.append(msg)` оставляли и этот класс,
+        и весь прогон зелёными.
+        """
+        gates = _check_gates(self.VARIABLE_MESSAGE_GATE)
+        keys = [key for _, _, key in gates]
+        self.assertEqual(len(keys), 2, "оба гейта обязаны быть видны")
+        self.assertEqual(len(set(keys)), 2, f"ворота слились в один ключ: {keys}")
+        registered = collections.Counter(key for key, _ in self.GATES)
+        for key in keys:
+            self.assertNotIn(key, registered,
+                             "новые ворота совпали с уже записанными — реестр их не заметит")
+
+    def test_ворота_с_литеральным_сообщением_читаются_как_раньше(self):
+        """Обратная сторона: обычная f-строка по-прежнему опознаётся своим текстом, а не
+        выражением, — иначе правка подставляемого значения роняла бы реестр."""
+        source = ('def cmd_check(args):\n'
+                  '    problems = []\n'
+                  '    problems.append(f"{bid}: no manifest {path}")\n')
+        self.assertEqual([key for _, _, key in _check_gates(source)], [": no manifest"])
 
 
 class SourceRuleTest(unittest.TestCase):
