@@ -22,7 +22,7 @@ def read_stream(path: str) -> dict:
     tool_bytes: collections.Counter = collections.Counter()
     reads: collections.Counter = collections.Counter()
     pending: dict[str, tuple[str, dict]] = {}
-    result = None
+    results: list[dict] = []
     model = None
     unreadable = 0
     with open(path, encoding="utf-8") as fh:
@@ -61,10 +61,13 @@ def read_stream(path: str) -> dict:
                                 key += f"@{inp.get('offset', 0)}+{inp.get('limit', '')}"
                             reads[key] += 1
             elif t == "result":
-                # a run can emit several results (a background task finishing after the
-                # main answer reports 2 turns and 19 s); the run is the longest of them
-                if result is None or (ev.get("num_turns") or 0) >= (result.get("num_turns") or 0):
-                    result = ev
+                results.append(ev)
+    # A run can emit several `result` events — a background task finishing after the main
+    # answer reports its own 2 turns and 19 s. The NUMBERS are taken from the longest of
+    # them, because a turn cap trips by construction on the longest branch; the OUTCOME is
+    # taken from all of them, because the shorter event is exactly where the cut-off is
+    # recorded, and dropping it printed a capped run as an ordinary one.
+    result = max(results, key=lambda r: r.get("num_turns") or 0, default=None)
     usage: collections.Counter = collections.Counter()
     for u in per_msg.values():
         for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
@@ -79,17 +82,27 @@ def read_stream(path: str) -> dict:
     # `result` with a subtype other than `success` is the client's own word that the run was
     # cut off (the turn cap, an error) — the turn cap is the safety switch, and its trips
     # must be visible in the journal.
-    subtype = (result or {}).get("subtype")
+    cut = [r for r in results
+           if r.get("is_error") or (r.get("subtype") and r.get("subtype") != "success")]
     if result is None:
         outcome = "NO RESULT EVENT — the run was killed or the stream is truncated"
-    elif (result or {}).get("is_error") or (subtype and subtype != "success"):
-        outcome = f"RUN CUT OFF — {subtype or 'error'}"
+    elif cut:
+        outcome = f"RUN CUT OFF — {cut[0].get('subtype') or 'error'}"
     else:
         outcome = ""
+    # A turn carries at most one assistant message, so a stream holding more assistant
+    # messages than the result claims turns is a result about PART of the run — that is how
+    # the kit's own journal got "0 min, 2 turns, 329 tool calls, cost estimate $67.92", a
+    # line that reads as a measurement and cannot be one. Say so instead of printing it.
+    turns = (result or {}).get("num_turns")
+    if result is not None and turns is not None and len(per_msg) > turns:
+        outcome = ((outcome + "; ") if outcome else "") + (
+            f"PARTIAL RESULT — {len(per_msg)} assistant messages in the stream against "
+            f"{turns} turns in the result; the numbers below cover part of the run")
     if unreadable:
         outcome = (outcome + "; " if outcome else "") + f"{unreadable} unreadable line(s)"
     return {
-        "model": model, "messages": len(per_msg), "turns": (result or {}).get("num_turns"),
+        "model": model, "messages": len(per_msg), "turns": turns,
         "duration_s": round(((result or {}).get("duration_ms") or 0) / 1000),
         "cost_usd": (result or {}).get("total_cost_usd"), "outcome": outcome,
         "input": total_in, "cache_read": usage["cache_read_input_tokens"],

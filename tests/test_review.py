@@ -3117,6 +3117,73 @@ class SpendTest(unittest.TestCase):
         self.assertIn("10 min, 42 turns", out.stdout)
         self.assertIn("cost estimate $3.41", out.stdout)
 
+    def _two_results(self, cut_first: bool) -> Path:
+        """Поток с двумя событиями `result`: фоновая задача, закончившаяся после главного
+        ответа, печатает своё. Числа берутся у длинного, исход — у обоих."""
+        ev = lambda o: json.dumps(o, ensure_ascii=False)
+        done = {"type": "result", "subtype": "success", "num_turns": 40,
+                "duration_ms": 600000, "total_cost_usd": 5.0, "usage": {"output_tokens": 1000}}
+        cut = {"type": "result", "subtype": "error_max_turns", "is_error": True,
+               "num_turns": 2, "duration_ms": 19000, "total_cost_usd": 0.1,
+               "usage": {"output_tokens": 10}}
+        lines = [ev({"type": "assistant", "message": {
+            "id": "m1", "model": "test", "usage": {"input_tokens": 1, "output_tokens": 2},
+            "content": []}})]
+        lines += [ev(cut), ev(done)] if cut_first else [ev(done), ev(cut)]
+        p = self.s.root / "two.jsonl"
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return p
+
+    def test_обрезка_во_втором_событии_result_не_теряется(self):
+        """Потолок ходов — предохранитель, и его срабатывание обязано быть видно в
+        дневнике. Пока брали одно событие, слово об обрезке пропадало вместе с коротким."""
+        for cut_first in (False, True):
+            with self.subTest(обрезка_первой=cut_first):
+                out = self._axes(self._two_results(cut_first), "--journal")
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertIn("RUN CUT OFF", out.stdout)
+                self.assertIn("error_max_turns", out.stdout)
+                # числа — у длинного события: потолок срабатывает на длинной ветке
+                self.assertIn("10 min, 40 turns", out.stdout)
+                self.assertIn("cost estimate $5.00", out.stdout)
+
+    def test_два_успешных_события_result_не_объявляются_обрезкой(self):
+        """Обратная сторона: два завершившихся события — обычный прогон, и слова об
+        обрезке в строке быть не должно."""
+        ev = lambda o: json.dumps(o, ensure_ascii=False)
+        lines = [ev({"type": "assistant", "message": {
+            "id": "m1", "model": "test", "usage": {"input_tokens": 1, "output_tokens": 2},
+            "content": []}}),
+            ev({"type": "result", "subtype": "success", "num_turns": 2, "duration_ms": 19000,
+                "total_cost_usd": 0.1, "usage": {"output_tokens": 10}}),
+            ev({"type": "result", "subtype": "success", "num_turns": 40, "duration_ms": 600000,
+                "total_cost_usd": 5.0, "usage": {"output_tokens": 1000}})]
+        p = self.s.root / "both-ok.jsonl"
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self._axes(p, "--journal")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("RUN CUT OFF", out.stdout)
+        self.assertNotIn("PARTIAL RESULT", out.stdout)
+        self.assertIn("10 min, 40 turns", out.stdout)
+
+    def test_результат_короче_потока_не_выдаётся_за_замер_прогона(self):
+        """Ход несёт не больше одного сообщения ассистента, поэтому «2 turns» при
+        одиннадцати сообщениях — результат о ЧАСТИ прогона. Так в дневнике самого набора
+        появилась строка «0 min, 2 turns, 329 tool calls … $67.92»."""
+        ev = lambda o: json.dumps(o, ensure_ascii=False)
+        lines = [ev({"type": "assistant", "message": {
+            "id": f"m{i}", "model": "test", "usage": {"input_tokens": 1, "output_tokens": 2},
+            "content": []}}) for i in range(11)]
+        lines.append(ev({"type": "result", "subtype": "success", "num_turns": 2,
+                         "duration_ms": 0, "total_cost_usd": 67.92,
+                         "usage": {"output_tokens": 100}}))
+        p = self.s.root / "partial.jsonl"
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out = self._axes(p, "--journal")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("PARTIAL RESULT", out.stdout)
+        self.assertIn("11 assistant messages", out.stdout)
+
     def _run_role(self, exit_code: int) -> tuple[subprocess.CompletedProcess, str]:
         """run-role.sh с заглушкой вместо `claude`: настоящий клиент здесь не нужен,
         нужен его код возврата и поток, который он оставляет."""
