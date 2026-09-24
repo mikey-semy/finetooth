@@ -3,15 +3,16 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **0** of 40 records.
+Open: **0** of 45 records.
 
-## high (0 open / 1)
+## high (0 open / 2)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
 | T1-001 | T1 | fixed | `skills/finetooth/scripts/review.py:2137` | verdict_mentions tracks neither fences nor code spans, so hypothesis verdicts quoted from the role template's own skeleton close the hypotheses and check goes green with the questions unanswered |
+| T1-041 | T1 | fixed | `skills/finetooth/scripts/review.py:1480` | [R4-001, fix review round 4] the new fence rule lets an indented inner fence close the outer one, and a quoted verdict becomes an answer again |
 
-## medium (0 open / 16)
+## medium (0 open / 17)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -31,8 +32,9 @@ Open: **0** of 40 records.
 | T1-032 | T1 | fixed | `skills/finetooth/scripts/review.py:1430` | [R2-001, fix review round 2] A verdict inside a fence nested in a list item still closes a hypothesis |
 | T1-033 | T1 | fixed | `skills/finetooth/scripts/review.py:2434` | [R2-002, fix review round 2] The gates that read a report's substance still count quoted text |
 | T1-037 | T1 | fixed | `skills/finetooth/scripts/review.py:1487` | [R3-001, fix review round 3] the nested-fence fix silently truncates a manifest again, and `check` goes green on it |
+| T1-042 | T1 | fixed | `skills/finetooth/scripts/review.py:1476` | [R4-002, fix review round 4] an unclosed fence inside a list item swallows the rest of the manifest, and `check` goes green on one hypothesis of four |
 
-## low (0 open / 23)
+## low (0 open / 26)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -59,4 +61,7 @@ Open: **0** of 40 records.
 | T1-038 | T1 | deferred | `skills/finetooth/scripts/review.py:2727` | [R3-002, fix review round 3] the other address of T1-035: a diff header closes the gate for a real `a/…` file nobody read |
 | T1-039 | T1 | rejected | `tests/test_review.py:4050` | [R3-003, fix review round 3] the rewritten quotation guard does not see the two gates it is recorded against |
 | T1-040 | T1 | fixed | `skills/finetooth/assets/run-role.sh:47` | [R3-004, fix review round 3] the EXIT trap turns a lost journal line into a successful run |
+| T1-043 | T1 | fixed | `docs/review/journal.md:16` | [R4-003, fix review round 4] the round left no fix report and no journal entry, so its incidental changes are recorded nowhere |
+| T1-044 | T1 | fixed | `docs/review/findings.jsonl:37` | [R4-004, fix review round 4] the round left `check` red on a register row it wrote itself |
+| T1-045 | T1 | fixed | `CHANGELOG.md:14` | [R4-005, fix review round 4] the new changelog bullet swallows the section's introduction, in both languages |
 
