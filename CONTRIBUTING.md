@@ -53,7 +53,9 @@ Terraform, Next.js, Better Auth); each has a reason.
 
 ## Releases
 
-How a version number is chosen and what has to be true before a tag exists — `RELEASING.md`.
+Branches: `master` holds releases only, `dev` is where work lands — open your PR against
+`dev` (it is the default). How a version number is chosen and what has to be true before a
+tag exists — `RELEASING.md`.
 In short: semantic versioning with a zero major, at most one release a week, four mechanical
 gates including a run on a live project, and no direct pushes to `master` for anyone.
 
