@@ -958,6 +958,27 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("one script file", (refs / "verify.md").read_text(encoding="utf-8"))
         self.assertIn("одним файлом", (refs / "verify.ru.md").read_text(encoding="utf-8"))
 
+    def test_шаблон_исполнителя_держит_правила_выпуска_и_расхода(self):
+        """Оба правила выведены из первого прогона починки набора: он поднял версию сам
+        (откатили — выпуск решает сопровождающий) и потратил бо́льшую часть 329 ходов на
+        прогон всего набора в отдельных worktree на каждом коммите. Правило, которого нет
+        ни в тесте, ни в журнале изменений, снимут при следующей правке шаблона."""
+        refs = SKILL / "references"
+        for name, said in ((
+                "fix.md", ("the version, the release and the history are not yours",
+                           "changelog entries go under \"Unreleased\"",
+                           "spend turns on fixes, not on ceremony",
+                           "the full gates once at the end of the series")),
+                ("fix.ru.md", ("версия, выпуск и история — не твои",
+                               "записи идут в «Не выпущено»",
+                               "трать ходы на правки, а не на обряды",
+                               "полные ворота — один раз в конце серии"))):
+            # шаблон свёрстан по ширине: перенос строки внутри фразы — не пропуск
+            text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8")).lower()
+            for rule in said:
+                with self.subTest(шаблон=name, правило=rule):
+                    self.assertIn(rule.lower(), text, f"{name}: правило снято из шаблона")
+
     def test_шаблоны_ролей_говорят_где_писать_вердикт(self):
         """Правка механизма — правка промпта: разборщик перестал читать вердикты внутри
         цитаты, и шаблоны обоих языков обязаны назвать все её формы. Иначе гейт краснеет
