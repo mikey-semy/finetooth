@@ -82,9 +82,12 @@ Report structure:
 The manifest's hypotheses are numbered in order: the first is `{{BLOCK_ID}}.1`, the second
 `{{BLOCK_ID}}.2` and so on. **Each must get exactly one verdict**, as a line:
 
-- `{{BLOCK_ID}}.1 — checked: <what exactly proves it>`
-- `{{BLOCK_ID}}.2 — not checked: <what got in the way>`
-- `{{BLOCK_ID}}.3 — not applicable: <why the question is not about this code>`
+- {{BLOCK_ID}}.1 — checked: <what exactly proves it>
+- {{BLOCK_ID}}.2 — not checked: <what got in the way>
+- {{BLOCK_ID}}.3 — not applicable: <why the question is not about this code>
+
+Write the verdict as plain text, not in backticks: a code span is read as a quotation of the
+form, not as your answer.
 
 A hypothesis without a verdict fails the state check: this is the second denominator of
 coverage next to the file map. A file can be opened and nothing understood — but the

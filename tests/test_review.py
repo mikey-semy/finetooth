@@ -1185,6 +1185,20 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("H1.4", out)
         self.assertIn("0/4", out)
 
+    def test_import_держит_те_же_пределы_что_check(self):
+        """R5-005: черновик с длинным сценарием проходил import и ронял check навсегда."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "x" * 701}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("scenario is 701 characters", out.stdout + out.stderr)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -4219,9 +4233,6 @@ def report_sections(md):
         self.assertEqual(bare, [], "число без источника: припишите замер или ссылку")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class QuotationMapTest(unittest.TestCase):
     """The quotation class produced a defect in every fix round of the kit's own review
@@ -4259,3 +4270,34 @@ class QuotationMapTest(unittest.TestCase):
         for name, (doc, want) in self.CASES.items():
             got = "".join("Q" if q else "." for q in mod.quoted_lines(doc.split("\n")))
             self.assertEqual(got, want, name)
+
+    def test_незакрытая_ограда_в_отчёте_остаётся_цитатой(self):
+        """R5-001: для отчёта сомнение трактуется в сторону «цитата» — иначе скелет шаблона в
+        незакрытой ограде закрывает гипотезы; для манифеста — в сторону «текст»."""
+        doc = "````\n- H1.1 — checked\n```\nafter".split("\n")
+        mod = self._mod()
+        self.assertEqual("".join("Q" if q else "." for q in mod.quoted_lines(doc, "quoted")), "QQQQ")
+        self.assertEqual("".join("Q" if q else "." for q in mod.quoted_lines(doc, "text")), "....")
+
+    def test_вердикт_в_код_спане_прозы_и_таблицы_не_ответ(self):
+        """R5-003: `H1.1 — not checked` внутри код-спана посреди фразы — цитата формы; пункт,
+        открывающийся код-спаном с номером (старый шаблон), — ответ."""
+        mod = self._mod()
+        got = mod.verdict_mentions(
+            "## Hypotheses\n- `H1.1 — checked: proven`\n"
+            "- H1.2 — checked: the skeleton ``- `H1.1 — not checked: …` `` misled the parser\n"
+            "## Finding\n"
+            "the template says ``- `H1.1 — not checked: …` `` and H1.1 is \"not applicable\" here\n"
+            "| 1 | `- H1.1 — not checked` | x |\n", "H1")
+        self.assertEqual(got.get("H1.1"), ["checked"])
+
+    def _mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1277,7 +1277,7 @@ def acceptance_of(b: dict) -> str:
         return "—"
     # What the criterion SAYS: a fenced example of a table inside it is not part of the
     # sentence, and pasted into a one-line cell it is a run of backticks and column bars.
-    text = " ".join(ln.strip() for ln in unquoted(body) if ln.strip())
+    text = " ".join(ln.strip() for ln in unquoted(body, "text") if ln.strip())
     text = text.replace("|", "\\|")
     return text if len(text) <= 300 else text[:297] + "…"
 
@@ -1447,10 +1447,14 @@ CODE_INDENT = 4
 # closing at any indentation let an indented example INSIDE a fence close it and leak its
 # verdicts as the report's own (round 4). Anchoring the close to the opener closes both.
 FENCE_SLACK = CODE_INDENT - 1
+# An inline code span: a run of backticks, content, the same run (CommonMark 6.1).
+INLINE_CODE = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+# The verdict form the hunter template prescribed until 0.8: a list item opening with a span.
+OLD_VERDICT_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+`")
 COMMENT_OPEN, COMMENT_CLOSE = "<!--", "-->"
 
 
-def quoted_lines(lines: list[str]) -> list[bool]:
+def quoted_lines(lines: list[str], unclosed: str = "text") -> list[bool]:
     """For every line: is it QUOTED rather than said — an example, not the report's answer.
 
     Four forms, all of them ordinary markdown and all of them written by real reports: a
@@ -1459,16 +1463,22 @@ def quoted_lines(lines: list[str]) -> list[bool]:
     pushed a heading inside a tilde fence down a level and `section_body` cut the manifest's
     hypotheses short at a `# comment` inside one.
 
-    A fence opens and closes at any indentation (see FENCE). An indented code block cannot
+    `unclosed` says how to read a fence that never closes: "text" for what DEFINES the work
+    (manifests — more hypotheses, more to answer), "quoted" for what REPORTS it (reports —
+    fewer verdicts, more to answer). Both directions make the gate stricter, never looser.
+
+    A fence opens at any indentation and closes near the column it opened at (see FENCE). An indented code block cannot
     interrupt a paragraph (a blank line must come first) and it measures its indent from the
     content column of the list item it sits in — otherwise a hypothesis's own
     sub-items, which is how a report writes its proof, would all be read as examples and
     the gate would refuse an honest report.
     """
-    return _quoted_pass(lines, frozenset())
+    if unclosed not in ("text", "quoted"):
+        raise ValueError(f"unclosed must be 'text' or 'quoted', not {unclosed!r}")
+    return _quoted_pass(lines, frozenset(), unclosed)
 
 
-def _quoted_pass(lines: list[str], not_fences: frozenset) -> list[bool]:
+def _quoted_pass(lines: list[str], not_fences: frozenset, unclosed: str) -> list[bool]:
     out: list[bool] = []
     in_comment = False
     content_col = 0      # where the innermost open list item's content begins
@@ -1526,15 +1536,17 @@ def _quoted_pass(lines: list[str], not_fences: frozenset) -> list[bool]:
             content_col = len(mark.group(0))
         elif indent == 0:
             content_col = 0     # a paragraph at the margin closes every open list
-    if char:
-        # A fence that never closes is not a fence: rendered, it would swallow the rest of
-        # the document — here that meant a manifest's remaining hypotheses vanished and
-        # `check` went green on one of four (fix review round 4). Read it as text instead.
-        return _quoted_pass(lines, not_fences | {open_at})
+    if char and unclosed == "text":
+        # A fence that never closes: what it means depends on WHAT is read, and the rule
+        # is the same for both — in doubt, the gate goes red. In a MANIFEST it is read as
+        # text: swallowed, the remaining hypotheses vanished and `check` went green on one
+        # of four (fix review round 4). In a REPORT it stays a quotation: read as text, the
+        # template's skeleton inside it closed every hypothesis (fix review round 5).
+        return _quoted_pass(lines, not_fences | {open_at}, unclosed)
     return out
 
 
-def unquoted(lines: list[str]) -> list[str]:
+def unquoted(lines: list[str], unclosed: str = "quoted") -> list[str]:
     """The lines a text SAYS — its quotations dropped.
 
     A gate that reads a report's SUBSTANCE must read the report's own words. A verifier
@@ -1542,7 +1554,7 @@ def unquoted(lines: list[str]) -> list[str]:
     verified, nothing stated — satisfied every substance gate, and the block stayed
     `verified` with `check` printing "review state is consistent".
     """
-    return [ln for ln, quote in zip(lines, quoted_lines(lines)) if not quote]
+    return [ln for ln, quote in zip(lines, quoted_lines(lines, unclosed)) if not quote]
 
 
 def demote(md: str) -> str:
@@ -1801,9 +1813,17 @@ def cmd_import(args) -> int:
         if not line or line.startswith("#"):
             continue
         try:
-            incoming.append(json.loads(line))
+            row = json.loads(line)
         except json.JSONDecodeError as exc:
             die(f"{src.name} line {n}: not JSON — {exc}")
+        # The limits `check` holds are held here too: a draft that `import` accepted and
+        # `check` then refused made every later gate red on a row nobody could fix through
+        # the tool (the kit's own review hit it three times).
+        for field, limit in (("claim", CLAIM_MAX), ("scenario", SCENARIO_MAX)):
+            if isinstance(row, dict) and len(str(row.get(field) or "")) > limit:
+                die(f"{src.name} line {n}: {field} is {len(str(row[field]))} characters against a "
+                    f"limit of {limit} — shorten it in the draft; the evidence belongs in the report")
+        incoming.append(row)
 
     existing = findings()
     if args.append:
@@ -2609,7 +2629,26 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     table_about_hypotheses = False
     prev_was_row = False
     lines = text.split("\n")
-    for line, fenced in zip(lines, quoted_lines(lines)):
+    quoted = quoted_lines(lines, "quoted")
+    # A verdict is given where verdicts are given. A report that HAS a hypotheses section
+    # answers there; a hypothesis id elsewhere — in a finding's description, in a table of
+    # parser inputs — is a mention, not an answer (the kit's own review of its parser named
+    # T1.3 next to "not applicable" while describing the bug, and the gate asked to "leave
+    # one"). A report without such a section is read whole, as before.
+    sectioned = any(not q and ln.startswith("#") and HYPOTHESIS_HEADING.match(ln)
+                    for ln, q in zip(lines, quoted))
+    for line, fenced in zip(lines, quoted):
+        # A code span is a quotation too: a verdict clause written `like this` in prose or in
+        # a table is an example of the form — the kit's own review quotes verdict syntax in a
+        # parser matrix, and every such span counted as an answer. ONE exception, the answer
+        # form the template used to prescribe: a list item that OPENS with a span holding the
+        # hypothesis id (- `H5.2 — checked: …`). Live registers are written that way; reading
+        # them as quotations dropped eight verdicts of one block. The template now asks for
+        # plain text.
+        if tagged and OLD_VERDICT_ITEM.match(line) and tagged.search(line.split("`", 2)[1] if "`" in line else ""):
+            line = line.replace("`", "")
+        else:
+            line = INLINE_CODE.sub(" ", line)
         # A fenced block is an EXAMPLE, not an answer. The role template hands the agent the
         # shape of a verdict line inside a ```markdown fence, with the block id already
         # substituted; a report that quotes that skeleton and answers nothing closed every
@@ -2635,6 +2674,8 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
         prev_was_row = is_row
         verdict = line_verdict(line)
         if not verdict:
+            continue
+        if sectioned and not (in_hypotheses or (is_row and table_about_hypotheses)):
             continue
         if tagged:
             for token in tagged.findall(line):
