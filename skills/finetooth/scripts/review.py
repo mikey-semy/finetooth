@@ -885,6 +885,82 @@ def cmd_coupling(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- order
+
+# Which block next: the cost of failure first, the change frequency second. Measured on
+# the first project as a prediction (history split in half, ranking on the first half,
+# fixes counted on the second): the top 10% of files by change frequency collected 34% of
+# the later fixes, by size 29%, at random 6% — the same as the literature (Nagappan & Ball
+# 2005; Moser et al. 2008; Graves et al. 2000). Frequency catches defects; the cost of
+# failure catches IRREVERSIBILITY (access, money, the write path), so it stays the first
+# key: `risk` on the block (the severity vocabulary), and without it the declared order
+# of the blocks is the risk statement.
+def block_risk(b: dict) -> int:
+    r = b.get("risk")
+    if r is None:
+        return len(SEVERITIES)  # not stated: after every stated one, in declared order
+    if r not in SEVERITIES:
+        die(f"blocks.json: block {b['id']}: risk must be one of {', '.join(SEVERITIES)}, not `{r}`")
+    return SEVERITIES.index(r)
+
+
+def block_churn(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int) -> dict[str, tuple[int, int]]:
+    """Per block: how many commits touched at least one of its files, and how many of its
+    files were touched at all. Mass commits are skipped as in `coupling`."""
+    commits: dict[str, int] = {}
+    files: dict[str, set[str]] = {}
+    for fs in sets:
+        fs = {f for f in fs if f in owned}
+        if not fs or len(fs) > cutoff:
+            continue
+        touched: set[str] = set()
+        for f in fs:
+            for bid in owned[f]:
+                touched.add(bid)
+                files.setdefault(bid, set()).add(f)
+        for bid in touched:
+            commits[bid] = commits.get(bid, 0) + 1
+    return {bid: (commits.get(bid, 0), len(files.get(bid, ()))) for bid in set(commits) | set(files)}
+
+
+def cmd_order(args) -> int:
+    """Blocks in the order worth walking them: risk first, change frequency second."""
+    defn, st = blocks(), state()
+    owned, _, _ = coverage_map()
+    sets = commit_file_sets(args.since)
+    cutoff = mass_cutoff(sets) if sets else 0
+    churn = block_churn(owned, sets, cutoff)
+    window = f"since {args.since}" if args.since else "whole history"
+    print(f"commits: {len(sets)} ({window}); mass commits skipped (> {cutoff} files): "
+          f"{sum(1 for fs in sets if len({f for f in fs if f in owned}) > cutoff)}")
+    stated = sum(1 for b in defn["blocks"] if b.get("risk"))
+    print(f"risk stated on {stated} of {len(defn['blocks'])} blocks"
+          + ("" if stated else " — below, change frequency alone speaks; state `risk` on the blocks "
+             "to put the cost of failure first, as the method wants"))
+    print(f"\n{'':2}{'block':<6}{'risk':<10}{'status':<10}{'commits':>8}{'files':>7}  title")
+    moved = 0
+    phase = None
+    for ph in sorted({b["phase"] for b in defn["blocks"]}):
+        print(f"\n── Phase {phase_name(ph)} " + "─" * 40)
+        group = [b for b in defn["blocks"] if b["phase"] == ph]
+        declared = {b["id"]: i for i, b in enumerate(group)}
+        ranked = sorted(group, key=lambda b: (block_risk(b), -churn.get(b["id"], (0, 0))[0], declared[b["id"]]))
+        for pos, b in enumerate(ranked):
+            status = st["blocks"].get(b["id"], {}).get("status", "todo")
+            c, nf = churn.get(b["id"], (0, 0))
+            mark = " "
+            if status not in ("closed",) and declared[b["id"]] != pos:
+                mark = "↑" if declared[b["id"]] > pos else "↓"
+                moved += 1
+            print(f"{mark:2}{b['id']:<6}{(b.get('risk') or '—'):<10}{status:<10}{c:>8}{nf:>7}  {b['title']}")
+    if moved:
+        print(f"\n{moved} block(s) would move against the declared order; the order is the human's — "
+              f"reorder blocks.json if you agree, or state `risk` where the frequency is misleading")
+    else:
+        print("\nthe declared order already matches risk and change frequency")
+    return 0
+
+
 # ------------------------------------------------------------------------- prompt
 
 
@@ -2663,6 +2739,8 @@ def main() -> int:
     c.add_argument("--min-together", type=int, default=COUPLING_MIN_TOGETHER, help="joint commits a pair needs")
     c.add_argument("--min-share", type=float, default=COUPLING_MIN_SHARE, help="share of one file's commits the pair must cover")
     c.add_argument("--write", action="store_true", help="also write docs/review/coupling.tsv")
+    c = sub.add_parser("order", help="blocks in the order worth walking them: risk first, change frequency second")
+    c.add_argument("--since", help="only commits since this date (git --since)")
 
     c = sub.add_parser("roots", help="finding roots: how many instances and what closes the class")
     c.add_argument("block", nargs="?")
@@ -2684,7 +2762,7 @@ def main() -> int:
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
-        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling,
+        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order,
         "setup": cmd_setup,
     }[args.cmd](args)
 

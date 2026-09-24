@@ -458,6 +458,13 @@ with six or more blocks), and prints the cross-block pairs with a ready `ref_pat
 hypothesis for the manifest; clusters of pairs between the same two blocks are where a seam
 block is due. `--write` keeps the pairs in `docs/review/coupling.tsv`.
 
+**Order of walking.** `review order` ranks the blocks by the cost of failure first (`risk` on
+the block) and by change frequency second — measured on the first project as a prediction:
+the top 10% of files by change frequency collected 34% of the later fixes, by size 29%, at
+random 6% (Nagappan & Ball 2005; Moser et al. 2008). Frequency catches defects; the cost of
+failure catches irreversibility, so it stays the first key. The command reports; the order in
+`blocks.json` is the human's.
+
 **The fix gate.** The method finds faster than a project fixes (the first project: 77 findings
 on 5 blocks, 9 fixed), and a finding that never reaches a fix is debt — a month later the
 register describes code that no longer exists. So `set-status <ID> running` refuses while

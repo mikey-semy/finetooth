@@ -840,6 +840,47 @@ class ReviewToolTest(unittest.TestCase):
         self.assertTrue(tsv.startswith("a\tblocks_a\tb\tblocks_b\ttogether"))
         self.assertIn("src/a.ts\tH1\tsrc/b.ts\tH2\t3", tsv)
 
+    # ------------------------------------------------------------- порядок обхода
+
+    def _churn_history(self, risk_first: str | None = None) -> None:
+        """H1 объявлен первым, но почти не меняется; H2 меняется впятеро чаще."""
+        self.s.write("src/a.ts", "0\n")
+        self.s.write("src/b.ts", "0\n")
+        self.s.blocks(paths=["src/a.ts"], extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+            "goal": "г", "paths": ["src/b.ts"], "ref_paths": []}])
+        if risk_first:
+            bj = Path(self.s.root, "docs/review/blocks.json")
+            d = json.loads(bj.read_text(encoding="utf-8"))
+            d["blocks"][0]["risk"] = risk_first
+            bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+
+        def touch(f):
+            p = Path(self.s.root, "src", f + ".ts")
+            p.write_text(p.read_text() + "1\n")
+            self.s.git("add", "-A")
+            self.s.git("commit", "-q", "-m", "t")
+        touch("a")
+        for _ in range(5):
+            touch("b")
+        self.s.run("init")
+
+    def test_order_ставит_часто_меняющийся_блок_выше_при_равном_риске(self):
+        self._churn_history()
+        out = self.s.run("order").stdout
+        self.assertLess(out.index("H2 "), out.index("H1 "))
+        self.assertRegex(out, r"H2\s+—\s+todo\s+6\s+1")  # 5 правок + стартовый коммит
+        self.assertIn("block(s) would move against the declared order", out)
+
+    def test_order_риск_важнее_частоты(self):
+        """Хотспот ловит дефект, цена ошибки ловит необратимость — риск первый ключ."""
+        self._churn_history(risk_first="high")
+        out = self.s.run("order").stdout
+        self.assertLess(out.index("H1 "), out.index("H2 "))
+        self.assertIn("the declared order already matches", out)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])

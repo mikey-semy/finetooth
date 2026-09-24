@@ -63,6 +63,10 @@ one of your own:
    blocks: the seams nobody reads. For each pair it names the `ref_paths` entry and the
    hypothesis to add to the manifest; several pairs between the same two blocks are a seam
    block waiting to be cut. Shared nodes (a schema, a dictionary) are listed apart.
+6. `review order` — the blocks in the order worth walking them: the cost of failure first
+   (`risk` on the block: `critical|high|medium|low`; without it the declared order speaks),
+   change frequency from `git log` second. A report, not a rewrite: reorder `blocks.json`
+   yourself if you agree.
 
 ## Working through a block
 
