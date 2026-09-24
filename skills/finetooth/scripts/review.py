@@ -1147,6 +1147,36 @@ def cmd_summary(args) -> int:
 
 # ------------------------------------------------------------------------- prompt
 
+# A fence opens with three or more backticks OR three or more tildes, indented by up to
+# three spaces, and closes with at least as many marks of the SAME character and nothing
+# after them. Both forms are ordinary markdown, and a report writes `~~~` exactly when its
+# example itself contains backticks — which an example of this kit's own report always does.
+# ONE tracker for the whole tool: while every parser had its own, `demote` pushed a heading
+# inside a tilde fence down a level, and `section_body` cut the manifest's hypotheses short
+# at a `# comment` inside one — two of four hypotheses silently vanished from the count and
+# from the fingerprint.
+FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
+
+
+def fenced_lines(lines: list[str]) -> list[bool]:
+    """For every line: does it sit inside a fenced code block (the fence lines included)."""
+    out: list[bool] = []
+    char, width = "", 0
+    for ln in lines:
+        m = FENCE.match(ln)
+        if not char:
+            if m:
+                char, width = m.group(1)[0], len(m.group(1))
+                out.append(True)
+                continue
+            out.append(False)
+            continue
+        out.append(True)
+        # The closing fence carries no info string; `~~~` does not close ``` and back.
+        if m and m.group(1)[0] == char and len(m.group(1)) >= width and not m.group(2).strip():
+            char, width = "", 0
+    return out
+
 
 def demote(md: str) -> str:
     """Push an embedded document one heading level down.
@@ -1156,11 +1186,10 @@ def demote(md: str) -> str:
     a document with two top levels. Fenced code is left untouched so a `#`
     comment inside an example stays a comment.
     """
-    out, fenced = [], False
-    for line in md.split("\n"):
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced and line.startswith("#"):
+    lines = md.split("\n")
+    out = []
+    for line, inside in zip(lines, fenced_lines(lines)):
+        if not inside and line.startswith("#"):
             line = "#" + line
         out.append(line)
     return "\n".join(out)
@@ -1984,7 +2013,16 @@ VERDICT_WORDS = (
 FINDING_VERDICT = re.compile(
     r"\b(confirmed|plausible|rejected|duplicate)\b|подтвержд|отверг|опроверг|дубл",
     re.IGNORECASE)
-COVERAGE_VERDICT = re.compile(r"охват|полн(ый|ое|ая)\b|неполн|coverage|complete|incomplete", re.IGNORECASE)
+# A verdict on COVERAGE, not on the work: "complete" and "полный" say how much of the block
+# was reviewed, while "I completed the check" and "проверка завершена" say only that the
+# agent stopped. The `\b` after `complete` is the whole difference between the two — without
+# it a report whose entire body was "I completed the check of every finding; nothing was
+# confirmed" satisfied the gate that exists to demand a statement about what was left
+# unreviewed. The Russian side takes every form of `полн-` (полный, полностью, полнота) for
+# the same reason the English side takes `completely`: the adjective and the adverb are the
+# same statement, and matching only the adjective refused an honest report.
+COVERAGE_VERDICT = re.compile(
+    r"охват|\bполн\w*|\bнеполн\w*|coverage|complete(ly)?\b|incomplete", re.IGNORECASE)
 # The template line "Complete / incomplete — …", left as is, is a question, not a decision.
 COVERAGE_PLACEHOLDER = re.compile(r"полн\w*\s*/\s*неполн|complete\s*/\s*incomplete", re.IGNORECASE)
 
@@ -2019,6 +2057,28 @@ def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
     return None
 
 
+CODE_SPAN = re.compile(r"`+([^`]*)`+")
+VERDICT_VOCABULARY = {w for w, _ in VERDICT_WORDS}
+
+
+def unquote_verdicts(line: str) -> str:
+    """Blank out code spans that QUOTE a verdict word instead of giving one.
+
+    A report writes about its own vocabulary: "the report says `not checked` but I did check
+    it", "`checked` is only a code span here", "the `n/a` token in a path is handled". Every
+    one of those scored the quoted word as the line's verdict, and the wrong answer reached
+    `hypotheses`, `check` and the summary with no gate going red.
+
+    Only a span whose WHOLE content is a vocabulary word is blanked. A span that carries a
+    whole clause is prose in monospace — `` `H1.1 — checked: proven by running it` `` is how
+    a real report writes its verdicts, and it must keep working.
+    """
+    def one(m: re.Match) -> str:
+        inner = m.group(1).strip().strip(".,:;!?").strip().lower()
+        return " " if inner in VERDICT_VOCABULARY else m.group(0)
+    return CODE_SPAN.sub(one, line)
+
+
 def line_verdict(line: str) -> str | None:
     """A line's verdict is the word that stands EARLIER in it, not the first by the vocabulary.
 
@@ -2027,7 +2087,7 @@ def line_verdict(line: str) -> str | None:
     declared the hypothesis unchecked. The negation is not lost either: the negated form
     ("not checked") starts earlier than the bare word ("checked") nested inside it.
     """
-    low = line.lower()
+    low = unquote_verdicts(line).lower()
     hits = [(i, v) for w, v in VERDICT_WORDS if (i := verdict_word_at(low, w)) >= 0]
     return min(hits)[1] if hits else None
 
@@ -2048,10 +2108,8 @@ def section_body(md: str, heading: re.Pattern) -> list[str] | None:
     """
     body: list[str] | None = None
     depth = 0
-    fenced = False
-    for line in md.split("\n"):
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
+    lines = md.split("\n")
+    for line, fenced in zip(lines, fenced_lines(lines)):
         if not fenced and line.startswith("#"):
             level = len(line) - len(line.lstrip("#"))
             if body is None:
@@ -2074,11 +2132,8 @@ def section_items_full(md: str, heading: re.Pattern) -> list[str]:
     """
     lines = section_body(md, heading) or []
     marks = []
-    fenced = False
-    for i, ln in enumerate(lines):
-        if ln.lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced and LIST_ITEM.match(ln):
+    for i, (ln, fenced) in enumerate(zip(lines, fenced_lines(lines))):
+        if not fenced and LIST_ITEM.match(ln):
             # TOP-level items are counted: a nested list under a hypothesis is its details,
             # not a new hypothesis, and a list line inside a code block is an example.
             marks.append((i, len(ln) - len(ln.lstrip())))
@@ -2136,7 +2191,15 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     hypotheses_depth = 0
     table_about_hypotheses = False
     prev_was_row = False
-    for line in text.split("\n"):
+    lines = text.split("\n")
+    for line, fenced in zip(lines, fenced_lines(lines)):
+        # A fenced block is an EXAMPLE, not an answer. The role template hands the agent the
+        # shape of a verdict line inside a ```markdown fence, with the block id already
+        # substituted; a report that quotes that skeleton and answers nothing closed every
+        # hypothesis of the block and `check` printed "review state is consistent".
+        if fenced:
+            prev_was_row = False
+            continue
         if line.startswith("#"):
             level = len(line) - len(line.lstrip("#"))
             if HYPOTHESIS_HEADING.match(line):
@@ -2145,12 +2208,13 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
                 in_hypotheses = False
         is_row = line.lstrip().startswith("|")
         if is_row and not prev_was_row:
-            # The first row of a table says what the numbers in the first column are: a
-            # header naming hypotheses, or no header at all (a bare "| 1 | … | verdict |"
-            # summary). An acceptance table ("| # | place | constraint | ✓ |") is numbered
-            # too, and its rows counted as verdicts on hypotheses 4 and 5.
-            first = line.strip().strip("|").split("|")[0].strip()
-            table_about_hypotheses = bool(HYPOTHESIS_WORD.search(line)) or first.isdigit()
+            # A table counts as a table of hypothesis verdicts only when it SAYS SO — its
+            # first row names hypotheses. Reading a bare first data row ("| 1 | … |") as a
+            # header too made every numbered table in the report a verdict table: the
+            # gate→test→mutation table the acceptance criterion itself asks for closed
+            # hypotheses 1 and 2 with the verdicts of rows 1 and 2. A header-less summary of
+            # hypotheses is still read — under the "Hypotheses" heading, where it belongs.
+            table_about_hypotheses = bool(HYPOTHESIS_WORD.search(line))
         prev_was_row = is_row
         verdict = line_verdict(line)
         if not verdict:
@@ -2215,6 +2279,20 @@ def cmd_hypotheses(args) -> int:
 
 
 # --------------------------------------------------------------------------- check
+
+
+def names_file(text: str, rel: str) -> bool:
+    """Does the text name THIS path — not a longer one that merely contains it?
+
+    A plain `in` closed the gate for `src/api.ts` as soon as the report mentioned
+    `src/api.ts.snap`; the same held for a `.map`, a `.test.ts` next to a `.ts` and an
+    `index.ts` under a longer directory. The occurrence must be a whole path: what follows
+    may not continue the name, and what precedes may not be the rest of a longer one.
+    A trailing period ("I read src/api.ts.") is a sentence, not a longer path.
+    """
+    pattern = (r"(?<![A-Za-z0-9_./-])" + re.escape(rel)
+               + r"(?![A-Za-z0-9_-]|[./][A-Za-z0-9_-])")
+    return re.search(pattern, text) is not None
 
 
 def cmd_check(args) -> int:
@@ -2411,7 +2489,17 @@ def cmd_check(args) -> int:
         # finding that is still open. A fixed one cites the file as it was before the fix;
         # after it the file legitimately shrinks (the first migrated registry: three fixed
         # findings, all flagged).
-        if f.get("status") in ("open", "deferred") and f.get("line") and isinstance(f["line"], int):
+        # The type is part of the vocabulary, like severity and status: a hand-written draft
+        # says `"line": "2137"` as easily as `2137`, `import` copies the field through
+        # untouched, findings.md renders both the same — and the gate below used to skip the
+        # quoted one silently, which is worse than having no gate.
+        if f.get("line") is not None and (isinstance(f["line"], bool)
+                                          or not isinstance(f["line"], int)):
+            problems.append(
+                f"finding {fid}: line={f['line']!r} is not a number — write the line as a "
+                f"number without quotes, or leave the field out"
+            )
+        elif f.get("status") in ("open", "deferred") and f.get("line"):
             n = file_lines(f.get("file", ""))
             if n is not None and f["line"] > n:
                 problems.append(
@@ -2595,7 +2683,7 @@ def cmd_check(args) -> int:
                 rp.read_text(encoding="utf-8", errors="ignore")
                 for rp in (REVIEW / "reports").glob(f"{b['id']}-*.md")
             )
-            missing = [f for f in owned if f not in text]
+            missing = [f for f in owned if not names_file(text, f)]
             if missing:
                 problems.append(
                     f"{b['id']}: {len(missing)} of {len(owned)} block files are not named by full "

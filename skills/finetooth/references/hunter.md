@@ -90,6 +90,12 @@ A hypothesis without a verdict fails the state check: this is the second denomin
 coverage next to the file map. A file can be opened and nothing understood — but the
 question "can an organization member invite the owner" either has an answer or it does not.
 
+**Write the verdict as an ordinary line of the report, outside code blocks.** Everything
+inside a ``` or ~~~ fence is read as an example, not as an answer — including the three
+lines above, if you copy them across as they stand. A verdict word alone in backticks
+(`` `checked` ``) is a quotation of the word, not a verdict either; a whole verdict line in
+backticks is one.
+
 ## Tree freshness
 
 **Before writing up a finding, make sure you are looking at the current code.** The defect

@@ -51,6 +51,8 @@ hypotheses are numbered in order (`{{BLOCK_ID}}.1`, `{{BLOCK_ID}}.2`, …), and 
 exactly one verdict in the block's reports: "checked: what proves it", "not checked: what got
 in the way", "not applicable: why". Someone else's verdict you disagree with is overridden by
 your own — with an explanation. The state check requires a verdict for all hypotheses of the block.
+Write it as an ordinary line, outside code blocks: everything inside a ``` or ~~~ fence is
+read as an example, and a verdict word alone in backticks is a quotation of the word.
 
 **First check that the tree is fresh.** `git log HEAD..origin/master --oneline`; for a neighboring repository — `git fetch` and reading through `git show origin/master:<file>`. Execution does not save you if you execute yesterday's code: that is exactly how a defect long gone from `origin/master` was once confirmed.
 

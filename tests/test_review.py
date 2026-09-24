@@ -371,7 +371,9 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=2)
-        self.s.reports(hunter="# охотник\n## Итог\n"
+        # Таблица без шапки стоит под «Гипотезами» — там номер строки и есть номер
+        # гипотезы. Вне этого раздела такая таблица вердиктом не считается.
+        self.s.reports(hunter="# охотник\n## Гипотезы\n"
                               "| 1 | пути | **Проверена по коду**, живым запросом не проверял |\n"
                               "| 2 | ник | не проверена: стенда нет, хотя код проверена-подобен |\n"
                               "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
@@ -2233,6 +2235,200 @@ class SetupTest(unittest.TestCase):
         bj = json.loads((self.root / "docs/review/blocks.json").read_text(encoding="utf-8"))
         self.assertEqual(bj["cli"], "npm run review --",
                          "повторный запуск не должен менять уже настроенное определение")
+
+
+class ReportShapeTest(unittest.TestCase):
+    """Разбор отчёта: форма — не смысл.
+
+    Вердикт гипотезы, оценка охвата и «файл назван в отчёте» читались по форме текста:
+    слово в ограде кода, слово в обратных кавычках, номер строки таблицы, путь внутри
+    другого пути. Каждый тест парный: запрещённое больше не проходит, разрешённое —
+    по-прежнему проходит.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _stand(self, hunter: str, hypotheses: int = 1, manifest: str | None = None) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        if manifest is None:
+            self.s.manifest(hypotheses=hypotheses)
+        else:
+            self.s.write("docs/review/blocks/H1-demo.md", manifest)
+        self.s.reports(hunter=hunter, verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+
+    LIMITS = "\n## Ограничения охвата\nнет\n"
+
+    def test_вердикт_внутри_ограды_кода_не_вердикт(self):
+        """Шаблон роли отдаёт агенту образец строки вердикта внутри ```-ограды, с уже
+        подставленным номером блока. Отчёт, который перенёс образец и не ответил ничего,
+        закрывал все гипотезы блока, и `check` печатал «состояние согласовано»."""
+        self._stand("# охотник\n\n## Гипотезы\n\nОтветов ниже нет.\n\n"
+                    "```markdown\n- H1.1 — проверена: <чем именно доказано>\n```\n"
+                    + self.LIMITS)
+        out = self.s.run("hypotheses", "H1").stdout
+        self.assertIn("NO VERDICT", out)
+        self.assertIn("closed 0/1", out)
+
+    def test_вердикт_вне_ограды_по_прежнему_вердикт(self):
+        self._stand("# охотник\n\n## Гипотезы\n- H1.1 — проверена: прогнал на матрице.\n"
+                    "```markdown\n- H1.1 — не проверена: образец\n```\n" + self.LIMITS)
+        out = self.s.run("hypotheses", "H1").stdout
+        self.assertRegex(out, r"H1\.1\s+checked")
+        self.assertIn("closed 1/1", out)
+        self.assertNotIn("different verdicts", self.s.run("check").stdout)
+
+    def test_слово_вердикта_в_обратных_кавычках_цитата(self):
+        """«в отчёте написано `не проверена`, а на деле я проверил» — цитата слова."""
+        self._stand("# охотник\n## Гипотезы\n"
+                    "- H1.1 — в отчёте написано `не проверена`, хотя всё осмотрено.\n"
+                    + self.LIMITS)
+        self.assertIn("NO VERDICT", self.s.run("hypotheses", "H1").stdout)
+
+    def test_вся_строка_вердикта_в_кавычках_остаётся_вердиктом(self):
+        """Живой отчёт пишет вердикт моноширинным целиком — это вердикт, а не цитата."""
+        self._stand("# охотник\n## Гипотезы\n"
+                    "- `H1.1 — проверена: посчитано, а не на глаз.`\n" + self.LIMITS)
+        self.assertRegex(self.s.run("hypotheses", "H1").stdout, r"H1\.1\s+checked")
+
+    def test_путь_с_n_a_в_кавычках_не_делает_гипотезу_неприменимой(self):
+        self._stand("# охотник\n## Гипотезы\n"
+                    "- H1.1 — маркер `n/a` внутри пути обработан; проверена тестом.\n"
+                    + self.LIMITS)
+        out = self.s.run("hypotheses", "H1").stdout
+        self.assertRegex(out, r"H1\.1\s+checked")
+        self.assertNotIn("not applicable", out)
+
+    def test_нумерованная_таблица_вне_раздела_гипотез_не_вердикт(self):
+        """Таблица «ворота → тест → мутация», которую требует сам критерий приёмки,
+        закрывала гипотезы 1 и 2 вердиктами своих строк: вторая гипотеза, о которой в
+        отчёте не сказано ни слова, считалась закрытой строкой про словарь статусов."""
+        self._stand("# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                    "## Ворота\n"
+                    "| 1 | состояние против определения | нет | подтверждена |\n"
+                    "| 2 | словарь статусов | test_x | не проверена |\n" + self.LIMITS,
+                    hypotheses=2)
+        hyp = self.s.run("hypotheses", "H1").stdout
+        self.assertRegex(hyp, r"H1\.2\s+NO VERDICT", hyp)
+        self.assertIn("closed 1/2", hyp)
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check").stdout
+        self.assertIn("hypotheses without a verdict", out)
+        self.assertNotIn("different verdicts", out)
+
+    def test_таблица_названная_гипотезами_по_прежнему_читается(self):
+        self._stand("# охотник\n## Итог\n| # | гипотеза | итог |\n|---|---|---|\n"
+                    "| 1 | предикат | опровергнута |\n" + self.LIMITS)
+        self.assertRegex(self.s.run("hypotheses", "H1").stdout, r"H1\.1\s+checked")
+
+    def test_тильда_ограда_в_манифесте_не_обрывает_гипотезы(self):
+        """`~~~`-ограда была невидима: заголовок внутри неё обрезал раздел, и гипотезы
+        ниже исчезали из счёта и из отпечатка."""
+        manifest = ("# H1 — Демоблок\n\n## Зачем\n\nПроверить, что оснастка ведёт себя так,"
+                    " как обещает, и что раздел гипотез читается целиком.\n\n"
+                    "## Гипотезы\n"
+                    "1. Первая гипотеза о предикате и его граничных значениях.\n"
+                    "2. Вторая гипотеза о том же коде, тоже достаточно длинная.\n\n"
+                    "~~~markdown\n# заголовок внутри ограды\n~~~\n\n"
+                    "3. Третья гипотеза, которая раньше пропадала.\n"
+                    "4. Четвёртая гипотеза, которая пропадала вместе с ней.\n\n"
+                    "## Критерий приёмки\n\nТаблица по каждой гипотезе.\n")
+        self._stand("# охотник\n## Гипотезы\n- H1.1 — проверена: да\n" + self.LIMITS,
+                    manifest=manifest)
+        out = self.s.run("hypotheses", "H1").stdout
+        for h in ("H1.1", "H1.2", "H1.3", "H1.4"):
+            self.assertIn(h, out)
+        self.assertIn("closed 1/4", out)
+
+    def test_заголовок_внутри_тильда_ограды_не_понижается_в_промпте(self):
+        manifest = ("# H1 — Демоблок\n\n## Зачем\n\nДостаточно длинный абзац, чтобы манифест"
+                    " не считался куцым, и ограда ниже осталась оградой.\n\n"
+                    "~~~\n# это комментарий примера, а не заголовок\n~~~\n\n"
+                    "## Гипотезы\n1. Первая гипотеза о предикате и граничных значениях.\n\n"
+                    "## Критерий приёмки\n\nТаблица.\n")
+        self._stand("# охотник\n## Гипотезы\n- H1.1 — проверена: да\n" + self.LIMITS,
+                    manifest=manifest)
+        out = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("\n# это комментарий примера, а не заголовок\n", out)
+        self.assertNotIn("\n## это комментарий примера", out)
+
+    def test_завершил_проверку_не_оценка_охвата(self):
+        """Гейт требует сказать, что осталось непросмотренным; «я завершил проверку»
+        отвечает на другой вопрос — и удовлетворял его словом внутри «завершил»."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"], lang="en")
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# hunter\n## Hypotheses\n- H1.1 — checked: yes\n"
+                              "## Coverage limits\nnothing\n",
+                       verify="# verify\n\nI completed the check of every finding; "
+                              "nothing was confirmed.\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("no coverage verdict", out.stdout)
+
+    def test_честная_оценка_охвата_принимается_на_обоих_языках(self):
+        for lang, body in (("en", "# verify\n\nVerdicts: none.\n\nCoverage is complete: "
+                                  "both files were read.\n"),
+                           ("ru", "# проверяющий\n\nВердиктов нет.\n\n"
+                                  "Проверка проведена полностью, непрочитанного не осталось.\n")):
+            with self.subTest(lang=lang):
+                s = Stand()
+                self.addCleanup(s.cleanup)
+                s.write("src/one.ts", "a\n")
+                s.blocks(paths=["src/one.ts"], lang=lang)
+                s.manifest(hypotheses=1)
+                s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                                 "## Ограничения охвата\nнет\n", verify=body)
+                s.commit()
+                s.run("init")
+                s.run("coverage")
+                s.run("set-status", "H1", "verified")
+                out = s.run("check")
+                self.assertNotIn("no coverage verdict", out.stdout)
+
+    def test_соседний_файл_с_тем_же_началом_не_закрывает_гейт_имён(self):
+        """Отчёт назвал `src/api.ts.snap` — и `src/api.ts` считался названным."""
+        self.s.write("src/api.ts", "a\n")
+        self.s.write("src/api.ts.snap", "snap\n")
+        self.s.blocks(paths=["src"], named_files=True)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Прочитано\nsrc/api.ts.snap\n"
+                              "## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("src/api.ts", out.stdout)
+        self.assertIn("not named by full", out.stdout)
+
+    def test_названный_файл_в_конце_предложения_засчитывается(self):
+        """Точка после пути — конец фразы, а не более длинный путь."""
+        self.s.write("src/api.ts", "a\n")
+        self.s.write("src/api.ts.snap", "snap\n")
+        self.s.blocks(paths=["src"], named_files=True)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Прочитано\nПрочитал `src/api.ts`, "
+                              "а также src/api.ts.snap.\n"
+                              "## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertNotIn("not named by full", out.stdout)
 
 
 if __name__ == "__main__":
