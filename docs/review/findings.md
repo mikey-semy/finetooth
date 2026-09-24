@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **7** of 31 records.
+Open: **0** of 31 records.
 
 ## high (0 open / 1)
 
@@ -11,7 +11,7 @@ Open: **7** of 31 records.
 |---|---|---|---|---|
 | T1-001 | T1 | fixed | `skills/finetooth/scripts/review.py:2137` | verdict_mentions tracks neither fences nor code spans, so hypothesis verdicts quoted from the role template's own skeleton close the hypotheses and check goes green with the questions unanswered |
 
-## medium (1 open / 13)
+## medium (0 open / 13)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -27,9 +27,9 @@ Open: **7** of 31 records.
 | T1-012 | T1 | fixed | `skills/finetooth/assets/run-role.sh:40` | run-role.sh writes the spend line to the journal whatever the run's exit code, so a run cut off by --max-turns is recorded as an ordinary completed run |
 | T1-019 | T1 | fixed | `skills/finetooth/scripts/review.py:2013` | The verifier's coverage-verdict gate matches the bare word 'complete' anywhere in the report, so 'I completed the check' satisfies a gate meant to demand a statement about what was left unreviewed |
 | T1-022 | T1 | fixed | `skills/finetooth/assets/guard-grep.sh:95` | One marker exempts every hit in the window below it, not just the call it was written above — the exact failure guard-grep.sh was written to replace grep -B with |
-| T1-025 | T1 | open | `tests/test_review.py:3477` | [R1-001, fix review round 1] The new guard for "a gate that cannot go red" does not see a gate whose message is not a literal |
+| T1-025 | T1 | fixed | `tests/test_review.py:3477` | [R1-001, fix review round 1] The new guard for "a gate that cannot go red" does not see a gate whose message is not a literal |
 
-## low (6 open / 17)
+## low (0 open / 17)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -44,10 +44,10 @@ Open: **7** of 31 records.
 | T1-021 | T1 | fixed | `skills/finetooth/scripts/review.py:1342` | prompt substitutes into the pasted manifest text and blames the role template for a leftover placeholder that in fact came from the manifest |
 | T1-023 | T1 | fixed | `skills/finetooth/scripts/review.py:300` | listed() runs git ls-files with check=True, so a pathspec in blocks.json that git rejects makes check and coverage die with a CalledProcessError traceback instead of naming the bad pattern |
 | T1-024 | T1 | fixed | `skills/finetooth/scripts/review.py:2412` | The cited-line gate is guarded by isinstance(line, int), so a finding whose line is written as a string skips the check entirely while findings.md still renders it as a real location |
-| T1-026 | T1 | open | `skills/finetooth/scripts/review.py:1393` | [R1-002, fix review round 1] `summary --aged` now counts one file under two names — the opposite of what the change claims |
-| T1-027 | T1 | open | `skills/finetooth/scripts/review.py:2599` | [R1-003, fix review round 1] The named-files gate now refuses a report that writes `./src/api.ts` |
-| T1-028 | T1 | open | `skills/finetooth/scripts/review.py:2496` | [R1-004, fix review round 1] A quoted verdict still closes a hypothesis when it is quoted by indentation or by `>` |
-| T1-029 | T1 | open | `skills/finetooth/scripts/axes.py:65` | [R1-005, fix review round 1] `axes.py` changed which `result` event it measures, and this is in no report and under no test |
-| T1-030 | T1 | open | `CHANGELOG.md:41` | [R1-006, fix review round 1] The changelog's Breaking section holds five fixes that are not breaking, and not the change that is |
-| T1-031 | T1 | open | `skills/finetooth/references/fix.md:59` | [R1-007, fix review round 1] Two new rules in the fix role template, recorded nowhere |
+| T1-026 | T1 | fixed | `skills/finetooth/scripts/review.py:1393` | [R1-002, fix review round 1] `summary --aged` now counts one file under two names — the opposite of what the change claims |
+| T1-027 | T1 | fixed | `skills/finetooth/scripts/review.py:2599` | [R1-003, fix review round 1] The named-files gate now refuses a report that writes `./src/api.ts` |
+| T1-028 | T1 | fixed | `skills/finetooth/scripts/review.py:2496` | [R1-004, fix review round 1] A quoted verdict still closes a hypothesis when it is quoted by indentation or by `>` |
+| T1-029 | T1 | fixed | `skills/finetooth/scripts/axes.py:65` | [R1-005, fix review round 1] `axes.py` changed which `result` event it measures, and this is in no report and under no test |
+| T1-030 | T1 | fixed | `CHANGELOG.md:41` | [R1-006, fix review round 1] The changelog's Breaking section holds five fixes that are not breaking, and not the change that is |
+| T1-031 | T1 | fixed | `skills/finetooth/references/fix.md:59` | [R1-007, fix review round 1] Two new rules in the fix role template, recorded nowhere |
 
