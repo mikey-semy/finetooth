@@ -4,7 +4,7 @@ description: Whole-repository review in blocks — with a file → block coverag
 license: MIT for the additions; the base was handed over by its author without a license — full terms in LICENSE
 compatibility: Requires git and Python 3 (standard library only; tested on 3.12 and 3.14). Run from the directory of the repository under review.
 metadata:
-  version: "0.7.0"
+  version: "0.8.0"
   original-author: "Georgiy Khudobandaev (https://github.com/Georgiy-Khudobandaev)"
   source: "https://github.com/mikey-semy/finetooth"
 ---
