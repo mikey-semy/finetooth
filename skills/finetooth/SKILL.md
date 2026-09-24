@@ -1,6 +1,6 @@
 ---
 name: finetooth
-description: Whole-repository review in blocks — with a file → block coverage map, hypotheses as the second denominator, three agent roles (hunter, verifier, fixer) and on-disk state that survives session changes. Use when asked for a full or whole-codebase review or audit that must cover every file rather than a diff, to resume a review already in progress (the repository has docs/review/), or to run the hunter, verify or fix role on a review block.
+description: Whole-repository review in blocks — with a file → block coverage map, hypotheses as the second denominator, four agent roles (hunter, verifier, fixer, fix reviewer) and on-disk state that survives session changes. Use when asked for a full or whole-codebase review or audit that must cover every file rather than a diff, to resume a review already in progress (the repository has docs/review/), or to run the hunter, verify, fix or fixreview role on a review block.
 license: MIT for the additions; the base was handed over by its author without a license — full terms in LICENSE
 compatibility: Requires git and Python 3 (standard library only; tested on 3.12 and 3.14). Run from the directory of the repository under review.
 metadata:

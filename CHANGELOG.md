@@ -9,6 +9,10 @@ with a review already under way.
 
 ## [Unreleased]
 
+### Fixed
+
+- `SKILL.md` description said three roles; there are four (the fix reviewer was added in 0.5.0). The description is what an agent reads to decide whether to apply the skill.
+
 ### Removed
 
 - `docs/` and `ROADMAP.md` moved to the private knowledge base `finetooth-hq`: measurements, prior art, method comparison, token economy, the open-source plan and the roadmap. The public repository keeps what a user of the kit needs. The banner moved to `.github/banner.png`.
