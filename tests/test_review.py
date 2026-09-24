@@ -941,6 +941,16 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("one script file", (refs / "verify.md").read_text(encoding="utf-8"))
         self.assertIn("одним файлом", (refs / "verify.ru.md").read_text(encoding="utf-8"))
 
+    def test_шаблоны_ролей_говорят_где_писать_вердикт(self):
+        """Правка механизма — правка промпта: разборщик перестал читать вердикты внутри
+        ограды кода, и шаблоны обоих языков обязаны сказать об этом. Иначе гейт краснеет
+        на честном отчёте, а это дефект набора, а не агента."""
+        refs = SKILL / "references"
+        self.assertIn("outside code blocks", (refs / "hunter.md").read_text(encoding="utf-8"))
+        self.assertIn("вне блоков кода", (refs / "hunter.ru.md").read_text(encoding="utf-8"))
+        self.assertIn("outside code blocks", (refs / "verify.md").read_text(encoding="utf-8"))
+        self.assertIn("вне блоков кода", (refs / "verify.ru.md").read_text(encoding="utf-8"))
+
     def test_axes_считает_usage_раз_на_сообщение_и_перечитывания(self):
         """stream-json дробит одно сообщение на несколько событий с ОДНИМ usage: считать
         дважды — завысить вход вдвое."""
