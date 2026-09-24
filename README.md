@@ -1,5 +1,12 @@
 [Русская версия](README.ru.md)
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/logo-dark.png">
+    <img src=".github/logo-light.png" alt="finetooth" width="360">
+  </picture>
+</p>
+
 # finetooth — whole-repository code review by AI agents
 
 [![tests](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml/badge.svg)](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml)
