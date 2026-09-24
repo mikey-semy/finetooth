@@ -8,6 +8,7 @@ re-reads (the same file, the same part, read again). Usage:
 
     axes.py <stream.jsonl>            full breakdown
     axes.py <stream.jsonl> --journal  one line for `review log`
+    axes.py <stream.jsonl> --reply    what the agent answered
 """
 from __future__ import annotations
 
@@ -110,6 +111,12 @@ def read_stream(path: str) -> dict:
         "output": output, "tool_calls": dict(tool_calls), "tool_bytes": dict(tool_bytes),
         "rereads": {f: n for f, n in reads.items() if n > 1},
         "files_read": len(reads),
+        # Every result event's answer, in the order the stream printed them: a background
+        # task that finished after the main answer wrote its own, and the operator reads
+        # both. ONE reader for the stream — the second one, written inline in
+        # `run-role.sh`, did not know about the half-written last line of a killed run and
+        # died on it, taking the run's exit code with it.
+        "replies": [r.get("result") or "" for r in results],
     }
 
 
@@ -131,6 +138,11 @@ def journal_line(a: dict) -> str:
             f"cost estimate {cost}, model {a['model']}")
 
 
+# As much of the answer as an operator reads in a terminal without scrolling past it: the
+# whole reply belongs to the report the role has already written to disk.
+REPLY_CHARS = 4000
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -138,6 +150,12 @@ def main() -> int:
     a = read_stream(sys.argv[1])
     if "--journal" in sys.argv:
         print(journal_line(a))
+        return 0
+    if "--reply" in sys.argv:
+        if not a["replies"]:
+            print(f"no agent reply in the stream — {a['outcome'] or 'no result event'}")
+        for reply in a["replies"]:
+            print("\n--- agent reply ---\n" + reply[:REPLY_CHARS])
         return 0
     if a["outcome"]:
         print(f"⚠️  {a['outcome']}: the numbers below are what the stream still holds, "

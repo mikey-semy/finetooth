@@ -3357,9 +3357,11 @@ class SpendTest(unittest.TestCase):
         self.assertIn("PARTIAL RESULT", out.stdout)
         self.assertIn("11 assistant messages", out.stdout)
 
-    def _run_role(self, exit_code: int) -> tuple[subprocess.CompletedProcess, str]:
+    def _run_role(self, exit_code: int, truncated: bool = False,
+                  log_fails: bool = False) -> tuple[subprocess.CompletedProcess, str]:
         """run-role.sh с заглушкой вместо `claude`: настоящий клиент здесь не нужен,
-        нужен его код возврата и поток, который он оставляет."""
+        нужен его код возврата и поток, который он оставляет. `truncated` — убитый прогон
+        обрывает последнюю строку потока на середине; `log_fails` — отказывает шаг отчёта."""
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
@@ -3373,16 +3375,56 @@ class SpendTest(unittest.TestCase):
             'printf \'%s\\n\' \'{"type":"assistant","message":{"id":"m1","model":"test",'
             '"usage":{"input_tokens":1,"cache_creation_input_tokens":0,'
             '"cache_read_input_tokens":0,"output_tokens":1},"content":[]}}\'\n'
-            f"exit {exit_code}\n", encoding="utf-8")
+            + ('printf \'%s\' \'{"type":"assis\'\n' if truncated else "")
+            + f"exit {exit_code}\n", encoding="utf-8")
         stub.chmod(0o755)
+        review = f"{sys.executable} {TOOL}"
+        if log_fails:
+            # Отчётный шаг, который отказал: дневник не пишется, но код возврата обязан
+            # остаться кодом ПРОГОНА — по нему читает всё, что запускает run-role.sh.
+            wrap = stub_dir / "review-wrap.sh"
+            wrap.write_text("#!/usr/bin/env bash\n"
+                            'if [ "$1" = "log" ]; then echo "log failed" >&2; exit 3; fi\n'
+                            f'exec {review} "$@"\n', encoding="utf-8")
+            wrap.chmod(0o755)
+            review = str(wrap)
         env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}",
-                   REVIEW=f"{sys.executable} {TOOL}",
-                   TMPDIR=str(self.s.root / "runs"))
+                   REVIEW=review, TMPDIR=str(self.s.root / "runs"))
         (self.s.root / "runs").mkdir()
         out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "hunter"],
                              cwd=self.s.root, capture_output=True, text=True, env=env)
         journal = (self.s.root / "docs/review/journal.md")
         return out, journal.read_text(encoding="utf-8") if journal.exists() else ""
+
+    def test_обрезанный_поток_не_роняет_запуск_роли(self):
+        """Убитый прогон оставляет последнюю строку недописанной. Ответ агента читался
+        вторым разборщиком, написанным прямо в скрипте; он умирал на такой строке, и под
+        `set -e` вместе с ним пропадал `exit $RC` — оператор видел трейсбек и код 1."""
+        out, journal = self._run_role(exit_code=143, truncated=True)
+        self.assertEqual(out.returncode, 143, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("unreadable line", journal)
+        self.assertIn("RUN FAILED", journal)
+
+    def test_отказ_шага_отчёта_не_подменяет_код_возврата_прогона(self):
+        """Обратная сторона того же: всё после запуска — отчёт, и его отказ не имеет
+        права выдавать успешный прогон за упавший."""
+        out, _ = self._run_role(exit_code=0, log_fails=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_ответ_агента_печатается_из_целого_потока(self):
+        """Прямая сторона: на целом потоке ответ агента по-прежнему виден оператору."""
+        out, _ = self._run_role(exit_code=0)
+        self.assertIn("no agent reply in the stream", out.stdout, out.stdout)
+        p = self.s.root / "reply.jsonl"
+        p.write_text(json.dumps({"type": "result", "subtype": "success", "num_turns": 1,
+                                 "duration_ms": 1, "total_cost_usd": 0.1,
+                                 "usage": {"output_tokens": 1}, "result": "блок пройден"},
+                                ensure_ascii=False) + "\n", encoding="utf-8")
+        got = self._axes(p, "--reply")
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertIn("--- agent reply ---", got.stdout)
+        self.assertIn("блок пройден", got.stdout)
 
     def test_упавший_прогон_записан_в_дневник_как_упавший(self):
         """Дневник — единственная память следующей сессии; обрезанный прогон был записан

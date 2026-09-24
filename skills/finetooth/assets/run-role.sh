@@ -40,6 +40,11 @@ claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
   < "$PROMPT" > "$STREAM" 2> "$STREAM.err"
 RC=$?
 set -e
+# Everything below is reporting, and the script's exit code is the RUN's whatever a report
+# does: anything scripted on top of run-role.sh reads the ending of `claude`, not the
+# ending of a journal write. Under `set -e` a failing report used to abort the script
+# before `exit $RC` ever ran, and the operator read the wrong ending.
+trap 'exit $RC' EXIT
 echo "claude exit: $RC"
 python3 "$HERE/../scripts/axes.py" "$STREAM"
 LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)"
@@ -52,11 +57,9 @@ if [ "$RC" -ne 0 ]; then
   LINE="RUN FAILED (claude exit $RC — the assignment was NOT completed) · $LINE"
 fi
 $REVIEW log "$BLOCK" "$ROLE — $LINE"
-python3 - "$STREAM" <<'PY'
-import json, sys
-for line in open(sys.argv[1], encoding="utf-8"):
-    ev = json.loads(line) if line.strip() else {}
-    if ev.get("type") == "result":
-        print("\n--- agent reply ---\n" + (ev.get("result") or "")[:4000])
-PY
+# ONE reader for the stream. A second one written here parsed every line with `json.loads`
+# and died on the half-written last line a killed run leaves behind — the very line
+# `axes.py` counts and reports — so an operator whose run was cut off saw a Python
+# traceback instead of the agent's answer.
+python3 "$HERE/../scripts/axes.py" "$STREAM" --reply
 exit $RC
