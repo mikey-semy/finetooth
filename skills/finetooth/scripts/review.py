@@ -471,8 +471,54 @@ def file_lines(rel: str) -> int | None:
     return out.stdout.count(b"\n") + (0 if out.stdout.endswith(b"\n") or not out.stdout else 1)
 
 
+# What a block definition must carry for the tool to be able to do anything with it. The
+# file is written BY HAND — `setup` leaves `"blocks": []` for a human to fill in — and a
+# missing field used to surface as `KeyError: 'phase'` with exit 1, which reads as "the
+# state is red" rather than "your definition is malformed". Each field is used somewhere
+# with no default: `slug` names the manifest and the reports, `phase` orders the array,
+# `role` and `goal` are pasted into every prompt.
+BLOCK_FIELDS = ("id", "slug", "phase", "title", "role", "goal")
+
+
+def check_definition(defn: dict) -> None:
+    if not isinstance(defn.get("blocks"), list):
+        die(f"docs/review/blocks.json: the `blocks` field must be an array — "
+            f"the example is {SKILL_DIR / 'assets' / 'blocks.example.json'}")
+    seen: set[str] = set()
+    for i, b in enumerate(defn["blocks"], 1):
+        where = f"block {b['id']}" if isinstance(b, dict) and b.get("id") else f"block #{i}"
+        if not isinstance(b, dict):
+            die(f"docs/review/blocks.json: {where} is not an object")
+        for field in BLOCK_FIELDS:
+            value = b.get(field)
+            if field == "phase":
+                if not isinstance(value, int) or isinstance(value, bool):
+                    die(f"docs/review/blocks.json: {where} has no whole-number `phase` — "
+                        f"the phase orders the array (1 cross-cutting, 2 vertical slices, "
+                        f"3 live-system); the example is "
+                        f"{SKILL_DIR / 'assets' / 'blocks.example.json'}")
+                continue
+            if not isinstance(value, str) or not value.strip():
+                die(f"docs/review/blocks.json: {where} has no `{field}` — every block needs "
+                    f"{', '.join(BLOCK_FIELDS)}; the example is "
+                    f"{SKILL_DIR / 'assets' / 'blocks.example.json'}")
+        # `id` and `slug` become file names (docs/review/blocks/<id>-<slug>.md and the
+        # reports): a separator in them would write the manifest outside docs/review/.
+        for field in ("id", "slug"):
+            if "/" in b[field] or "\\" in b[field] or b[field] in (".", ".."):
+                die(f"docs/review/blocks.json: {where} has `{field}` = `{b[field]}` — "
+                    f"it becomes part of a file name under docs/review/, so it cannot "
+                    f"contain a path separator")
+        if b["id"] in seen:
+            die(f"docs/review/blocks.json: two blocks share the id `{b['id']}` — the id is "
+                f"the block's name in the state, in the findings and in the reports")
+        seen.add(b["id"])
+
+
 def blocks() -> dict:
-    return load_json(BLOCKS_FILE)
+    defn = load_json(BLOCKS_FILE)
+    check_definition(defn)
+    return defn
 
 
 def block_index(defn: dict) -> dict[str, dict]:
@@ -503,6 +549,7 @@ def findings() -> list[dict]:
 
 def cmd_init(args) -> int:
     defn = blocks()
+    before = STATE_FILE.read_text(encoding="utf-8") if STATE_FILE.exists() else None
     st = {"review_id": defn["review_id"], "updated_at": now(), "blocks": {}}
     if STATE_FILE.exists() and not args.force:
         st = state()
@@ -515,11 +562,32 @@ def cmd_init(args) -> int:
     known = {b["id"] for b in defn["blocks"]}
     for stale in [k for k in st["blocks"] if k not in known]:
         del st["blocks"][stale]
+    FINDINGS_FILE.touch()
+    # A re-run on an unchanged definition must leave the file alone, to the byte. While
+    # `updated_at` was rewritten unconditionally, a CI gate of the usual shape — regenerate,
+    # then require a clean working tree — went red on a correct state, and the only way to
+    # keep it green was to stop running `init` in CI, which is what the gate existed for.
+    if before is not None and state_text(st, keep=before) == before:
+        print(f"state already matches the definition: {len(st['blocks'])} blocks")
+        return 0
     st["updated_at"] = now()
     save_json(STATE_FILE, st)
-    FINDINGS_FILE.touch()
     print(f"state initialised: {len(st['blocks'])} blocks")
     return 0
+
+
+def state_text(st: dict, keep: str) -> str:
+    """The state as it would be written, with `updated_at` taken from `keep`.
+
+    The stamp says when the state last CHANGED; comparing it against itself would mean
+    nothing, so it is the one field excluded from the comparison.
+    """
+    same = dict(st)
+    try:
+        same["updated_at"] = json.loads(keep).get("updated_at")
+    except (ValueError, AttributeError):
+        return ""
+    return json.dumps(same, ensure_ascii=False, indent=2) + "\n"
 
 
 def cmd_version(args) -> int:
@@ -1205,7 +1273,20 @@ def cmd_summary(args) -> int:
         i = text.find(SUMMARY_MARK)
         if i < 0:
             die(f"{path.name} carries no machine block — was it written by `summary`?")
-        machine = json.loads(text[i + len(SUMMARY_MARK):text.index(" -->", i)])
+        # The machine block is one line: `<!-- finetooth-summary {…} -->`. Cut at the LAST
+        # `-->` of that line, not at the first ` -->` in the file: a block whose title holds
+        # the marker (`Import --> export pipeline`) is written into the block verbatim, and
+        # cutting at the first one left half a JSON object and a traceback in the user's
+        # face — on the one file that is meant to outlive docs/review/.
+        raw = text[i + len(SUMMARY_MARK):].split("\n", 1)[0].rstrip()
+        if not raw.endswith("-->"):
+            die(f"{path.name}: the machine block is not closed with `-->` — "
+                f"it is generated, not written by hand; regenerate it with `{CLI} summary`")
+        try:
+            machine = json.loads(raw[:-3].strip())
+        except json.JSONDecodeError as exc:
+            die(f"{path.name}: the machine block is not valid JSON ({exc}) — "
+                f"it is generated, not written by hand; regenerate it with `{CLI} summary`")
         base = machine["base"]
         n = subprocess.run(["git", "-C", str(ROOT), "rev-list", "--count", f"{base}..HEAD"],
                            capture_output=True, text=True, check=False).stdout.strip() or "0"
@@ -1470,8 +1551,11 @@ def cmd_prompt(args) -> int:
     # carries "{{FILES}}" as a quotation, and the assembled check refused the fix prompt
     # of the kit's own review for exactly that.
     left = sorted(set(PLACEHOLDER.findall(body)) - set(subs) - {"{{DIFF}}"})
-    for k, v in subs.items():
-        body = body.replace(k, v)
+    # ONE pass over the template, not one pass per substitution: a manifest that writes
+    # about the placeholders ("the template uses {{FILES}}") had its own prose rewritten
+    # with the file list, because MANIFEST was substituted before FILES. What the template
+    # asks for is substituted; what the substituted text contains is quotation.
+    body = PLACEHOLDER.sub(lambda m: subs.get(m.group(0), m.group(0)), body)
     if left:
         die(f"template {template.name} has substitutions left without a value: {', '.join(left)}")
     if args.role == "fixreview":
@@ -1586,10 +1670,31 @@ def cmd_import(args) -> int:
 
     kept = [f for f in existing if f.get("block") != args.block]
     before = {f["id"]: f for f in mine if f.get("id")}
+    # Ids used to be handed out by POSITION in the file, so a finding inserted ABOVE the
+    # numbered rows took an id that already existed: the register then held two H1-001,
+    # `check` said "duplicate id" and named no way out, and `set-finding` reached only the
+    # first of them. A number is taken from the free ones — never from the count of rows,
+    # and never one that a record of this block already carries, even a retired one: that
+    # id is quoted in the journal, in a commit message and in another block's report.
+    taken = {f["id"] for f in incoming if f.get("id")} | set(before)
+    seen_here: set[str] = set()
+    for f in incoming:
+        fid = f.get("id")
+        if fid and fid in seen_here:
+            die(f"{src.name}: two rows carry the id {fid} — an id is unique within a block; "
+                f"delete the id field of the row that is new and the import will hand out a "
+                f"free number")
+        if fid:
+            seen_here.add(fid)
+    numbered = [int(m.group(1)) for fid in taken
+                if (m := re.fullmatch(rf"{re.escape(args.block)}-(\d+)", fid))]
+    next_n = max(numbered, default=0) + 1
     width = 3
-    for i, f in enumerate(incoming, 1):
+    for f in incoming:
         f.setdefault("block", args.block)
-        f["id"] = f.get("id") or f"{args.block}-{i:0{width}d}"
+        if not f.get("id"):
+            f["id"] = f"{args.block}-{next_n:0{width}d}"
+            next_n += 1
         f.setdefault("status", "open")
         f.setdefault("confidence", "plausible")
         f.setdefault("fix_commit", None)
@@ -1884,7 +1989,13 @@ def cmd_restamp(args) -> int:
     s = st["blocks"].get(args.block, {})
     if s.get("status") not in POST_VERIFY:
         die(f"{args.block} is in status {s.get('status', 'todo')} — nothing to stamp")
+    was = {k: s.get(k) for k in ("reviewed_sha", "refs_sha", "hypotheses_sha")}
     stamp(idx[args.block], s)
+    # Nothing moved — nothing to record. A stamp re-taken over the same fingerprints would
+    # dirty state.json on a correct state, the same way `init` used to.
+    if all(was[k] == s.get(k) for k in was) and all(was.values()):
+        print(f"{args.block}: fingerprints already match the current files — nothing to stamp")
+        return 0
     s["restamped_at"] = now()
     st["updated_at"] = now()
     save_json(STATE_FILE, st)
@@ -1911,6 +2022,9 @@ def restamp_finding(fid: str) -> int:
     sha = file_sha(f.get("file", ""))
     if not sha:
         die(f"file {f.get('file')} does not exist — a finding is moved (`{CLI} set-finding`), not stamped")
+    if f.get("code_sha") == sha:
+        print(f"{fid}: the fingerprint already matches {f.get('file')} — nothing to stamp")
+        return 0
     f["code_sha"] = sha
     f["restamped_at"] = now()
     with FINDINGS_FILE.open("w", encoding="utf-8") as fh:

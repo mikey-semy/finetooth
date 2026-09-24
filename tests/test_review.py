@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -2577,6 +2578,265 @@ class GitTruthTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("src/one.ts", out.stdout)
         self.assertNotIn("src/generated/x.ts", out.stdout)
+
+
+class HandWrittenInputTest(unittest.TestCase):
+    """Всё, что человек правит руками, обязано получать отказ, а не трейсбек:
+    определение блоков, итоговый файл, текст манифеста."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _stand(self) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+
+    def _add_block(self, **fields) -> None:
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"].append(fields)
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def test_блок_без_обязательного_поля_называет_поле(self):
+        """`setup` оставляет "blocks": [] человеку; блок без `phase` отвечал KeyError
+        и кодом 1, который читается как «состояние красное»."""
+        self._stand()
+        self._add_block(id="H2", title="Платежи", paths=["src/one.ts"])
+        for cmd in (("status",), ("check",), ("order",), ("summary", "--out", "s.md")):
+            out = self.s.run(*cmd)
+            with self.subTest(cmd=cmd[0]):
+                self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+                self.assertNotIn("Traceback", out.stderr)
+                self.assertIn("phase", out.stderr)
+                self.assertIn("blocks.json", out.stderr)
+
+    def test_полностью_заполненный_блок_принимается(self):
+        self._stand()
+        self._add_block(id="H2", slug="two", phase=1, title="Платежи", role="demo",
+                        goal="проверить", paths=["src/one.ts"], ref_paths=[])
+        out = self.s.run("status")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("Платежи", out.stdout)
+
+    def test_два_блока_с_одним_идентификатором_отказ(self):
+        self._stand()
+        self._add_block(id="H1", slug="clone", phase=1, title="Клон", role="demo",
+                        goal="г", paths=["src/one.ts"], ref_paths=[])
+        out = self.s.run("status")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("share the id", out.stderr)
+
+    def test_разделитель_пути_в_идентификаторе_отказ(self):
+        """id и slug становятся именем файла под docs/review/."""
+        self._stand()
+        self._add_block(id="H2", slug="../../вне", phase=1, title="Побег", role="demo",
+                        goal="г", paths=["src/one.ts"], ref_paths=[])
+        out = self.s.run("status")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("file name", out.stderr)
+
+    def test_итог_с_маркером_внутри_названия_блока_не_роняет_aged(self):
+        """`Import --> export pipeline` резался на первом ` -->` внутри названия."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"][0]["title"] = "Импорт --> экспорт"
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("summary", "--out", "sum.md")
+        out = self.s.run("summary", "--aged", "sum.md")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+
+    def test_испорченный_машинный_блок_итога_объясняет_себя(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("summary", "--out", "sum.md")
+        p = self.s.root / "sum.md"
+        text = p.read_text(encoding="utf-8")
+        i = text.index("<!-- finetooth-summary ")
+        p.write_text(text[:i] + "<!-- finetooth-summary {порвано -->\n", encoding="utf-8")
+        out = self.s.run("summary", "--aged", "sum.md")
+        self.assertEqual(out.returncode, 2)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("summary", out.stderr)
+
+    def test_подстановка_в_тексте_манифеста_остаётся_текстом(self):
+        """Манифест, который пишет о подстановках, получал вместо них список файлов."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.write("docs/review/blocks/H1-demo.md",
+                     "# H1 — Демоблок\n\n## Зачем\n\nШаблон использует {{FILES}} как "
+                     "подстановку, и этот абзац достаточно длинный, чтобы манифест не "
+                     "считался куцым.\n\n## Гипотезы\n1. Первая гипотеза о предикате.\n\n"
+                     "## Критерий приёмки\n\nТаблица.\n")
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Шаблон использует {{FILES}} как подстановку", out.stdout)
+
+    def test_подстановки_самого_шаблона_по_прежнему_заполняются(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("src/one.ts", out)
+        self.assertNotIn("{{FILES}}", out)
+        self.assertNotIn("{{BLOCK_ID}}", out)
+
+    def test_ни_одна_команда_не_роняет_трейсбек_на_битом_определении(self):
+        """Узда класса: список подкоманд берётся у самого инструмента, так что новая
+        команда попадает под правило сама, без правки теста."""
+        self._stand()
+        self._add_block(id="H2", title="Платежи", paths=["src/one.ts"])
+        helped = self.s.run("--help").stdout
+        names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
+        self.assertTrue(names, helped)
+        commands = names.group(1).split(",")
+        self.assertIn("check", commands)
+        for cmd in commands:
+            out = self.s.run(cmd, "H1", "s.md")
+            with self.subTest(cmd=cmd):
+                self.assertNotIn("Traceback", out.stderr, f"{cmd}: {out.stderr[-400:]}")
+
+
+class IdempotenceTest(unittest.TestCase):
+    """Повторный прогон на верном состоянии не трогает файл. Иначе ворота CI обычного
+    вида — «перегенерируй и потребуй чистое дерево» — краснеют на верном состоянии, и
+    честный обход один: перестать звать инструмент в CI."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+
+    def _state_text(self) -> str:
+        return (self.s.root / "docs/review/state.json").read_text(encoding="utf-8")
+
+    def test_повторный_init_не_меняет_состояние_ни_на_байт(self):
+        before = self._state_text()
+        time.sleep(1.1)                      # чтобы отличие было видно, если оно есть
+        out = self.s.run("init")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self._state_text(), before)
+        self.assertIn("already matches", out.stdout)
+
+    def test_init_на_изменившемся_определении_состояние_меняет(self):
+        before = self._state_text()
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"].append({"id": "H2", "slug": "two", "phase": 1, "title": "Второй",
+                            "role": "demo", "goal": "г", "paths": ["src/one.ts"], "ref_paths": []})
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.assertEqual(self.s.run("init").returncode, 0)
+        self.assertNotEqual(self._state_text(), before)
+        self.assertIn("H2", self._state_text())
+
+    def test_повторный_restamp_блока_ничего_не_пишет(self):
+        self.s.run("set-status", "H1", "verified")
+        before = self._state_text()
+        time.sleep(1.1)
+        out = self.s.run("restamp", "H1")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self._state_text(), before)
+        self.assertIn("nothing to stamp", out.stdout)
+
+    def test_restamp_после_правки_файлов_отпечаток_переснимает(self):
+        self.s.run("set-status", "H1", "verified")
+        self.s.write("src/one.ts", "переписали\n")
+        self.s.commit("правка")
+        self.s.run("coverage")
+        self.assertIn("changed after the review", self.s.run("check").stdout)
+        out = self.s.run("restamp", "H1")
+        self.assertIn("fingerprint re-taken", out.stdout)
+        self.assertNotIn("changed after the review", self.s.run("check").stdout)
+
+    def test_повторный_restamp_находки_ничего_не_пишет(self):
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps(
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/one.ts", "claim": "дефект", "scenario": "с"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("import", "H1")
+        before = (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8")
+        out = self.s.run("restamp", "H1-001")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8"),
+                         before)
+        self.assertIn("nothing to stamp", out.stdout)
+
+    def test_импорт_не_выдаёт_занятый_номер(self):
+        """Находка, вставленная ВЫШЕ пронумерованных строк, получала уже занятый номер:
+        в реестре оказывались две H1-001, и `set-finding` доставал только первую."""
+        src = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        rows = [{"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                 "file": "src/one.ts", "claim": f"дефект {n}", "scenario": "с"} for n in (1, 2)]
+        src.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                       encoding="utf-8")
+        self.s.commit()
+        self.s.run("import", "H1")
+        ids = [json.loads(l)["id"] for l in src.read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual(ids, ["H1-001", "H1-002"])
+
+        new = json.dumps({"block": "H1", "severity": "low", "confidence": "confirmed",
+                          "status": "open", "file": "src/one.ts", "claim": "вставлена сверху",
+                          "scenario": "с"}, ensure_ascii=False)
+        src.write_text(new + "\n" + src.read_text(encoding="utf-8"), encoding="utf-8")
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = [json.loads(l) for l in
+                (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+        ids = [r["id"] for r in rows]
+        self.assertEqual(len(ids), len(set(ids)), ids)
+        self.assertEqual({r["claim"] for r in rows if r["id"] == "H1-001"}, {"дефект 1"},
+                         "номер уже выданной находки не переехал на другую")
+        self.s.run("findings")
+        self.assertNotIn("duplicate id", self.s.run("check").stdout)
+
+    def test_повторный_импорт_того_же_файла_ничего_не_добавляет(self):
+        src = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        src.write_text(json.dumps({"block": "H1", "severity": "low", "confidence": "confirmed",
+                                   "status": "open", "file": "src/one.ts", "claim": "дефект",
+                                   "scenario": "с"}, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.s.commit()
+        self.s.run("import", "H1")
+        first = (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8")
+        self.s.run("import", "H1")
+        second = [json.loads(l) for l in
+                  (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual(len(second), 1)
+        self.assertEqual(json.loads(first.splitlines()[0])["id"], second[0]["id"])
+
+    def test_две_строки_с_одним_номером_в_черновике_отказ(self):
+        src = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        row = {"id": "H1-001", "block": "H1", "severity": "low", "confidence": "confirmed",
+               "status": "open", "file": "src/one.ts", "claim": "дефект", "scenario": "с"}
+        src.write_text(json.dumps(row, ensure_ascii=False) + "\n"
+                       + json.dumps({**row, "claim": "тот же номер"}, ensure_ascii=False) + "\n",
+                       encoding="utf-8")
+        self.s.commit()
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("two rows carry the id H1-001", out.stderr)
 
 
 if __name__ == "__main__":
