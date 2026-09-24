@@ -975,6 +975,32 @@ def hub_blocks(n_blocks: int) -> int:
 COUPLING_FILE = REVIEW / "coupling.tsv"
 
 
+# `\x01` marks the start of a commit record: with `-z` every field is NUL-terminated, so
+# the commit line cannot be told from a path by the separator alone.
+LOG_MARK = "\x01"
+
+
+def log_records(cmd: list[str]) -> list[tuple[str, list[str]]]:
+    """Commit records of a `git log --format=%x01%H … -z` run: (sha, the tokens after it).
+
+    ONE reader for the whole tool, because the trap is not visible from the call site: git
+    terminates the `--format` line with a newline of its own, and `-z` leaves that newline
+    GLUED to the first token of the commit — the stream is `…<sha>\\0` + `\\nsrc/a.ts\\0`.
+    Read without stripping it, a file that comes first in one commit and not in another is
+    counted under two names, and `summary --aged` over-reported the drift of every real
+    history for exactly that reason.
+    """
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    records: list[tuple[str, list[str]]] = []
+    for token in (t for t in out.split("\0") if t):
+        if token.startswith(LOG_MARK):
+            records.append((token[1:], []))
+        elif records:
+            body = records[-1][1]
+            body.append(token[1:] if not body and token.startswith("\n") else token)
+    return records
+
+
 def commit_file_sets(since: str | None = None) -> list[set[str]]:
     """The set of files touched by every commit on the current history, UNDER TODAY'S NAMES
     (first parent only: a merge lists everything the branch brought, and that is not a joint
@@ -991,58 +1017,37 @@ def commit_file_sets(since: str | None = None) -> list[set[str]]:
     records let the old name be translated into the current one. The log is walked
     newest-first, so a rename `old → new` seen at a commit renames everything OLDER than it.
     """
-    # `\x01` marks the start of a commit record: with `-z` every field is NUL-terminated,
-    # so the commit line cannot be told from a path by the separator alone.
     cmd = ["git", "-C", str(ROOT), "log", "--first-parent", "--no-merges", "--name-status",
-           "-z", "-M", "--format=%x01%H"]
+           "-z", "-M", f"--format={LOG_MARK}%H"]
     if since:
         cmd.append(f"--since={since}")
-    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
-    tokens = [t for t in out.split("\0") if t]
     sets: list[set[str]] = []
-    current: set[str] | None = None
-    renames: list[tuple[str, str]] = []   # (old, new) of the commit being read
     # old path -> the name that path bears today
     alias: dict[str, str] = {}
-
-    def close() -> None:
+    for _sha, tokens in log_records(cmd):
+        current: set[str] = set()
+        renames: list[tuple[str, str]] = []   # (old, new) of the commit being read
+        i = 0
+        while i < len(tokens):
+            status, paths = tokens[i], []
+            take = 2 if status[:1] in ("R", "C") else 1
+            for j in range(1, take + 1):
+                if i + j < len(tokens):
+                    paths.append(tokens[i + j])
+            i += 1 + len(paths)
+            if not paths:
+                continue
+            if take == 2 and len(paths) == 2:
+                old, new = paths
+                renames.append((old, new))
+                current.add(alias.get(new, new))
+            else:
+                p = paths[-1]
+                current.add(alias.get(p, p))
         if current:
-            sets.append(set(current))
+            sets.append(current)
         for old, new in renames:
             alias[old] = alias.get(new, new)
-
-    i = 0
-    after_header = False
-    while i < len(tokens):
-        tok = tokens[i]
-        if tok.startswith("\x01"):
-            close()
-            current, renames = set(), []
-            i += 1
-            after_header = True
-            continue
-        if current is None:            # output before the first commit record
-            i += 1
-            continue
-        # git terminates the `--format` line with a newline of its own, which `-z` leaves
-        # glued to the first status letter of the commit: `…<sha>\0` + `\nR100\0old\0new\0`.
-        status, paths = (tok[1:] if after_header and tok.startswith("\n") else tok), []
-        after_header = False
-        take = 2 if status[:1] in ("R", "C") else 1
-        for j in range(1, take + 1):
-            if i + j < len(tokens):
-                paths.append(tokens[i + j])
-        i += 1 + len(paths)
-        if not paths:
-            continue
-        if take == 2 and len(paths) == 2:
-            old, new = paths
-            renames.append((old, new))
-            current.add(alias.get(new, new))
-        else:
-            p = paths[-1]
-            current.add(alias.get(p, p))
-    close()
     return sets
 
 
@@ -1388,16 +1393,13 @@ def cmd_summary(args) -> int:
         for bid, info in machine["blocks"].items():
             if not info.get("paths"):
                 continue
-            # `-z` and an `\x01` marker for the commit line: without them a non-ASCII path
-            # comes out C-quoted and the same file is counted under two names.
-            log = subprocess.run(["git", "-C", str(ROOT), "log", "--format=%x01%H", "--name-only",
-                                  "-z", f"{base}..HEAD", "--", *info["paths"]],
-                                 capture_output=True, text=True, check=False).stdout
-            tokens = [t for t in log.split("\0") if t]
-            commits = {t[1:] for t in tokens if t.startswith("\x01")}
-            files = {t for t in tokens if not t.startswith("\x01")}
-            if commits:
-                drift.append((len(commits), len(files), bid, info.get("title", "")))
+            # `-z` and the commit marker: without them a non-ASCII path comes out C-quoted
+            # and the same file is counted under two names.
+            records = log_records(["git", "-C", str(ROOT), "log", f"--format={LOG_MARK}%H",
+                                   "--name-only", "-z", f"{base}..HEAD", "--", *info["paths"]])
+            files = {p for _sha, paths in records for p in paths}
+            if records:
+                drift.append((len(records), len(files), bid, info.get("title", "")))
         if not drift:
             print(T("aged_none"))
             return 0

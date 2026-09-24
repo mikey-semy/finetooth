@@ -931,6 +931,22 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("summary", "--aged", "docs/итог.md").stdout
         self.assertRegex(out, r"H1\s+\S+: 1\s+\S+: 1")
 
+    def test_дрейф_не_считает_один_файл_дважды(self):
+        """`git log -z` приклеивает перевод строки формата к ПЕРВОМУ пути каждого коммита,
+        и файл, который в одном коммите первый, а в другом нет, попадал в счёт дважды:
+        два коммита по двум файлам печатались как три файла."""
+        self._reviewed_with_findings()
+        self.s.run("summary", "--out", "docs/итог.md")
+        Path(self.s.root, "src/one.ts").write_text("a\nb\n")
+        Path(self.s.root, "tests/guard.test.ts").write_text("g\ng\n")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "оба файла")
+        Path(self.s.root, "tests/guard.test.ts").write_text("g\ng\ng\n")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "второй файл ещё раз")
+        out = self.s.run("summary", "--aged", "docs/итог.md").stdout
+        self.assertRegex(out, r"H1\s+\S+: 2\s+\S+: 2", out)
+
     # ------------------------------------------------------------- экономия ходов
 
     def test_шаблоны_ролей_несут_правило_экономии_ходов(self):
@@ -3654,6 +3670,28 @@ class SourceRuleTest(unittest.TestCase):
                          "своё распознавание ограды — зовите fenced_lines()")
         self.assertGreaterEqual(self.SOURCE.count("fenced_lines("), 4,
                                 "разборщики обязаны звать общий трекер ограды")
+
+    def test_записи_коммитов_разбираются_одним_местом(self):
+        """УЗДА КЛАССА «поток `git log -z` разобран своими руками».
+
+        Ловушка не видна с места вызова: git завершает строку `--format` своим переводом
+        строки, и `-z` оставляет его приклеенным к ПЕРВОМУ пути коммита. Два разборщика
+        знали об этом порознь, и тот, что не знал, считал файл под двумя именами.
+        Разбор живёт в `log_records`, и сверять токен с маркером больше негде.
+        """
+        tree = ast.parse(self.SOURCE)
+        # маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно
+        placed = {n.lineno for n in ast.walk(tree)
+                  if isinstance(n, ast.JoinedStr) and "--format=" in "".join(
+                      v.value for v in n.values if isinstance(v, ast.Constant))}
+        offenders = []
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef) or fn.name == "log_records":
+                continue
+            offenders += [(fn.name, n.lineno) for n in ast.walk(fn)
+                          if isinstance(n, ast.Name) and n.id == "LOG_MARK"
+                          and n.lineno not in placed]
+        self.assertEqual(offenders, [], "свой разбор записей git log — зовите log_records()")
 
     def test_каждое_число_в_коде_названо_и_объяснено(self):
         """УЗДА КЛАССА «порог без источника».
