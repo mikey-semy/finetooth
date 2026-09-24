@@ -458,6 +458,14 @@ with six or more blocks), and prints the cross-block pairs with a ready `ref_pat
 hypothesis for the manifest; clusters of pairs between the same two blocks are where a seam
 block is due. `--write` keeps the pairs in `docs/review/coupling.tsv`.
 
+**What a run costs, measured.** `assets/run-role.sh <ID> <role>` runs a role headless through
+`claude -p`, keeps the event stream and writes one line to the journal: turns, tool calls,
+input tokens and the share from cache, output, re-reads. `scripts/axes.py` breaks any such
+stream down by axis. The first measured block: the cost is **turns × context** — reading the
+block whole was 1% of the spend; the verifier's 118 shell calls were most of the rest. The role
+templates now say so (one file — one read; the stand is one script, run once), and the runner
+caps turns at twice what the measured run needed.
+
 **What outlives the review directory.** The method ends by deleting its own directory — a
 register nobody updates describes fixed things as open. `review summary` writes one immutable
 file outside it: the date and the **base commit**, the blocks with their acceptance criteria and

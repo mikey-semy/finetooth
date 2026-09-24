@@ -7,6 +7,15 @@ plausible nonexistent defects is worse than no report, because time will be spen
 
 # What to do
 
+## 0. The stand is one file, run once
+
+Checking by execution is the point of your role — and the most expensive part of the
+review: measured, the verifier's 118 shell calls made 165 turns and cost 2.6× the hunter,
+while reading the same files. The cost is turns × context, so: write the stand (fixtures,
+stubs, the matrix of inputs, the mutations) as **one script file**, run it **once**, read its
+output once. Independent commands go into one turn. A command whose result you will not use
+in the report is not run.
+
 ## 1. Check every hunter finding
 
 Hunter report: `{{HUNTER_REPORT}}`
