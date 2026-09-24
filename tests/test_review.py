@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import json
 import re
@@ -3120,6 +3121,499 @@ class GuardGrepTest(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout)
         self.assertIn("no such path", out.stderr)
         self.assertIn("not the same as a clean tree", out.stderr)
+
+
+class GateCoverageTest(unittest.TestCase):
+    """Ворота `check`, у которых не было ни одного теста.
+
+    Измерено мутацией: каждое из этих ворот глушилось в отдельной копии набора, и весь
+    прогон оставался зелёным — то есть механизм можно было снять и никто бы не заметил.
+    По тесту на ворота; имена перечислены в GATES реестра ниже, и реестр сам себя сверяет
+    с исходником.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _green(self, status: str = "verified") -> None:
+        """Стенд, на котором `check` зелёный: каждый тест ломает ровно одну вещь."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", status)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def _state(self) -> dict:
+        return json.loads((self.s.root / "docs/review/state.json").read_text(encoding="utf-8"))
+
+    def _write_state(self, st: dict) -> None:
+        (self.s.root / "docs/review/state.json").write_text(
+            json.dumps(st, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def _register(self, **fields) -> None:
+        """Реестр пишется руками: инструмент сам такую запись не создаст, а `check`
+        обязан поймать её именно поэтому."""
+        row = {"id": "H1-001", "block": "H1", "severity": "low", "confidence": "confirmed",
+               "status": "open", "file": "src/one.ts", "claim": "дефект",
+               "scenario": "сценарий", "code_sha": None}
+        row.update(fields)
+        if row.get("code_sha") is None and row.get("file") == "src/one.ts":
+            row["code_sha"] = self.s.git("hash-object", "src/one.ts").stdout.strip()
+        (self.s.root / "docs/review/findings.jsonl").write_text(
+            json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.s.run("findings")
+
+    # --------------------------------------------------- состояние против определения
+
+    def test_блок_из_определения_без_записи_в_состоянии(self):
+        self._green()
+        st = self._state()
+        del st["blocks"]["H1"]
+        self._write_state(st)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("no record in state.json", out.stdout)
+
+    def test_блок_в_состоянии_которого_нет_в_определении(self):
+        self._green()
+        st = self._state()
+        st["blocks"]["H9"] = {"status": "todo", "started": None, "finished": None,
+                              "reports": [], "note": ""}
+        self._write_state(st)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("missing from blocks.json", out.stdout)
+
+    def test_манифест_пропал_а_блок_в_работе(self):
+        self._green()
+        (self.s.root / "docs/review/blocks/H1-demo.md").unlink()
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("no manifest", out.stdout)
+
+    def test_пройденный_блок_без_отчёта_проверяющего(self):
+        self._green()
+        (self.s.root / "docs/review/reports/H1-demo.verify.md").unlink()
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("there is no verifier report", out.stdout)
+
+    def test_объявленный_отчёт_которого_нет_на_диске(self):
+        self._green()
+        self.s.run("set-status", "H1", "verified", "--report", "docs/review/reports/none.md")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("which is not on disk", out.stdout)
+
+    def test_статус_дальше_running_без_отчёта_охотника(self):
+        self._green(status="hunted")
+        (self.s.root / "docs/review/reports/H1-demo.hunter.md").unlink()
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("there is no hunter report", out.stdout)
+
+    def test_running_без_отметки_времени(self):
+        self._green()
+        st = self._state()
+        st["blocks"]["H1"]["status"] = "running"
+        st["blocks"]["H1"]["started"] = None
+        self._write_state(st)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("without a timestamp", out.stdout)
+
+    def test_неразбираемая_отметка_времени(self):
+        self._green()
+        st = self._state()
+        st["blocks"]["H1"]["status"] = "running"
+        st["blocks"]["H1"]["started"] = "вчера вечером"
+        self._write_state(st)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("cannot be parsed", out.stdout)
+
+    def test_running_дольше_суток(self):
+        self._green()
+        st = self._state()
+        st["blocks"]["H1"]["status"] = "running"
+        st["blocks"]["H1"]["started"] = (dt.datetime.now(dt.timezone.utc)
+                                         - dt.timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._write_state(st)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("stuck in running", out.stdout)
+
+    # ------------------------------------------------------------- форма находок
+
+    def test_две_записи_с_одним_идентификатором(self):
+        self._green()
+        sha = self.s.git("hash-object", "src/one.ts").stdout.strip()
+        row = {"id": "H1-001", "block": "H1", "severity": "low", "confidence": "confirmed",
+               "status": "open", "file": "src/one.ts", "claim": "дефект",
+               "scenario": "сценарий", "code_sha": sha}
+        (self.s.root / "docs/review/findings.jsonl").write_text(
+            json.dumps(row, ensure_ascii=False) + "\n"
+            + json.dumps({**row, "claim": "тот же номер"}, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("duplicate id", out.stdout)
+
+    def test_пустое_обязательное_поле_находки(self):
+        self._green()
+        self._register(claim="")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("field claim is empty", out.stdout)
+
+    def test_находка_ссылается_на_несуществующий_блок(self):
+        self._green()
+        self._register(block="H9")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("nonexistent block H9", out.stdout)
+
+    def test_severity_вне_словаря(self):
+        self._green()
+        self._register(severity="катастрофа")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("severity=катастрофа is not in the vocabulary", out.stdout)
+
+    def test_confidence_вне_словаря(self):
+        self._green()
+        self._register(confidence="наверное")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("confidence=наверное is not in the vocabulary", out.stdout)
+
+    def test_статус_находки_вне_словаря(self):
+        self._green()
+        self._register(status="почти")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("status=почти is not in the vocabulary", out.stdout)
+
+    def test_внешний_коммит_починки_написан_не_по_форме(self):
+        self._green()
+        self._register(status="fixed", fix_commit="соседний-репозиторий:")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("an external fix is written as", out.stdout)
+
+    def test_починено_без_коммита(self):
+        self._green()
+        self._register(status="fixed", fix_commit=None)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("marked fixed, but no fix commit", out.stdout)
+
+    def test_дубль_без_указания_чего(self):
+        self._green()
+        self._register(status="duplicate", dup_of=None)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("marked duplicate, but not of what exactly", out.stdout)
+
+    def test_отвергнутая_проверяющим_но_открытая(self):
+        self._green()
+        self._register(confidence="rejected", status="open")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("rejected by the verifier, but still open", out.stdout)
+
+    def test_заголовок_находки_длиннее_потолка(self):
+        self._green()
+        self._register(claim="и" * 260)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("against a limit of 220", out.stdout)
+
+    def test_сценарий_длиннее_потолка(self):
+        self._green()
+        self._register(scenario="и" * 800)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("against a limit of 700", out.stdout)
+
+    def test_номер_строки_строкой_а_не_числом(self):
+        """Черновик находок пишется руками, и `"line": "9999"` — обычная описка. Ворота
+        о несуществующей строке молча пропускали её мимо, а findings.md рисовал её как
+        настоящее место."""
+        self._green()
+        self._register(line="9999")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("is not a number", out.stdout)
+
+    def test_число_в_пределах_файла_по_прежнему_проходит(self):
+        self._green()
+        self._register(line=1)
+        # есть находка — у проверяющего обязан быть вердикт по ней
+        self.s.write("docs/review/reports/H1-demo.verify.md",
+                     "# проверяющий\n\n## Вердикты\nH1-001 — подтверждена.\n\n"
+                     "## Охват\nОхват полный.\n")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_блок_без_отпечатка_контекста_предупреждает(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/ref.ts", "контекст\n")
+        self.s.blocks(paths=["src/one.ts"], ref_paths=["src/ref.ts"], extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+            "goal": "держит контекст", "paths": ["src/ref.ts"], "ref_paths": []}])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        st = self._state()
+        del st["blocks"]["H1"]["refs_sha"]
+        self._write_state(st)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("no context fingerprint", out.stdout)
+
+    def test_findings_md_разъехался_с_реестром(self):
+        self._green()
+        self._register()
+        md = self.s.root / "docs/review/findings.md"
+        md.write_text(md.read_text(encoding="utf-8") + "\n| дописано руками |\n", encoding="utf-8")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("findings.md diverged", out.stdout)
+
+    def test_ничей_файл_роняет_не_только_карту_но_и_проверку(self):
+        self._green()
+        self.s.write("src/forgotten.ts", "b\n")
+        self.s.commit("файл мимо блоков")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("belong to no block", out.stdout)
+
+    def test_пройденный_блок_без_отпечатка_гипотез(self):
+        self._green()
+        st = self._state()
+        del st["blocks"]["H1"]["hypotheses_sha"]
+        self._write_state(st)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("no hypotheses fingerprint", out.stdout)
+
+    def test_род_доказательства_вне_словаря(self):
+        self._green()
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"][0]["proof"] = "на глаз"
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.s.commit("род доказательства")
+        self.s.run("coverage")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("is not in the vocabulary", out.stdout)
+
+
+def _check_gates() -> list[tuple[int, str, str]]:
+    """Все ворота `cmd_check`: (строка, problems|warnings, скелет сообщения).
+
+    Скелет — это только литеральные куски f-строки, склеенные и ужатые по пробелам: он
+    переживает правку подставляемых значений и меняется, когда меняется сама формулировка.
+    """
+    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "cmd_check")
+
+    def literal(node) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return "".join(literal(v) for v in node.values)
+        if isinstance(node, ast.BinOp):
+            return literal(node.left) + literal(node.right)
+        return ""
+
+    out = []
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "append"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("problems", "warnings")):
+            out.append((node.lineno, node.func.value.id,
+                        re.sub(r"\s+", " ", literal(node.args[0])).strip()[:46]))
+    return sorted(out)
+
+
+class GateRegistryTest(unittest.TestCase):
+    """УЗДА КЛАССА «ворота, которые не могут покраснеть».
+
+    Мутацией было измерено, что два десятка ворот `check` можно снять, и весь прогон
+    останется зелёным. Список починенных мест такое не держит: следующие ворота напишут
+    без теста так же. Здесь ворота перечислены поимённо вместе с тестом, который краснеет
+    при их снятии, и правило сверяет список с исходником: новые ворота без записи роняют
+    прогон, запись с несуществующим именем теста — тоже.
+    """
+
+    # ворота `cmd_check` → тест, который краснеет, если их заглушить
+    GATES = [
+        (': no record in state.json — run ` init`', "test_блок_из_определения_без_записи_в_состоянии"),
+        (': present in state.json but missing from block', "test_блок_в_состоянии_которого_нет_в_определении"),
+        (": status '' is not in the vocabulary — written", "test_статус_блока_вписанный_руками_роняет_проверку"),
+        (': phase comes after phase — the blocks array i', "test_фазы_в_массиве_не_убывают"),
+        (': blocked without a note — waiting for what? `', "test_заблокированный_блок_не_значит_закончено"),
+        (': no manifest', "test_манифест_пропал_а_блок_в_работе"),
+        (': manifest is empty or nearly empty', "test_куцый_манифест_роняет_проверку"),
+        (': status , but there is no verifier report — t', "test_пройденный_блок_без_отчёта_проверяющего"),
+        (':', "test_пустой_отчёт_проверяющего_не_проводит_блок"),          # verify_report_problem
+        (': state.json declares report , which is not on', "test_объявленный_отчёт_которого_нет_на_диске"),
+        (': status , but there is no hunter report — the', "test_статус_дальше_running_без_отчёта_охотника"),
+        (': stuck in running without a timestamp — when ', "test_running_без_отметки_времени"),
+        (": timestamp '' cannot be parsed", "test_неразбираемая_отметка_времени"),
+        (': stuck in running for h — the session probabl', "test_running_дольше_суток"),
+        ('finding : duplicate id', "test_две_записи_с_одним_идентификатором"),
+        ('finding : field is empty', "test_пустое_обязательное_поле_находки"),
+        ('finding : refers to nonexistent block', "test_находка_ссылается_на_несуществующий_блок"),
+        ('finding : severity= is not in the vocabulary', "test_severity_вне_словаря"),
+        ('finding : confidence= is not in the vocabulary', "test_confidence_вне_словаря"),
+        ('finding : status= is not in the vocabulary', "test_статус_находки_вне_словаря"),
+        ('finding : file is not in the repository', "test_починенная_находка_на_удалённом_файле_не_роняет_проверку"),
+        ('finding : deferred without a reason — ` set-fi', "test_отложенная_находка_требует_причину"),
+        ('finding : an external fix is written as `<repo', "test_внешний_коммит_починки_написан_не_по_форме"),
+        ('finding : commit is not in the repository', "test_починка_в_соседнем_репозитории_помечается_явно"),
+        ('finding : commit does not touch — either the m', "test_коммит_починки_обязан_касаться_файла_находки"),
+        ('finding : marked fixed, but no fix commit is g', "test_починено_без_коммита"),
+        ('finding : marked duplicate, but not of what ex', "test_дубль_без_указания_чего"),
+        ('', "test_дубль_указывает_на_живую_находку"),                     # dup_problem
+        ('finding : rejected by the verifier, but still ', "test_отвергнутая_проверяющим_но_открытая"),
+        ('finding : status rejected but confidence — the', "test_отказ_меняет_и_уверенность"),
+        ('finding : no code fingerprint — changes in und', "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
+        ('finding : code in changed since import — re-ch', "test_изменившийся_код_под_открытой_находкой_роняет_проверку"),
+        ('finding : line= is not a number — write the li', "test_номер_строки_строкой_а_не_числом"),
+        ('finding : line is cited, but has', "test_несуществующая_строка_в_находке_роняет_проверку"),
+        ('finding : rejected, but the reject reason is n', "test_отвергнутая_находка_без_причины_роняет_проверку"),
+        ('finding : claim is characters against a limit ', "test_заголовок_находки_длиннее_потолка"),
+        ('finding : scenario is characters against a lim', "test_сценарий_длиннее_потолка"),
+        ('findings.md diverged from findings.jsonl — run', "test_findings_md_разъехался_с_реестром"),
+        (': pattern `` matches only untracked files () —', "test_шаблон_по_нетрекнутым_файлам_зовёт_git_add"),
+        (': pattern `` matches no file — the block silen', "test_шаблон_который_ничего_не_нашёл_роняет_проверку"),
+        ('files belong to no block — ` coverage`', "test_ничей_файл_роняет_не_только_карту_но_и_проверку"),
+        ('coverage.tsv is stale: lines on disk, the reco', "test_устаревшая_карта_покрытия_роняет_проверку"),
+        (': the manifest has no hypotheses — such a bloc', "test_манифест_без_гипотез_роняет_проверку"),
+        (': gives hypothesis different verdicts () — the', "test_противоречивые_вердикты_в_одном_отчёте_роняют_проверку"),
+        (': of hypotheses without a verdict () — each is', "test_гипотеза_без_вердикта_роняет_проверку"),
+        (': block in status without a fingerprint of wha', "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
+        (': block files changed after the review — the b', "test_блок_просмотренный_на_другой_версии_файлов_роняет_проверку"),
+        (': no context fingerprint (ref_paths) — ` backf', "test_блок_без_отпечатка_контекста_предупреждает"),
+        (': context files (ref_paths) changed after veri', "test_правка_контекста_предупреждает_но_не_роняет"),
+        (': no hypotheses fingerprint — an edit of the m', "test_пройденный_блок_без_отпечатка_гипотез"),
+        (': manifest hypotheses changed after verificati', "test_правка_гипотез_после_проверки_роняет_проверку"),
+        (': of block files are not named by full path in', "test_каждый_файл_блока_назван_полным_путём"),
+        (': closed with fixed findings, but there is no ', "test_закрытие_с_починками_требует_ревью_правок"),
+        (": the hunter report has no 'Coverage limits' s", "test_отчёт_без_раздела_про_непросмотренное_роняет_проверку"),
+        (": the 'Coverage limits' section of the hunter ", "test_пустой_раздел_ограничений_роняет_проверку"),
+        ("root '':", "test_узда_обязана_существовать"),                    # rule_problem
+        ("root '': instances () and no guard — a class t", "test_третий_повтор_корня_требует_узду"),
+        ('the freshness gate is not running:', "test_без_удалённого_репозитория_ворота_объявляют_себя_неработающими"),
+        ('the tree is behind by days — the findings of s', "test_отставшее_от_сервера_дерево_роняет_проверку"),
+        (": proof '' is not in the vocabulary:", "test_род_доказательства_вне_словаря"),
+        (': files, lines — cannot be read in one session', "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
+        ('open finding(s) older than days (oldest d): — ', "test_check_предупреждает_о_находке_старше_недели"),
+    ]
+
+    def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):
+        in_source = {key for _, _, key in _check_gates()}
+        registered = {key for key, _ in self.GATES}
+        self.assertEqual(
+            sorted(in_source - registered), [],
+            "ворота без записи в GATES: напишите тест, который краснеет при их снятии, "
+            "и впишите его сюда — иначе механизм можно будет убрать, и прогон останется зелёным")
+        self.assertEqual(
+            sorted(registered - in_source), [],
+            "запись в GATES, которой в cmd_check больше нет: ворота переписали — "
+            "сверьте тест с новой формулировкой")
+
+    def test_каждый_названный_тест_существует(self):
+        known = {name for cls in globals().values()
+                 if isinstance(cls, type) and issubclass(cls, unittest.TestCase)
+                 for name in dir(cls) if name.startswith("test_")}
+        for key, name in self.GATES:
+            with self.subTest(gate=key):
+                self.assertIn(name, known, f"ворота `{key}` ссылаются на несуществующий тест")
+
+
+class SourceRuleTest(unittest.TestCase):
+    """Узды классов, которые проще держать правилом по исходнику, чем списком мест."""
+
+    SOURCE = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.SOURCE = TOOL.read_text(encoding="utf-8")
+
+    def test_список_путей_у_git_всегда_запрашивается_NUL_разделённым(self):
+        """УЗДА КЛАССА «вывод git разобран как обычный текст».
+
+        Три места разбирали список путей построчно: не-ASCII путь приходит оттуда
+        экранированным (`"src/\\320\\274…"`) и не совпадает ни с чем, а переименование
+        печатается одним новым именем. Правило держит и те вызовы, которых ещё нет.
+        """
+        asks_for_names = ("ls-files", "--name-only", "--name-status", "--others")
+        offenders = []
+        for node in ast.walk(ast.parse(self.SOURCE)):
+            if not isinstance(node, ast.List):
+                continue
+            items = [e.value for e in node.elts
+                     if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            if "git" not in items or not any(a in items for a in asks_for_names):
+                continue
+            if "-z" not in items:
+                offenders.append((node.lineno, items))
+        self.assertEqual(offenders, [], "вызов git со списком путей без -z")
+
+    def test_ограды_кода_распознаются_одним_местом(self):
+        """УЗДА КЛАССА «ограда кода не распознана».
+
+        Каждый разборщик имел своё представление об ограде, и `~~~` не знал никто: правка
+        одного места не чинила остальные. Распознавание живёт в `fenced_lines`, и своих
+        детекторов быть не должно.
+        """
+        self.assertNotIn('startswith("```")', self.SOURCE,
+                         "своё распознавание ограды — зовите fenced_lines()")
+        self.assertGreaterEqual(self.SOURCE.count("fenced_lines("), 4,
+                                "разборщики обязаны звать общий трекер ограды")
+
+    def test_каждое_число_в_коде_названо_и_объяснено(self):
+        """УЗДА КЛАССА «порог без источника».
+
+        Каждая константа-число обязана нести над собой комментарий о том, откуда она
+        взялась: замер или ссылка. Правило ловит следующую добавленную так же, как эти.
+        """
+        lines = self.SOURCE.splitlines()
+        bare = []
+        for node in ast.parse(self.SOURCE).body:
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+                continue
+            if not isinstance(node.value.value, (int, float)) or isinstance(node.value.value, bool):
+                continue
+            name = node.targets[0].id if isinstance(node.targets[0], ast.Name) else ""
+            if not name.isupper():
+                continue
+            # комментарий может стоять над группой констант, а не над каждой
+            i = node.lineno - 2
+            while i >= 0 and re.match(r"^[A-Z_]+\s*=", lines[i]):
+                i -= 1
+            if i < 0 or not lines[i].lstrip().startswith("#"):
+                bare.append(name)
+        self.assertEqual(bare, [], "число без источника: припишите замер или ссылку")
 
 
 if __name__ == "__main__":
