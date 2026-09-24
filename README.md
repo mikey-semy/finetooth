@@ -1,5 +1,17 @@
 # finetooth — сплошное ревью кодовой базы силами ИИ-агентов
 
+[![tests](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml/badge.svg)](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Agent Skills](https://img.shields.io/badge/Agent%20Skills-SKILL.md-blue.svg)](https://agentskills.io)
+Работает в Claude Code, Codex, Gemini CLI, Cursor и любом агенте, читающем стандарт скиллов.
+
+> **English.** finetooth is an [Agent Skill](https://agentskills.io) for whole-repository
+> code review by LLM agents: the repo is cut into blocks, every file is owned by a block
+> (coverage map fails on an orphan), every block carries numbered hypotheses that must get
+> verdicts, and four roles — hunter, verifier, fixer, fix-reviewer — work through it with
+> all state kept on disk in `docs/review/`. Install: `npx skills add mikey-semy/finetooth`.
+> Docs and prompts are in Russian; the tool's messages too.
+
 ![Три роли ревью: охотник ищет, исполнитель чинит, проверяющий сверяет](docs/banner.png)
 
 Оснастка, которая превращает просьбу «проведи ревью проекта» в работу с доказуемым
@@ -241,6 +253,9 @@ npx skills add mikey-semy/finetooth -g                # в домашний ка
 репозитории закрепляет версию инструмента за коммитом, и `check` в CI идёт ровно той версией,
 которой ревью велось. Скилл, поставленный в проект, коммитится вместе с ним.
 
+Проект ведёт один человек, PR разбираются примерно раз в неделю; как участвовать —
+[`CONTRIBUTING.md`](CONTRIBUTING.md), происхождение и права — [`NOTICE.md`](NOTICE.md).
+
 Затем в корне проекта:
 
 ```sh
@@ -337,6 +352,10 @@ docs/open-source.md               как открыть проект и кто �
 docs/measurements.md              замеры: сколько стоит блок, что проверено, что нет
 docs/prior-art.md                 кто уже решал задачи из плана и чем это кончилось
 AGENTS.md                         правила для того, кто правит сам набор
+CONTRIBUTING.md                   как участвовать: DCO, тест + мутация, без зависимостей
+NOTICE.md                         происхождение и права: два автора, согласие на MIT
+SECURITY.md                       как сообщить об уязвимости и что ею считается
+CODE_OF_CONDUCT.md                Contributor Covenant 2.1
 CHANGELOG.md                      история версий
 ROADMAP.md                        куда расти: что замерено, что нет, чего не делать
 ```

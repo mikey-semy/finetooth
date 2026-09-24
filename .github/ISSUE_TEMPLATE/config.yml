@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Вопрос по методу
+    url: https://github.com/mikey-semy/finetooth/discussions
+    about: Как резать на блоки, писать манифест, вести сессию — в обсуждения, не в issue
