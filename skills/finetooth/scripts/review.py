@@ -2405,8 +2405,11 @@ def cmd_check(args) -> int:
                     f"--commit <sha>`), or the description is stale, or the defect is still there "
                     f"(`{CLI} restamp {fid}`)"
                 )
-        # A line number the file does not have is the cheapest sign of fabrication.
-        if f.get("line") and isinstance(f["line"], int):
+        # A line number the file does not have is the cheapest sign of fabrication — for a
+        # finding that is still open. A fixed one cites the file as it was before the fix;
+        # after it the file legitimately shrinks (the first migrated registry: three fixed
+        # findings, all flagged).
+        if f.get("status") in ("open", "deferred") and f.get("line") and isinstance(f["line"], int):
             n = file_lines(f.get("file", ""))
             if n is not None and f["line"] > n:
                 problems.append(
