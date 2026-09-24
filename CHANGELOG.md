@@ -16,7 +16,7 @@ with a review already under way.
 
 ### Removed
 
-- `docs/` and `ROADMAP.md` moved to the private knowledge base `finetooth-hq`: measurements, prior art, method comparison, token economy, the open-source plan and the roadmap. The public repository keeps what a user of the kit needs. The banner moved to `.github/banner.png`.
+- `docs/` and `ROADMAP.md` moved to the private knowledge base `finetooth-hq`: measurements, prior art, method comparison, token economy, the open-source plan and the roadmap. The public repository keeps what a user of the kit needs. The old banner is gone with it — replaced by the logo.
 
 ### Added
 

@@ -51,8 +51,6 @@ merge.
 **Language.** Docs, prompts and reports are available in English and Russian; see
 [README.ru.md](README.ru.md).
 
-![Three review roles: the hunter searches, the fixer fixes, the verifier checks](.github/banner.png)
-
 The kit turns the request "review the project" into work with a provable result: the code
 is cut into blocks, every file is assigned to a block, the state lives on disk rather than in
 the conversation, and one agent hunts for defects, a second verifies them, a third fixes them,
