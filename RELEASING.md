@@ -31,13 +31,25 @@ user would update for. Small fixes accumulate; they are not a reason to cut a ve
 4. **CHANGELOG is complete** before the tag: the version section is written, the compare link
    is added, the GitHub release notes are taken from it verbatim.
 
+## Branches
+
+- **`master`** — releases only. Every commit on it is a tagged version or the merge that
+  becomes one. Nobody pushes to it directly, including the maintainer.
+- **`dev`** — integration, the default branch. Feature branches start here and come back
+  here through a PR with green CI. `dev` may be ahead of the last release for weeks; that is
+  its job.
+- **Feature branches** — `feat/…`, `fix/…`, `docs/…` from `dev`, one problem each, squash
+  merged into `dev`.
+
 ## How a release happens
 
-1. Branch → PR → green CI → squash merge. Nobody pushes to `master` directly, including the
-   maintainer: the branch protection enforces it for admins too.
+1. Feature branches → PRs → green CI → squash merge into `dev`. When **Unreleased** is worth
+   a version and the gates above hold, a PR `dev → master` carries the version bump and the
+   CHANGELOG section; it is merged with a merge commit, so `master` keeps the release
+   history readable.
 2. Bump `VERSION` in `scripts/review.py` and `version` in `SKILL.md` in the same PR that
    moves **Unreleased** under the new version heading.
-3. After the merge: annotated tag `vX.Y.Z` on the merge commit, `gh release create` with the
+3. After the merge into `master`: annotated tag `vX.Y.Z` on the merge commit, `gh release create` with the
    CHANGELOG section as notes, `--latest` only for the highest version.
 4. A release is never rewritten. A mistake in a release gets the next version.
 
