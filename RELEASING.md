@@ -11,7 +11,7 @@ end of a working session. Everything below is what it takes for a number to mean
   in progress (`backfill`, `restamp`, a field to add).
 - **`0.X.Y`** — fixes only: the tool did not do what it promised, and now it does. No format
   change, no new requirement on the user.
-- **`1.0.0`** — when the ROADMAP conditions hold: misses are measured on a corpus with a known
+- **`1.0.0`** — when the roadmap conditions (knowledge base) hold: misses are measured on a corpus with a known
   answer (direction 1), a second project in another language has been reviewed with the kit
   (direction 2), and the on-disk format has not changed for a year. Not before.
 

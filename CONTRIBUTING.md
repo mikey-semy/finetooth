@@ -6,7 +6,7 @@ not a promised response time but an honest description of the pace.
 ## What is customary here
 
 - **Language.** English for code, commits, PRs and issues; documentation is maintained in
-  English with Russian copies (README.ru.md, docs/ru/). File names and identifiers in Latin
+  English with Russian copies (`README.ru.md`, `CHANGELOG.ru.md`). File names and identifiers in Latin
   letters.
 - **No dependencies.** The tool is the Python standard library and `git`. A PR that adds a
   dependency will be rejected: the kit is installed into projects on any stack.
@@ -78,7 +78,7 @@ the right to hand over this code under the project's license. There is no CLA.
 
 ## What we will not accept
 
-- Dependencies, a web interface, a database — see "What not to do" in `ROADMAP.md`.
+- Dependencies, a web interface, a database — see "What not to do" in the roadmap in the knowledge base (private repository `finetooth-hq`).
 - Turning the kit into a diff reviewer: that is a different class of tools, and it is taken.
 - Changes without a test and a CHANGELOG entry.
 

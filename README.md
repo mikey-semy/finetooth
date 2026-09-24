@@ -44,7 +44,7 @@ merge.
 **Language.** Docs, prompts and reports are available in English and Russian; see
 [README.ru.md](README.ru.md).
 
-![Three review roles: the hunter searches, the fixer fixes, the verifier checks](docs/banner.png)
+![Three review roles: the hunter searches, the fixer fixes, the verifier checks](.github/banner.png)
 
 The kit turns the request "review the project" into work with a provable result: the code
 is cut into blocks, every file is assigned to a block, the state lives on disk rather than in
@@ -128,7 +128,7 @@ consideration:
   that had existed since the first migration and was checked nowhere: the administrator
   unticked it to forbid, and nothing happened.
 
-The author's full description is [`docs/how-it-works.md`](docs/how-it-works.md), Georgiy's
+The author's full description is `how-it-works` (in the knowledge base), Georgiy's
 text, given as is. The numbers in it are the author's account; we have not verified them.
 Everything marked as verified below has been verified by running it here.
 
@@ -178,7 +178,7 @@ check goes red.
   exposed padding — 15 blocks out of 26 counted as reviewed, and 56 files were never named
   once.
 
-**Taken from neighbours in the niche** (analysis in [`docs/comparison-with-practice.md`](docs/comparison-with-practice.md)):
+**Taken from neighbours in the niche** (analysis in `comparison-with-practice` (in the knowledge base)):
 - **a fingerprint of what was reviewed** — from [doorstop](https://github.com/doorstop-dev/doorstop),
   where a requirement stores a hash of its text and an edit itself moves it to "unreviewed
   changes". Here: on moving to `verified`/`closed` a block remembers a fingerprint of the
@@ -214,7 +214,7 @@ check goes red.
   defect is produced by the structure of the code. The `roots` command shows the classes, the
   number of instances and what each is closed by.
 
-**Added after checking against world practice** (see [`docs/comparison-with-practice.md`](docs/comparison-with-practice.md)):
+**Added after checking against world practice** (see `comparison-with-practice` (in the knowledge base)):
 - **a second coverage denominator — hypotheses.** The file map answers "the file was opened";
   a professional audit counts coverage in questions asked of the system, and OWASP ASVS
   requires every requirement to have a "pass or fail" outcome and a written justification of
@@ -347,7 +347,7 @@ Next comes the work nobody will do for you:
 
 ## What it costs
 
-Full measurements with the method and caveats are in [`docs/measurements.md`](docs/measurements.md).
+Full measurements with the method and caveats are in `measurements` (in the knowledge base).
 In short, from the review journal:
 
 | block | outcome | spend |
@@ -365,7 +365,7 @@ advance, and not by the number of findings but by their kind.
 
 ## What not to do
 
-The long-term plan and what is not worth doing are in [`ROADMAP.md`](ROADMAP.md). Briefly,
+The long-term plan and what is not worth doing are in the roadmap (in the knowledge base). Briefly,
 on the near term: the method's main blind spot is **how much it misses**. We know that what
 it finds is real (6 planted findings out of 6 rejected), and we do not know what share of
 what exists that is.
@@ -404,14 +404,6 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/agent-banner.md          banner for the project's root instructions file
 tests/test_review.py              tests of the tool and the skill format: 98 scenarios
 examples/toy                      a real docs/review/ after one block, on a toy app
-docs/how-it-works.md              the kit author's description, as is
-docs/comparison-with-practice.md  the method checked against audit, industry and science
-docs/token-economy.md             where the tokens go and what to do about it
-docs/review-methods.md            eight review methods compared: coverage, time, productivity
-docs/open-source.md               how to open the project and who is nearby on GitHub
-docs/measurements.md              measurements: what a block costs, what is verified, what is not
-docs/prior-art.md                 who has already solved the plan's problems and how it ended
-docs/ru/                          Russian copies of the docs
 README.ru.md                      this file in Russian
 AGENTS.md                         rules for whoever edits the kit itself
 CONTRIBUTING.md                   how to contribute: DCO, test + mutation, no dependencies
@@ -420,7 +412,6 @@ NOTICE.md                         origin and rights: two authors, consent to MIT
 SECURITY.md                       how to report a vulnerability and what counts as one
 CODE_OF_CONDUCT.md                Contributor Covenant 2.1
 CHANGELOG.md                      version history
-ROADMAP.md                        where to grow: what is measured, what is not, what not to do
 ```
 
 Block statuses: `todo → running → hunted → verified → triaged → fixing → closed` (plus
