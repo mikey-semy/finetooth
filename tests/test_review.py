@@ -2839,5 +2839,67 @@ class IdempotenceTest(unittest.TestCase):
         self.assertIn("two rows carry the id H1-001", out.stderr)
 
 
+class FreshnessGateTest(unittest.TestCase):
+    """Ворота свежести дерева не имеют права молчать о том, что они не работают."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+
+    def test_без_удалённого_репозитория_ворота_объявляют_себя_неработающими(self):
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("the freshness gate is not running", out.stdout)
+        self.assertIn("git remote add origin", out.stdout)
+
+    def _server(self, remote_name: str) -> None:
+        """Соседний «сервер» с коммитом двухнедельной давности впереди нашего."""
+        server = self.s.root.parent / (self.s.root.name + "-server")
+        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True)
+        self.addCleanup(shutil.rmtree, server, True)
+        self.s.git("remote", "add", remote_name, str(server))
+        self.s.git("push", "-q", remote_name, "HEAD:refs/heads/master")
+        self.s.write("src/server.ts", "серверная правка\n")
+        self.s.git("add", "src/server.ts")
+        future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        env = dict(os.environ, GIT_AUTHOR_DATE=future, GIT_COMMITTER_DATE=future)
+        subprocess.run(["git", "-C", str(self.s.root), "commit", "-qm", "серверная правка"],
+                       env=env, check=False, capture_output=True)
+        self.s.git("push", "-q", remote_name, "HEAD:refs/heads/master")
+        self.s.git("reset", "-q", "--hard", "HEAD~1")
+        self.s.git("fetch", "-q", remote_name)
+        self.s.git("symbolic-ref", f"refs/remotes/{remote_name}/HEAD",
+                   f"refs/remotes/{remote_name}/master")
+
+    def test_удалённый_не_origin_ловит_отставание(self):
+        """Копия соседнего сервиса, подключённая под именем upstream: ворота молчали."""
+        self._server("upstream")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("the tree is behind", out.stdout)
+        self.assertNotIn("the freshness gate is not running", out.stdout)
+
+    def test_origin_по_прежнему_ловит_отставание(self):
+        self._server("origin")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("the tree is behind", out.stdout)
+
+    def test_удалённый_без_HEAD_называет_команду(self):
+        server = self.s.root.parent / (self.s.root.name + "-bare")
+        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True)
+        self.addCleanup(shutil.rmtree, server, True)
+        self.s.git("remote", "add", "origin", str(server))
+        out = self.s.run("check")
+        self.assertIn("the freshness gate is not running", out.stdout)
+        self.assertIn("git remote set-head origin -a", out.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

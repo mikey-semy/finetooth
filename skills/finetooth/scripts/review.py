@@ -763,16 +763,54 @@ def coverage_map() -> tuple[dict[str, list[str]], set[str], set[str]]:
 STALE_TREE_DAYS = 7
 
 
+def mainline_ref() -> str | None:
+    """The remote's main line to measure freshness against, or None if git knows of none.
+
+    `refs/remotes/origin/HEAD` is written by `clone` and by `fetch`, but a repository whose
+    remote is not called `origin` has no such ref at all — and neither has a copy with no
+    remote, which is exactly the vendored copy of a neighbouring service the freshness
+    threshold was written for. Every remote is asked, not just `origin`.
+    """
+    remotes = subprocess.run(["git", "-C", str(ROOT), "remote"],
+                             capture_output=True, text=True, check=False).stdout.split()
+    for name in (["origin"] if "origin" in remotes else []) + [r for r in remotes if r != "origin"]:
+        ref = subprocess.run(
+            ["git", "-C", str(ROOT), "symbolic-ref", "--short", f"refs/remotes/{name}/HEAD"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        if ref:
+            return ref
+    return None
+
+
+def freshness_inert() -> str | None:
+    """Why the freshness gate cannot run here — or None when it can.
+
+    A gate whose mechanism is silently inert is not a gate: with no `origin/HEAD` the check
+    used to return None and say nothing, so a tree twelve days behind passed in silence,
+    indistinguishable from a fresh one.
+    """
+    if mainline_ref():
+        return None
+    remotes = subprocess.run(["git", "-C", str(ROOT), "remote"],
+                             capture_output=True, text=True, check=False).stdout.split()
+    if not remotes:
+        return ("no remote in this repository, so the freshness of the tree cannot be "
+                "checked at all — findings from a stale copy describe what is already "
+                "fixed; if this is a copy of somebody else's repository, add it "
+                "(`git remote add origin <url> && git fetch`) before filing findings")
+    return (f"remote(s) {', '.join(remotes)} have no HEAD ref, so the freshness of the tree "
+            f"is not checked — `git remote set-head {remotes[0]} -a` writes it once and the "
+            f"gate starts working")
+
+
 def stale_tree() -> tuple[float, str] | None:
     """How much fresher the server's tip is than ours — in days, if the gap is large.
 
     The network is not touched (`fetch` is the human's business); we look at what git
     already knows.
     """
-    ref = subprocess.run(
-        ["git", "-C", str(ROOT), "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-        capture_output=True, text=True,
-    ).stdout.strip()
+    ref = mainline_ref()
     if not ref:
         return None
 
@@ -2962,6 +3000,8 @@ def cmd_check(args) -> int:
     # A tree that fell behind the server shows the fixed as broken. The findings of such a
     # pass describe code that no longer exists, and "confirmed by execution" sounds just as
     # convincing as on a fresh tree.
+    if inert := freshness_inert():
+        warnings.append(f"the freshness gate is not running: {inert}")
     stale = stale_tree()
     if stale:
         days, ref = stale
