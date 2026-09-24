@@ -972,6 +972,26 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(out.returncode, 2)
         self.assertIn("unknown role", out.stderr)
 
+    def test_строка_за_концом_файла_у_починенной_находки_не_ошибка(self):
+        """После починки файл законно короче: процитированная строка была в старом тексте."""
+        self.s.write("src/one.ts", "a\n" * 10)
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "line": 9, "claim": "дефект",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.write("src/one.ts", "a\n" * 3)
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "fix")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.assertIn("is cited, but", self.s.run("check").stdout)
+        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
+        self.assertNotIn("is cited, but", self.s.run("check").stdout)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
