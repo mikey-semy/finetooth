@@ -7,7 +7,7 @@
 > `comparison-with-practice.md`.
 >
 > ⚠️ Пути в тексте — из исходного набора: `review.py`, `prompts/`, `example/`. С 0.4.0 набор —
-> скилл по стандарту Agent Skills, и те же части лежат в `skills/review-kit/`: `scripts/`,
+> скилл по стандарту Agent Skills, и те же части лежат в `skills/finetooth/`: `scripts/`,
 > `references/`, `assets/` (карта — в `../README.md`, раздел «Что внутри»).
 
 Это описание рабочей системы, а не идея. По ней прошёл первый блок из 29 на крупном проекте

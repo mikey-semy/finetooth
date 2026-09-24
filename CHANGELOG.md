@@ -7,6 +7,23 @@
 
 ## [Не выпущено]
 
+## [0.6.0] — 2026-09-24
+
+### Изменено
+
+- **Набор переименован: review-kit → finetooth.** Имя — от идиомы *go through with a
+  fine-tooth comb*: прочесать частым гребнем, не пропустив ни одного файла. Выбрано как
+  корень серии изданий по типам ревью (`-lens`, `-slice`, `-pr`, `-scan`, `-shape`,
+  `-threat`, `-gate`) — разбор в `docs/open-source.md`. Репозиторий на GitHub переименован,
+  старые ссылки перенаправляются.
+
+### Ломающее
+
+- Папка скилла — `skills/finetooth`; поставленная копия ляжет в `.claude/skills/finetooth/`.
+  В проектах с копией `review-kit`: переставить `npx skills add mikey-semy/finetooth`,
+  поправить пути в `package.json`/`Makefile` (или поле `cli` в `blocks.json`) и исключение
+  папки скилла в `blocks.json`.
+
 ## [0.5.1] — 2026-09-24
 
 ### Изменено
@@ -421,8 +438,9 @@
   рабочая копия соседнего репозитория отставала на 12 суток. Подвело не рассуждение, а
   свежесть дерева; отсюда проверка свежести и правило в промптах.
 
-[Не выпущено]: https://github.com/mikey-semy/review-kit/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/mikey-semy/review-kit/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/mikey-semy/review-kit/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/mikey-semy/review-kit/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/mikey-semy/review-kit/releases/tag/v0.1.0
+[Не выпущено]: https://github.com/mikey-semy/finetooth/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mikey-semy/finetooth/compare/v0.5.0...v0.6.0
+[0.4.0]: https://github.com/mikey-semy/finetooth/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/mikey-semy/finetooth/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/mikey-semy/finetooth/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/mikey-semy/finetooth/releases/tag/v0.1.0

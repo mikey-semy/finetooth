@@ -18,7 +18,7 @@ jobs:
       - name: Настроить git
         run: |
           git config --global user.email "tests@example.com"
-          git config --global user.name "review-kit tests"
+          git config --global user.name "finetooth tests"
           git config --global init.defaultBranch master
       - name: Прогнать тесты
         run: python3 -m unittest discover -s tests -v
@@ -29,4 +29,4 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/skills-ref"
           "$RUNNER_TEMP/skills-ref/bin/pip" install --quiet "skills-ref @ git+https://github.com/agentskills/agentskills.git@69ef37e9424c0a7ea9dd2293b559e43ec8176379#subdirectory=skills-ref"
-          "$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/review-kit
+          "$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth

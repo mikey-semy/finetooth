@@ -23,7 +23,7 @@ import unittest
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
-SKILL = KIT / "skills" / "review-kit"
+SKILL = KIT / "skills" / "finetooth"
 TOOL = SKILL / "scripts" / "review.py"
 
 
@@ -33,7 +33,7 @@ class Stand:
     block_id = "H1"
 
     def __init__(self) -> None:
-        self.root = Path(tempfile.mkdtemp(prefix="review-kit-test-"))
+        self.root = Path(tempfile.mkdtemp(prefix="finetooth-test-"))
         # Инструмент НЕ копируется в проект: он лежит в скилле, а скилл сам — в чужом
         # git-репозитории (этом). Так каждый тест заодно проверяет, что корень берётся
         # по рабочему каталогу, а не по месту, где лежит файл.
@@ -1369,7 +1369,7 @@ class ReviewToolTest(unittest.TestCase):
                          "состояние не должно уехать в репозиторий, где лежит скилл")
 
     def test_вне_репозитория_инструмент_отказывает(self):
-        plain = Path(tempfile.mkdtemp(prefix="review-kit-plain-"))
+        plain = Path(tempfile.mkdtemp(prefix="finetooth-plain-"))
         self.addCleanup(shutil.rmtree, plain, True)
         out = subprocess.run(["python3", str(TOOL), "status"], cwd=plain,
                              capture_output=True, text=True, check=False)
@@ -1720,7 +1720,7 @@ class SetupTest(unittest.TestCase):
     """`setup` заводит ревью в проекте; инструмент при этом остаётся в скилле."""
 
     def setUp(self) -> None:
-        self.root = Path(tempfile.mkdtemp(prefix="review-kit-install-"))
+        self.root = Path(tempfile.mkdtemp(prefix="finetooth-install-"))
         self.addCleanup(shutil.rmtree, self.root, True)
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
@@ -1759,7 +1759,7 @@ class SetupTest(unittest.TestCase):
 
     def test_скилл_внутри_проекта_не_роняет_покрытие(self):
         """Скилл коммитят в проект ради CI — его файлы не предмет ревью."""
-        inside = self.root / ".claude" / "skills" / "review-kit"
+        inside = self.root / ".claude" / "skills" / "finetooth"
         shutil.copytree(SKILL, inside, ignore=shutil.ignore_patterns("__pycache__"))
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
         subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "скилл в проекте"], check=True)
@@ -1772,7 +1772,7 @@ class SetupTest(unittest.TestCase):
         self.assertIn("НЕ ПОКРЫТО: 1 файлов", out,
                       "непокрыт только предмет ревью, а не два десятка файлов скилла: " + out)
         self.assertIn("\n  app.ts\n", out)
-        self.assertIn("python3 .claude/skills/review-kit/scripts/review.py", out,
+        self.assertIn("python3 .claude/skills/finetooth/scripts/review.py", out,
                       "подсказка — относительным путём внутри проекта")
 
     def test_setup_предупреждает_про_байткод(self):
