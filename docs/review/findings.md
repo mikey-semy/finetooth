@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **5** of 36 records.
+Open: **0** of 36 records.
 
 ## high (0 open / 1)
 
@@ -11,7 +11,7 @@ Open: **5** of 36 records.
 |---|---|---|---|---|
 | T1-001 | T1 | fixed | `skills/finetooth/scripts/review.py:2137` | verdict_mentions tracks neither fences nor code spans, so hypothesis verdicts quoted from the role template's own skeleton close the hypotheses and check goes green with the questions unanswered |
 
-## medium (2 open / 15)
+## medium (0 open / 15)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -28,10 +28,10 @@ Open: **5** of 36 records.
 | T1-019 | T1 | fixed | `skills/finetooth/scripts/review.py:2013` | The verifier's coverage-verdict gate matches the bare word 'complete' anywhere in the report, so 'I completed the check' satisfies a gate meant to demand a statement about what was left unreviewed |
 | T1-022 | T1 | fixed | `skills/finetooth/assets/guard-grep.sh:95` | One marker exempts every hit in the window below it, not just the call it was written above — the exact failure guard-grep.sh was written to replace grep -B with |
 | T1-025 | T1 | fixed | `tests/test_review.py:3477` | [R1-001, fix review round 1] The new guard for "a gate that cannot go red" does not see a gate whose message is not a literal |
-| T1-032 | T1 | open | `skills/finetooth/scripts/review.py:1430` | [R2-001, fix review round 2] A verdict inside a fence nested in a list item still closes a hypothesis |
-| T1-033 | T1 | open | `skills/finetooth/scripts/review.py:2434` | [R2-002, fix review round 2] The gates that read a report's substance still count quoted text |
+| T1-032 | T1 | fixed | `skills/finetooth/scripts/review.py:1430` | [R2-001, fix review round 2] A verdict inside a fence nested in a list item still closes a hypothesis |
+| T1-033 | T1 | fixed | `skills/finetooth/scripts/review.py:2434` | [R2-002, fix review round 2] The gates that read a report's substance still count quoted text |
 
-## low (3 open / 20)
+## low (0 open / 20)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -52,7 +52,7 @@ Open: **5** of 36 records.
 | T1-029 | T1 | fixed | `skills/finetooth/scripts/axes.py:65` | [R1-005, fix review round 1] `axes.py` changed which `result` event it measures, and this is in no report and under no test |
 | T1-030 | T1 | fixed | `CHANGELOG.md:41` | [R1-006, fix review round 1] The changelog's Breaking section holds five fixes that are not breaking, and not the change that is |
 | T1-031 | T1 | fixed | `skills/finetooth/references/fix.md:59` | [R1-007, fix review round 1] Two new rules in the fix role template, recorded nowhere |
-| T1-034 | T1 | open | `tests/test_review.py:3826` | [R2-003, fix review round 2] The new quotation guard cannot see a parser that does not exist yet |
-| T1-035 | T1 | open | `skills/finetooth/scripts/review.py:2692` | [R2-004, fix review round 2] `a/` and `b/` are accepted as prefixes, so a real `a/` directory closes the gate for a file nobody read |
-| T1-036 | T1 | open | `skills/finetooth/assets/run-role.sh:58` | [R2-005, fix review round 2] `run-role.sh` dies on the truncated stream `axes.py` was taught to survive |
+| T1-034 | T1 | fixed | `tests/test_review.py:3826` | [R2-003, fix review round 2] The new quotation guard cannot see a parser that does not exist yet |
+| T1-035 | T1 | fixed | `skills/finetooth/scripts/review.py:2692` | [R2-004, fix review round 2] `a/` and `b/` are accepted as prefixes, so a real `a/` directory closes the gate for a file nobody read |
+| T1-036 | T1 | fixed | `skills/finetooth/assets/run-role.sh:58` | [R2-005, fix review round 2] `run-role.sh` dies on the truncated stream `axes.py` was taught to survive |
 
