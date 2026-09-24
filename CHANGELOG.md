@@ -11,6 +11,7 @@ with a review already under way.
 
 ### Added
 
+- Branch model: `master` for releases, `dev` for integration (default branch), feature branches from `dev`; CI runs on both.
 - `RELEASING.md`: semantic versioning with a zero major, at most one release a week, four
   mechanical gates before a tag (tests with mutations, `skills-ref validate`, a run on a live
   project, a complete CHANGELOG), no direct pushes to `master` for anyone. Written after four
