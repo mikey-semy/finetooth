@@ -16,10 +16,11 @@ with a review already under way.
 
 ### Removed
 
-- `docs/` and `ROADMAP.md` moved to the private knowledge base `finetooth-hq`: measurements, prior art, method comparison, token economy, the open-source plan and the roadmap. The public repository keeps what a user of the kit needs. The banner moved to `.github/banner.png`.
+- `docs/` and `ROADMAP.md` moved to the private knowledge base `finetooth-hq`: measurements, prior art, method comparison, token economy, the open-source plan and the roadmap. The public repository keeps what a user of the kit needs. The old banner is gone with it — replaced by the logo.
 
 ### Added
 
+- Logo (`.github/logo-light.png`, `.github/logo-dark.png`), shown in the README with the GitHub theme switch.
 - Branch model: `master` for releases, `dev` for integration (default branch), feature branches from `dev`; CI runs on both.
 - `RELEASING.md`: semantic versioning with a zero major, at most one release a week, four
   mechanical gates before a tag (tests with mutations, `skills-ref validate`, a run on a live

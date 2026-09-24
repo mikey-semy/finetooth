@@ -1,5 +1,12 @@
 [Русская версия](README.ru.md)
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/logo-dark.png">
+    <img src=".github/logo-light.png" alt="finetooth" width="360">
+  </picture>
+</p>
+
 # finetooth — whole-repository code review by AI agents
 
 [![tests](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml/badge.svg)](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml)
@@ -43,8 +50,6 @@ merge.
 
 **Language.** Docs, prompts and reports are available in English and Russian; see
 [README.ru.md](README.ru.md).
-
-![Three review roles: the hunter searches, the fixer fixes, the verifier checks](.github/banner.png)
 
 The kit turns the request "review the project" into work with a provable result: the code
 is cut into blocks, every file is assigned to a block, the state lives on disk rather than in

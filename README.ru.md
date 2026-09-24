@@ -1,13 +1,18 @@
 [English version](README.md)
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/logo-dark.png">
+    <img src=".github/logo-light.png" alt="finetooth" width="360">
+  </picture>
+</p>
+
 # finetooth — сплошное ревью кодовой базы силами ИИ-агентов
 
 [![tests](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml/badge.svg)](https://github.com/mikey-semy/finetooth/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-SKILL.md-blue.svg)](https://agentskills.io)
 Работает в Claude Code, Codex, Gemini CLI, Cursor и любом агенте, читающем стандарт скиллов.
-
-![Три роли ревью: охотник ищет, исполнитель чинит, проверяющий сверяет](.github/banner.png)
 
 Оснастка, которая превращает просьбу «проведи ревью проекта» в работу с доказуемым
 результатом: код нарезан на блоки, каждый файл закреплён за блоком, состояние лежит на диске,
