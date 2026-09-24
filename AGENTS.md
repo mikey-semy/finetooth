@@ -7,7 +7,7 @@
 
 Оснастка сплошного ревью кодовой базы силами ИИ-агентов, оформленная **скиллом по стандарту
 [Agent Skills](https://agentskills.io/specification)**: всё, что ставится агенту, лежит в
-`skills/review-kit/` — `SKILL.md`, `scripts/review.py`, `references/`, `assets/`. Остальное в
+`skills/finetooth/` — `SKILL.md`, `scripts/review.py`, `references/`, `assets/`. Остальное в
 репозитории (документы, тесты, план) агенту не ставится.
 
 Инструмент — один файл на стандартной библиотеке, без зависимостей. Скилл лежит отдельно от
@@ -54,7 +54,7 @@ python3 -m unittest discover -s tests
 а не устройство. Формат скилла:
 
 ```sh
-skills-ref validate skills/review-kit
+skills-ref validate skills/finetooth
 ```
 
 ## Чего здесь нет и почему
