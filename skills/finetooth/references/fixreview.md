@@ -88,7 +88,9 @@ by violation / what was reproduced live. Honestly about what you did not do.
 Fixes that looked suspicious but turned out to be right — with an explanation.
 
 ## Is another round needed
-Yes/no and why — by the measure from rule 11.
+Yes/no and why — by the measure from rule 11. Of the findings above: N inside the code the
+previous round changed, M outside it — the number a human needs to call the stop: rounds
+that keep finding defects in the previous round's changes are a loop, not progress.
 ```
 
 Severity scale — the same as the hunter's: **critical** — data leak or corruption,

@@ -100,6 +100,17 @@ STATUSES = ["todo", "running", "hunted", "verified", "triaged", "fixing", "close
 SEVERITIES = ["critical", "high", "medium", "low"]
 CONFIDENCE = ["confirmed", "plausible", "rejected"]
 FINDING_STATUS = ["open", "fixed", "rejected", "duplicate", "deferred"]
+# The fix gate: the next block does not start while findings of this severity or above
+# are open in the blocks already passed. The method finds faster than a project fixes
+# (first project: 77 findings on 5 blocks, 9 fixed), and a finding that never reaches a fix
+# is debt — a month later the register describes code that no longer exists. "high" by
+# default: at "medium" the review stalls on small things and the gate gets bypassed.
+# "none" switches the gate off (a project decision, recorded in blocks.json).
+FIX_GATE_DEFAULT = "high"
+# An open finding older than this is a warning in `check`: the same week the stale-tree
+# check uses — a review that lets findings sit longer than its own tree is allowed to lag
+# is accumulating the debt the gate exists to stop.
+FIX_AGE_DAYS = 7
 
 # `claim` is the headline of a finding: it is what the summary table prints, one
 # row per finding, and a row has to be readable at a glance. Evidence, line
@@ -441,6 +452,47 @@ def cmd_version(args) -> int:
 # ------------------------------------------------------------------------- status
 
 
+def fix_gate(defn: dict) -> str | None:
+    """The severity threshold of the fix gate, or None when the project switched it off."""
+    gate = defn.get("fix_gate", FIX_GATE_DEFAULT)
+    if gate in (None, "none", "off", False):
+        return None
+    if gate not in SEVERITIES:
+        die(f"blocks.json: fix_gate must be one of {', '.join(SEVERITIES)} or \"none\", not `{gate}`")
+    return gate
+
+
+def fix_debt(defn: dict, rows: list[dict], except_block: str | None = None) -> list[dict]:
+    """Open findings at the gate's severity or above, outside the given block."""
+    gate = fix_gate(defn)
+    if gate is None:
+        return []
+    rank = SEVERITIES.index(gate)
+    return [f for f in rows
+            if f.get("status") == "open"
+            and f.get("block") != except_block
+            and f.get("severity") in SEVERITIES
+            and SEVERITIES.index(f["severity"]) <= rank]
+
+
+def open_findings_age(rows: list[dict], days: int = FIX_AGE_DAYS) -> list[tuple[dict, int]]:
+    """Open findings imported more than `days` ago, with their age in days."""
+    out = []
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+    for f in rows:
+        if f.get("status") != "open" or not f.get("imported_at"):
+            continue
+        try:
+            when = dt.datetime.fromisoformat(f["imported_at"].replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=dt.timezone.utc)
+        if when < cutoff:
+            out.append((f, (dt.datetime.now(dt.timezone.utc) - when).days))
+    return out
+
+
 def phase_name(phase: int) -> str:
     return {
         0: "0 · preparation",
@@ -492,6 +544,16 @@ def cmd_status(args) -> int:
             by_sev[f.get("severity", "low")] = by_sev.get(f.get("severity", "low"), 0) + 1
     print("findings open: " + ", ".join(f"{s}={by_sev.get(s,0)}" for s in SEVERITIES)
           + f"  (total records: {len(rows)})")
+    gate = fix_gate(defn)
+    if gate:
+        debt = fix_debt(defn, rows)
+        if debt:
+            in_blocks = sorted({f.get("block", "?") for f in debt})
+            print(f"fix debt (gate: {gate} and above): {len(debt)} open in {len(in_blocks)} block(s) — "
+                  f"{', '.join(in_blocks)}; the next block will not start until they are fixed, "
+                  f"deferred with a reason or rejected")
+        else:
+            print(f"fix debt (gate: {gate} and above): none")
 
     blocked = [b for b in defn["blocks"] if st["blocks"].get(b["id"], {}).get("status") == "blocked"]
     if blocked:
@@ -1057,6 +1119,16 @@ def cmd_set_status(args) -> int:
     s = st["blocks"].setdefault(
         args.block, {"status": "todo", "started": None, "finished": None, "reports": [], "note": ""}
     )
+    if args.status == "running":
+        debt = fix_debt(defn, findings(), except_block=args.block)
+        if debt:
+            ids = ", ".join(f"{f.get('id')} ({f.get('severity')})" for f in debt[:8])
+            more = f" and {len(debt) - 8} more" if len(debt) > 8 else ""
+            die(f"fix gate: {len(debt)} open finding(s) at `{fix_gate(defn)}` or above in the blocks "
+                f"already passed — {ids}{more}. The next block does not start on top of unfixed "
+                f"serious findings: fix them (`{CLI} set-finding <id> fixed --commit <sha>`), defer "
+                f"with a reason (`deferred --reason \"…\"`) or reject (`rejected --reason \"…\"`). "
+                f"To switch the gate off for this project: `\"fix_gate\": \"none\"` in blocks.json")
     s["status"] = args.status
     # The timestamp is set on EVERY entry into running, not only the first: a block
     # returned to work three weeks later would otherwise count as stuck at once, and the
@@ -2214,6 +2286,13 @@ def cmd_check(args) -> int:
                 f"(ceiling {limit}). Split the block, or the report will lie about coverage"
             )
 
+    old = open_findings_age(findings())
+    if old:
+        oldest = max(age for _, age in old)
+        sample = ", ".join(f"{f.get('id')} ({age}d)" for f, age in sorted(old, key=lambda x: -x[1])[:5])
+        warnings.append(f"{len(old)} open finding(s) older than {FIX_AGE_DAYS} days (oldest {oldest}d): "
+                        f"{sample} — fix debt: fix, defer with a reason or reject; a register that "
+                        f"outlives the code it describes stops being true")
     if warnings:
         print("WARNINGS (do not fail the check):\n")
         for w in warnings:

@@ -64,13 +64,16 @@ class Stand:
 
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
                ref_paths: list[str] | None = None, readable_lines: int | None = None,
-               named_files: bool = False, proof: str | None = None, lang: str = "ru") -> None:
+               named_files: bool = False, proof: str | None = None, lang: str = "ru",
+               fix_gate: str | None = None, extra_blocks: list[dict] | None = None) -> None:
         # Гейт «каждый файл назван в отчёте» в стенде выключен: стендовые отчёты — заглушки.
         # Тесты самого гейта включают его явно.
         extra = {"readable_lines": readable_lines} if readable_lines else {}
         extra["named_files"] = named_files
         # Стенд ведёт ревью по-русски: шаблоны ролей и заглушки отчётов в тестах русские.
         extra["lang"] = lang
+        if fix_gate is not None:
+            extra["fix_gate"] = fix_gate
         self.write("docs/review/blocks.json", json.dumps({
             "review_id": "test", "project": "Тестовый проект", "gates": ["npm test"], **extra,
             "exclusions": (exclusions or []) + [
@@ -80,7 +83,7 @@ class Stand:
             "blocks": [{"id": self.block_id, "slug": "demo", "phase": 1, "title": "Демоблок",
                         "role": "demo", "goal": "проверить оснастку",
                         **({"proof": proof} if proof else {}),
-                        "paths": paths, "ref_paths": ref_paths or []}],
+                        "paths": paths, "ref_paths": ref_paths or []}] + (extra_blocks or []),
         }, ensure_ascii=False, indent=2), )
 
     def manifest(self, hypotheses: int = 2) -> None:
@@ -723,6 +726,60 @@ class ReviewToolTest(unittest.TestCase):
         hyp = self.s.run("hypotheses", "H1").stdout
         self.assertIn("checked", hyp)
         self.assertNotIn("not applicable", hyp)
+
+    # ------------------------------------------------------------- гейт починки
+
+    def _two_blocks_with_open_high(self, fix_gate: str | None = None) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/two.ts", "b\n")
+        self.s.blocks(paths=["src/one.ts"], fix_gate=fix_gate, extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй блок", "role": "demo",
+            "goal": "проверить гейт", "paths": ["src/two.ts"], "ref_paths": []}])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "серьёзный дефект",
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+
+    def test_гейт_починки_не_пускает_следующий_блок_при_открытой_серьёзной_находке(self):
+        """Метод находит быстрее, чем проект чинит: следующий блок не стартует поверх
+        незакрытых high — иначе реестр через месяц описывает код, которого нет."""
+        self._two_blocks_with_open_high()
+        out = self.s.run("set-status", "H2", "running")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("fix gate", out.stdout + out.stderr)
+        self.assertIn("H1-001", out.stdout + out.stderr)
+        # тот же блок, где находка, гейтом не держится: в него возвращаются, чтобы чинить
+        self.assertEqual(self.s.run("set-status", "H1", "running").returncode, 0)
+
+    def test_гейт_починки_открывается_отложенной_с_причиной_и_выключается_none(self):
+        self._two_blocks_with_open_high()
+        self.assertEqual(
+            self.s.run("set-finding", "H1-001", "deferred", "--reason", "чиним в следующем спринте").returncode, 0)
+        self.assertEqual(self.s.run("set-status", "H2", "running").returncode, 0)
+
+    def test_гейт_none_выключает_проверку(self):
+        self._two_blocks_with_open_high(fix_gate="none")
+        self.assertEqual(self.s.run("set-status", "H2", "running").returncode, 0)
+
+    def test_статус_показывает_долг_починки(self):
+        self._two_blocks_with_open_high()
+        out = self.s.run("status").stdout
+        self.assertRegex(out, r"fix debt \(gate: high and above\): 1 open in 1 block\(s\) — H1")
+
+    def test_check_предупреждает_о_находке_старше_недели(self):
+        self._two_blocks_with_open_high()
+        reg = Path(self.s.root, "docs/review/findings.jsonl")
+        rows = [json.loads(l) for l in reg.read_text(encoding="utf-8").splitlines() if l.strip()]
+        rows[0]["imported_at"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=10)).isoformat()
+        reg.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        self.s.run("findings")
+        out = self.s.run("check").stdout
+        self.assertIn("older than 7 days", out)
+        self.assertIn("H1-001 (10d)", out)
 
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
