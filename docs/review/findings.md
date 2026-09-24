@@ -3,17 +3,17 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **6** of 51 records.
+Open: **0** of 51 records.
 
-## high (1 open / 3)
+## high (0 open / 3)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
 | T1-001 | T1 | fixed | `skills/finetooth/scripts/review.py:2137` | verdict_mentions tracks neither fences nor code spans, so hypothesis verdicts quoted from the role template's own skeleton close the hypotheses and check goes green with the questions unanswered |
 | T1-041 | T1 | fixed | `skills/finetooth/scripts/review.py:1480` | [R4-001, fix review round 4] the new fence rule lets an indented inner fence close the outer one, and a quoted verdict becomes an answer again |
-| T1-046 | T1 | open | `skills/finetooth/scripts/review.py:1529` | [R5-001, round 5] "an unclosed fence is text" hands the template's own skeleton back as the report's answers, and `check` goes green |
+| T1-046 | T1 | fixed | `skills/finetooth/scripts/review.py:1529` | [R5-001, round 5] "an unclosed fence is text" hands the template's own skeleton back as the report's answers, and `check` goes green |
 
-## medium (2 open / 19)
+## medium (0 open / 19)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -34,10 +34,10 @@ Open: **6** of 51 records.
 | T1-033 | T1 | fixed | `skills/finetooth/scripts/review.py:2434` | [R2-002, fix review round 2] The gates that read a report's substance still count quoted text |
 | T1-037 | T1 | fixed | `skills/finetooth/scripts/review.py:1487` | [R3-001, fix review round 3] the nested-fence fix silently truncates a manifest again, and `check` goes green on it |
 | T1-042 | T1 | fixed | `skills/finetooth/scripts/review.py:1476` | [R4-002, fix review round 4] an unclosed fence inside a list item swallows the rest of the manifest, and `check` goes green on one hypothesis of four |
-| T1-047 | T1 | open | `CHANGELOG.md:14` | [R5-002, round 5] the changelog entry restates the review's totals and gets them wrong, in both languages |
-| T1-048 | T1 | open | `skills/finetooth/scripts/review.py:2481` | [R5-003, round 5] the block's own acceptance criterion cannot be written without making `check` red, and this round closed the gate by re-marking the report instead of filing it |
+| T1-047 | T1 | fixed | `CHANGELOG.md:14` | [R5-002, round 5] the changelog entry restates the review's totals and gets them wrong, in both languages |
+| T1-048 | T1 | fixed | `skills/finetooth/scripts/review.py:2481` | [R5-003, round 5] the block's own acceptance criterion cannot be written without making `check` red, and this round closed the gate by re-marking the report instead of filing it |
 
-## low (3 open / 29)
+## low (0 open / 29)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -67,7 +67,7 @@ Open: **6** of 51 records.
 | T1-043 | T1 | fixed | `docs/review/journal.md:16` | [R4-003, fix review round 4] the round left no fix report and no journal entry, so its incidental changes are recorded nowhere |
 | T1-044 | T1 | fixed | `docs/review/findings.jsonl:37` | [R4-004, fix review round 4] the round left `check` red on a register row it wrote itself |
 | T1-045 | T1 | fixed | `CHANGELOG.md:14` | [R4-005, fix review round 4] the new changelog bullet swallows the section's introduction, in both languages |
-| T1-049 | T1 | open | `tests/test_review.py:4222` | [R5-004, round 5] the new guard does not run when the test file is run directly |
-| T1-050 | T1 | open | `skills/finetooth/scripts/review.py:129` | [R5-005, round 5] `import` accepts a row that `check` immediately refuses, and the defect is in no register row |
-| T1-051 | T1 | open | `docs/review/findings.jsonl:43` | [R5-006, round 5] three findings are recorded as fixed in a file that has nothing to do with them |
+| T1-049 | T1 | fixed | `tests/test_review.py:4222` | [R5-004, round 5] the new guard does not run when the test file is run directly |
+| T1-050 | T1 | fixed | `skills/finetooth/scripts/review.py:129` | [R5-005, round 5] `import` accepts a row that `check` immediately refuses, and the defect is in no register row |
+| T1-051 | T1 | fixed | `docs/review/findings.jsonl:43` | [R5-006, round 5] three findings are recorded as fixed in a file that has nothing to do with them |
 
