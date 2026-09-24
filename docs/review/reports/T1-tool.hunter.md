@@ -154,9 +154,9 @@ docs/review/blocks.json
 **Location:** `skills/finetooth/scripts/review.py:2137`
 **What is wrong:** `verdict_mentions` walks the report line by line with no fence and no
 code-span tracking (unlike `section_body`, which does track ` ``` `). The hunter template's
-"Report structure" block is a ```` ```markdown ```` fence containing, with the block id
-already substituted, the lines ``- `T1.1 — checked: <what exactly proves it>` ``,
-``- `T1.2 — not checked: …` ``, ``- `T1.3 — not applicable: …` `` (references/hunter.md:85–87).
+> "Report structure" block is a ```` ```markdown ```` fence containing, with the block id
+> already substituted, the lines ``- `T1.1 — checked: <what exactly proves it>` ``,
+> ``- `T1.2 — not checked: …` ``, ``- `T1.3 — not applicable: …` `` (references/hunter.md:85–87).
 **Failure scenario:** a hunter pastes the report skeleton it was given into
 `T1-tool.hunter.md` and answers hypotheses 4…15 for real. `verdicts_for` reads the three
 template lines as verdicts on T1.1, T1.2 and T1.3; `check`'s hypotheses gate finds
@@ -193,10 +193,10 @@ missed.
 **What is wrong:** `verdict_word_at` protects `n/a` from `\w` and `/` on either side, which
 kills the `curation/adapter.ts` false positive — but a backtick is neither, so `` `n/a` ``
 matches, and `line_verdict` takes the **earliest** vocabulary word in the line.
-**Failure scenario:** a hunter writes
-``- T1.3 — the `n/a` token inside a path is no longer read as a verdict; checked by
-test_n_a_внутри_пути`` . `n/a` stands earlier than `checked`, so the verdict recorded for
-T1.3 is "not applicable". `hypotheses` prints it, `summary` inherits it, and the gate is
+> **Failure scenario:** a hunter writes
+> ``- T1.3 — the `n/a` token inside a path is no longer read as a verdict; checked by
+> test_n_a_внутри_пути`` . `n/a` stands earlier than `checked`, so the verdict recorded for
+> T1.3 is "not applicable". `hypotheses` prints it, `summary` inherits it, and the gate is
 green — with the wrong answer to the question. The reverse is just as reachable with a line
 that quotes `not checked` or `rejected` as a code span while stating the opposite.
 **Why it is a defect:** invariant 4 — a word inside a code span is not a verdict.
@@ -587,33 +587,33 @@ Derived by hand from `line_verdict` (lowercase the line, take the earliest occur
 vocabulary word; ties go to the alphabetically smaller verdict) and `verdict_mentions`.
 "Wrong" marks a divergence between what the sentence says and what the tool records.
 
-| # | line | expected | actual | |
-|---|---|---|---|---|
-| 1 | ``- `T1.1 — checked: proven by running the code` `` | checked | checked | |
-| 2 | `- T1.2 — not checked: no live system` | not checked | not checked | |
-| 3 | `- T1.3 — not applicable: not about this code` | not applicable | not applicable | |
-| 4 | `- T1.4 — гипотеза подтвердилась` | checked | checked | |
-| 5 | `- T1.5 — не проверена` | not checked | not checked | |
-| 6 | `- T1.6 — гипотеза не подтвердилась` | checked (negative outcome) | checked | |
-| 7 | `the path features/curation/adapter.ts holds n/a` | none | none (the `/` guard works) | |
-| 8 | `see https://example.com/not-applicable/x` | none | none (hyphen ≠ space) | |
-| 9 | ``- T1.7 — the `n/a` token in a path is handled; checked by test`` | checked | **not applicable** | wrong |
-| 10 | ``- T1.8 — `checked` is only a code span here, in fact not examined`` | none / not checked | **checked** | wrong |
-| 11 | `- T1.9 — the block moves to verified after the report` | none | **checked** | wrong |
-| 12 | `- T1.10 — checked` | T1.10 checked | T1.10 checked (greedy `\d+`) | |
-| 13 | `T1.1 is contained in T1.10 — checked` | both named | both get "checked" | |
-| 14 | `- T1.11 — the tree is complete and the fix is not checked` | checked (about the fix) | **not checked** | wrong |
-| 15 | `hypothesis 2 refuted by experiment` | T1.2 checked | T1.2 checked | |
-| 16 | `гипотеза №3 опровергнута` | T1.3 checked | T1.3 checked | |
-| 17 | `- T1.12 — unverified area` | not checked | not checked | |
-| 18 | `- T1.13 — not confirmed, the code is correct` | checked | checked | |
-| 19 | `nothing here at all` | none | none | |
-| 20 | fenced block containing ``- `T1.1 — checked: <what proves it>` `` | none (it is an example) | **checked** | wrong (T1-001) |
-| 21 | fenced block containing `- T1.2 — not checked: <what got in the way>` | none | **not checked** | wrong (T1-001) |
-| 22 | `\| # \| hypothesis \| outcome \|` then `\| 1 \| … \| refuted \|` | T1.1 checked | T1.1 checked | |
-| 23 | header-less `\| 1 \| gate one \| test_a \| confirmed \|` | none (a gate table) | **T1.1 checked** | wrong (T1-002) |
-| 24 | header-less `\| 3 \| gate three \| test_c \| not checked \|` | none | **T1.3 not checked** | wrong (T1-002) |
-| 25 | `\| # \| place \| constraint \| n/a \|` header + `\| 1 \| a.ts \| uq_a \| n/a \|` | none | none (the 2151 fix holds) | |
+> | # | line | expected | actual | |
+> |---|---|---|---|---|
+> | 1 | ``- `T1.1 — checked: proven by running the code` `` | checked | checked | |
+> | 2 | `- T1.2 — not checked: no live system` | not checked | not checked | |
+> | 3 | `- T1.3 — not applicable: not about this code` | not applicable | not applicable | |
+> | 4 | `- T1.4 — гипотеза подтвердилась` | checked | checked | |
+> | 5 | `- T1.5 — не проверена` | not checked | not checked | |
+> | 6 | `- T1.6 — гипотеза не подтвердилась` | checked (negative outcome) | checked | |
+> | 7 | `the path features/curation/adapter.ts holds n/a` | none | none (the `/` guard works) | |
+> | 8 | `see https://example.com/not-applicable/x` | none | none (hyphen ≠ space) | |
+> | 9 | ``- T1.7 — the `n/a` token in a path is handled; checked by test`` | checked | **not applicable** | wrong |
+> | 10 | ``- T1.8 — `checked` is only a code span here, in fact not examined`` | none / not checked | **checked** | wrong |
+> | 11 | `- T1.9 — the block moves to verified after the report` | none | **checked** | wrong |
+> | 12 | `- T1.10 — checked` | T1.10 checked | T1.10 checked (greedy `\d+`) | |
+> | 13 | `T1.1 is contained in T1.10 — checked` | both named | both get "checked" | |
+> | 14 | `- T1.11 — the tree is complete and the fix is not checked` | checked (about the fix) | **not checked** | wrong |
+> | 15 | `hypothesis 2 refuted by experiment` | T1.2 checked | T1.2 checked | |
+> | 16 | `гипотеза №3 опровергнута` | T1.3 checked | T1.3 checked | |
+> | 17 | `- T1.12 — unverified area` | not checked | not checked | |
+> | 18 | `- T1.13 — not confirmed, the code is correct` | checked | checked | |
+> | 19 | `nothing here at all` | none | none | |
+> | 20 | fenced block containing ``- `T1.1 — checked: <what proves it>` `` | none (it is an example) | **checked** | wrong (T1-001) |
+> | 21 | fenced block containing `- T1.2 — not checked: <what got in the way>` | none | **not checked** | wrong (T1-001) |
+> | 22 | `\| # \| hypothesis \| outcome \|` then `\| 1 \| … \| refuted \|` | T1.1 checked | T1.1 checked | |
+> | 23 | header-less `\| 1 \| gate one \| test_a \| confirmed \|` | none (a gate table) | **T1.1 checked** | wrong (T1-002) |
+> | 24 | header-less `\| 3 \| gate three \| test_c \| not checked \|` | none | **T1.3 not checked** | wrong (T1-002) |
+> | 25 | `\| # \| place \| constraint \| n/a \|` header + `\| 1 \| a.ts \| uq_a \| n/a \|` | none | none (the 2151 fix holds) | |
 
 ## Checked and found correct
 

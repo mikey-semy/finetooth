@@ -4055,7 +4055,7 @@ class SourceRuleTest(unittest.TestCase):
         self.assertEqual(offenders, [], "вызов git со списком путей без -z")
 
     # Распознавание цитаты живёт здесь; всё остальное спрашивает у них.
-    QUOTE_TRACKERS = ("quoted_lines", "unquoted")
+    QUOTE_TRACKERS = ("quoted_lines", "_quoted_pass", "unquoted")
     # Детекторы цитаты: кто называет их у себя, тот завёл своё распознавание.
     QUOTE_DETECTORS = {"FENCE", "BLOCKQUOTE", "LIST_OPEN", "CODE_INDENT",
                        "COMMENT_OPEN", "COMMENT_CLOSE"}
@@ -4221,3 +4221,41 @@ def report_sections(md):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuotationMapTest(unittest.TestCase):
+    """The quotation class produced a defect in every fix round of the kit's own review
+    (fences in lists, the closing fence that opened, the inner fence that closed, the fence
+    that never closed), while a source-shape guard stayed green on all of them. This table
+    holds the BEHAVIOUR both ways: every line of every document is marked Q (quoted — an
+    example) or . (said — the report's own words), and a change that moves one mark in
+    either direction is red."""
+
+    CASES = {
+        "fence at the margin": (
+            "text\n```\n- H1.1 — checked\n```\nafter", ".QQQ."),
+        "fence nested in a list item, four spaces in": (
+            "1. item\n    ```\n    - H1.1 — checked\n    ```\n2. next", ".QQQ."),
+        "opening fence deeper than the list column, inner list line (round 3)": (
+            "1. hypothesis:\n       ```\n       - H1.1 — checked\n       ```\n2. next", ".QQQ."),
+        "indented fence INSIDE a fence does not close it (round 4)": (
+            "```\nexample:\n    ```\n    - H1.1 — checked\n    ```\n```\nafter", "QQQQQQ."),
+        "a fence that never closes is text (round 4)": (
+            "1. one\n   ```\n2. two\n3. three", "...."),
+        "a tilde fence is not closed by backticks": (
+            "~~~\n```\n- H1.1 — checked\n~~~\nafter", "QQQQ."),
+        "blockquote": ("> - H1.1 — checked\nsaid", "Q."),
+        "indented code after a blank line": ("para\n\n    - H1.1 — checked\nsaid", "..Q."),
+        "sub-items of a list are said, not quoted": (
+            "1. H1.1 — checked\n    - proof: ran it\n2. H1.2", "..."),
+        "a line that is only a comment": ("<!-- H1.1 — checked -->\nsaid", "Q."),
+    }
+
+    def test_карта_цитат_в_обе_стороны(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for name, (doc, want) in self.CASES.items():
+            got = "".join("Q" if q else "." for q in mod.quoted_lines(doc.split("\n")))
+            self.assertEqual(got, want, name)

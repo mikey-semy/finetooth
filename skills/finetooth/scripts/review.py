@@ -1441,12 +1441,12 @@ BLOCKQUOTE = re.compile(r"^\s*>")
 LIST_OPEN = re.compile(r"^(\s*)([-*+]|\d+[.)])(\s+)")
 # Four spaces past the enclosing content column — the CommonMark indented code block.
 CODE_INDENT = 4
-# A fence is a fence at ANY indentation — opening and closing alike. The tool does not
-# render markdown, it decides what is quoted, and for that one symmetric rule is safer than
-# CommonMark's column arithmetic: measured from the content column, an opening fence four
-# spaces in was not seen, a list item inside the example moved the column, and the CLOSING
-# fence then opened a new one that swallowed the rest of the manifest — four hypotheses
-# became one and `check` went green (the kit's own review, fix review round 3).
+# A fence OPENS at any indentation and CLOSES only within three spaces of the column it
+# opened at. Measured from the list's content column, an opening fence four spaces in was
+# not seen and its closing fence opened a new one that swallowed a manifest (round 3);
+# closing at any indentation let an indented example INSIDE a fence close it and leak its
+# verdicts as the report's own (round 4). Anchoring the close to the opener closes both.
+FENCE_SLACK = CODE_INDENT - 1
 COMMENT_OPEN, COMMENT_CLOSE = "<!--", "-->"
 
 
@@ -1465,24 +1465,28 @@ def quoted_lines(lines: list[str]) -> list[bool]:
     sub-items, which is how a report writes its proof, would all be read as examples and
     the gate would refuse an honest report.
     """
+    return _quoted_pass(lines, frozenset())
+
+
+def _quoted_pass(lines: list[str], not_fences: frozenset) -> list[bool]:
     out: list[bool] = []
     in_comment = False
     content_col = 0      # where the innermost open list item's content begins
     prev_blank = True    # an indented code block may only start after a blank line
-    char, width = "", 0   # the open fence: its mark and its length
-    for ln in lines:
-        m = FENCE.match(ln)
+    char, width, open_col, open_at = "", 0, 0, -1   # the open fence
+    for at, ln in enumerate(lines):
+        m = FENCE.match(ln) if at not in not_fences else None
         indent = len(m.group(1)) if m else len(ln) - len(ln.lstrip())
         if char:
             out.append(True)
             prev_blank = False
             # The closing fence carries no info string; `~~~` does not close ``` and back.
             if (m and m.group(2)[0] == char and len(m.group(2)) >= width
-                    and not m.group(3).strip()):
+                    and not m.group(3).strip() and indent <= open_col + FENCE_SLACK):
                 char, width = "", 0
             continue
         if m:
-            char, width = m.group(2)[0], len(m.group(2))
+            char, width, open_col, open_at = m.group(2)[0], len(m.group(2)), indent, at
             out.append(True)
             prev_blank = False
             if indent == 0:
@@ -1522,6 +1526,11 @@ def quoted_lines(lines: list[str]) -> list[bool]:
             content_col = len(mark.group(0))
         elif indent == 0:
             content_col = 0     # a paragraph at the margin closes every open list
+    if char:
+        # A fence that never closes is not a fence: rendered, it would swallow the rest of
+        # the document — here that meant a manifest's remaining hypotheses vanished and
+        # `check` went green on one of four (fix review round 4). Read it as text instead.
+        return _quoted_pass(lines, not_fences | {open_at})
     return out
 
 
