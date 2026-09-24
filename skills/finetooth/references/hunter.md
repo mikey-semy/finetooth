@@ -18,7 +18,12 @@ Review block: **{{BLOCK_ID}} — {{BLOCK_TITLE}}**.
    is mandatory.
 5. **Check the hypotheses from the manifest, but do not stop at them.** The hypotheses are
    what is certainly worth checking, not the full list.
-6. **Report honestly what you did not do.** If a file was not read or a hypothesis was not
+6. **Spend turns, not files, sparingly.** The cost of a run is the number of turns times the
+   context each turn carries, not the size of what you read (measured: reading the whole
+   block was 1% of the spend; 55 turns were the rest). So: read a file **whole in one call**,
+   not in pieces; put independent tool calls **into one turn**; do not re-read what is
+   already in your context. Reading everything is required — reading it four times is not.
+7. **Report honestly what you did not do.** If a file was not read or a hypothesis was not
    checked — say so. Silence is worse than a gap.
 
 # Project invariants

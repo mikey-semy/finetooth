@@ -76,7 +76,9 @@ one of your own:
    Without project-specific hypotheses the review comes out "on general grounds"; do not cut this part.
 2. **Hunter.** `review prompt <ID> --role hunter` prints a ready prompt — hand it to a subagent
    **whole and unedited**. The agent writes the report and the draft findings to disk itself.
-   Then `review set-status <ID> hunted`.
+   Then `review set-status <ID> hunted`. Headless, with the spend measured and written to the
+   journal: `assets/run-role.sh <ID> hunter` (the same for `verify`, `fix`, `fixreview`;
+   the turn cap is twice what the first measured run of the role needed).
 3. **Verifier** — a different agent: `review prompt <ID> --role verify`. Checks every finding
    by execution, does its own pass over the most dangerous places, rewrites the findings file.
    Rejected findings are not deleted — they stay with the reason. Then `review set-status <ID> verified`.
@@ -154,4 +156,8 @@ review starts from zero.
 - [references/lessons.md](references/lessons.md) — the lessons of two reviews the rules grew
   out of: read before the first block.
 - [assets/](assets/) — samples: blocks, manifest, invariants, journal, banner for the root
-  instructions file, `make` and `package.json` targets, a guard example.
+  instructions file, `make` and `package.json` targets, a guard example;
+  [assets/run-role.sh](assets/run-role.sh) — a role run through `claude -p` with the event
+  stream kept and the spend logged.
+- [scripts/axes.py](scripts/axes.py) — the spend of one run by axis (cache, turns, tool
+  output, re-reads) from that stream; `--journal` gives the one line `run-role.sh` writes.

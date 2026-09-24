@@ -18,6 +18,7 @@ import re
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -924,6 +925,52 @@ class ReviewToolTest(unittest.TestCase):
         self.s.git("commit", "-q", "-m", "after")
         out = self.s.run("summary", "--aged", "docs/итог.md").stdout
         self.assertRegex(out, r"H1\s+\S+: 1\s+\S+: 1")
+
+    # ------------------------------------------------------------- экономия ходов
+
+    def test_шаблоны_ролей_несут_правило_экономии_ходов(self):
+        """Замер: цена = ходы × контекст. Правило живёт в шаблонах обоих языков, иначе
+        промпт его не увидит."""
+        refs = SKILL / "references"
+        self.assertIn("whole in one call", (refs / "hunter.md").read_text(encoding="utf-8"))
+        self.assertIn("целиком одним вызовом", (refs / "hunter.ru.md").read_text(encoding="utf-8"))
+        self.assertIn("one script file", (refs / "verify.md").read_text(encoding="utf-8"))
+        self.assertIn("одним файлом", (refs / "verify.ru.md").read_text(encoding="utf-8"))
+
+    def test_axes_считает_usage_раз_на_сообщение_и_перечитывания(self):
+        """stream-json дробит одно сообщение на несколько событий с ОДНИМ usage: считать
+        дважды — завысить вход вдвое."""
+        usage = {"input_tokens": 1, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 900, "output_tokens": 5}
+        ev = lambda o: json.dumps(o, ensure_ascii=False)
+        stream = "\n".join([
+            ev({"type": "assistant", "message": {"id": "m1", "model": "test", "usage": usage,
+                "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/x/a.ts"}}]}}),
+            ev({"type": "assistant", "message": {"id": "m1", "model": "test", "usage": usage, "content": []}}),
+            ev({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "abcd"}]}}),
+            ev({"type": "assistant", "message": {"id": "m2", "model": "test", "usage": usage,
+                "content": [{"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "/x/a.ts"}}]}}),
+            ev({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "content": "abcd"}]}}),
+            ev({"type": "result", "num_turns": 2, "duration_ms": 60000, "total_cost_usd": 0.5,
+                "usage": {"output_tokens": 42}}),
+        ]) + "\n"
+        path = Path(self.s.root, "stream.jsonl")
+        path.write_text(stream, encoding="utf-8")
+        out = subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"), str(path), "--journal"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        # два сообщения по 1001 на вход, не три
+        self.assertIn("input 0.0M tokens (90% from cache", out.stdout)
+        self.assertIn("re-reads 1", out.stdout)
+        self.assertIn("output 0k", out.stdout)
+        full = subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"), str(path)],
+                              capture_output=True, text=True).stdout
+        self.assertIn("input total          2,002", full)
+
+    def test_run_role_отказывает_на_неизвестной_роли(self):
+        out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "nosuch"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("unknown role", out.stderr)
 
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
