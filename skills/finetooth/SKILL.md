@@ -59,6 +59,10 @@ one of your own:
 4. `review init`, then `review coverage` — work through the unowned files until there are
    zero. **A human assigns a file to a block**: a file caught by a pattern match will be
    counted as read without having been read.
+5. `review coupling` — files that change together (from `git log`) but sit in different
+   blocks: the seams nobody reads. For each pair it names the `ref_paths` entry and the
+   hypothesis to add to the manifest; several pairs between the same two blocks are a seam
+   block waiting to be cut. Shared nodes (a schema, a dictionary) are listed apart.
 
 ## Working through a block
 

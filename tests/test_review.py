@@ -781,6 +781,65 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("older than 7 days", out)
         self.assertIn("H1-001 (10d)", out)
 
+    # ------------------------------------------------------------- карта стыков
+
+    def _coupled_history(self) -> None:
+        """Два блока; a.ts (H1) и b.ts (H2) меняются вместе трижды; c.ts и d.ts — вместе
+        только в трёх массовых коммитах; h.ts связан с шестью блоками (общий узел)."""
+        names = ["a", "b", "c", "d", "h"] + [f"x{i}" for i in range(6)]
+        for n in names:
+            self.s.write(f"src/{n}.ts", "0\n")
+        extra = [{"id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+                  "goal": "г", "paths": ["src/b.ts", "src/d.ts"], "ref_paths": []}]
+        for i in range(6):
+            extra.append({"id": f"X{i}", "slug": f"x{i}", "phase": 1, "title": f"X{i}", "role": "demo",
+                          "goal": "г", "paths": [f"src/x{i}.ts"], "ref_paths": []})
+        self.s.blocks(paths=["src/a.ts", "src/c.ts", "src/h.ts"], extra_blocks=extra)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+
+        def touch(*files):
+            for f in files:
+                p = Path(self.s.root, "src", f + ".ts")
+                p.write_text(p.read_text() + "1\n")
+            self.s.git("add", "-A")
+            self.s.git("commit", "-q", "-m", "t")
+        for _ in range(3):
+            touch("a", "b")                       # настоящая пара через блоки
+        for _ in range(3):
+            touch("a", "c")                       # оба в H1 — не стык, читает один блок
+        for _ in range(3):
+            touch("c", "d", *[f"x{i}" for i in range(6)])   # массовые: 8 файлов
+        for i in range(6):
+            for _ in range(3):
+                touch("h", f"x{i}")               # h связан с шестью блоками
+        for _ in range(60):
+            touch("a")                            # мелких коммитов много — 95-й процентиль ниже массовых
+        self.s.run("init")
+
+    def test_coupling_находит_пару_через_блоки_и_отсекает_массовые_коммиты(self):
+        self._coupled_history()
+        out = self.s.run("coupling").stdout
+        self.assertIn("H1 src/a.ts  ↔  H2 src/b.ts", out)
+        self.assertNotIn("src/a.ts  ↔  H1 src/c.ts", out)
+        self.assertNotIn("src/c.ts  ↔  H2 src/d.ts", out)
+        self.assertIn("mass commits skipped (> ", out)
+        # три массовых и стартовый коммит со всем деревом
+        self.assertRegex(out, r"mass commits skipped \(> \d+ files, the 95th percentile of this repository\): 4")
+
+    def test_coupling_выносит_общий_узел_отдельно(self):
+        self._coupled_history()
+        out = self.s.run("coupling").stdout
+        self.assertIn("src/h.ts  ← 6 blocks", out)
+        self.assertNotIn("↔  X0 src/x0.ts", out)
+
+    def test_coupling_write_пишет_tsv(self):
+        self._coupled_history()
+        self.s.run("coupling", "--write")
+        tsv = Path(self.s.root, "docs/review/coupling.tsv").read_text(encoding="utf-8")
+        self.assertTrue(tsv.startswith("a\tblocks_a\tb\tblocks_b\ttogether"))
+        self.assertIn("src/a.ts\tH1\tsrc/b.ts\tH2\t3", tsv)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])

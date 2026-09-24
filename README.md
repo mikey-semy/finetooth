@@ -450,6 +450,14 @@ CHANGELOG.md                      version history
 Block statuses: `todo → running → hunted → verified → triaged → fixing → closed` (plus
 `blocked`). Finding statuses: `open`, `fixed`, `rejected`, `duplicate`, `deferred`.
 
+**Seams between blocks.** A block is the unit inside which an agent sees everything; the seam
+between two blocks is seen by nobody. On the first project 76% of the file pairs that change
+together sit in different blocks. `review coupling` reads `git log`, drops mass commits (above
+the 95th percentile of files per commit in this repository) and shared nodes (a file coupled
+with six or more blocks), and prints the cross-block pairs with a ready `ref_paths` entry and a
+hypothesis for the manifest; clusters of pairs between the same two blocks are where a seam
+block is due. `--write` keeps the pairs in `docs/review/coupling.tsv`.
+
 **The fix gate.** The method finds faster than a project fixes (the first project: 77 findings
 on 5 blocks, 9 fixed), and a finding that never reaches a fix is debt — a month later the
 register describes code that no longer exists. So `set-status <ID> running` refuses while

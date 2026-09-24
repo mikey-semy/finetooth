@@ -747,6 +747,144 @@ def cmd_sizes(args) -> int:
     return 0
 
 
+# ------------------------------------------------------------------------ coupling
+
+# Files that change together but sit in different blocks: the seam nobody reads. The
+# thresholds come from the first project's measurement (553 pairs co-changed ≥ 3 times,
+# 76% across blocks, 38 strong pairs) and from change-coupling research (Zimmermann et al.,
+# ROSE, TSE 2005: support and confidence over the commit history):
+#   COUPLING_MIN_TOGETHER — a pair counts from this many joint commits (support);
+#   COUPLING_MIN_SHARE    — and when the joint commits are at least this share of the
+#                           commits of one of the two files (confidence, the stronger side);
+#   COUPLING_HUB_BLOCKS   — a file coupled with this many blocks is a shared node (schema,
+#                           dictionary), printed apart: it explains most cross-block pairs
+#                           and says nothing about a specific seam.
+# The mass-commit cutoff is not a constant: it is the 95th percentile of files per commit
+# IN THIS repository, so a codemod or a formatting sweep does not manufacture pairs.
+COUPLING_MIN_TOGETHER = 3
+COUPLING_MIN_SHARE = 0.5
+COUPLING_HUB_BLOCKS = 6
+COUPLING_MASS_PERCENTILE = 95
+COUPLING_FILE = REVIEW / "coupling.tsv"
+
+
+def commit_file_sets(since: str | None = None) -> list[set[str]]:
+    """The set of files touched by every commit on the current history (first parent only:
+    a merge lists everything the branch brought, and that is not a joint change)."""
+    cmd = ["git", "-C", str(ROOT), "log", "--first-parent", "--no-merges", "--name-only",
+           "--format=%x00"]
+    if since:
+        cmd.append(f"--since={since}")
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    sets: list[set[str]] = []
+    for chunk in out.split("\0"):
+        files = {ln.strip() for ln in chunk.splitlines() if ln.strip()}
+        if files:
+            sets.append(files)
+    return sets
+
+
+def mass_cutoff(sets: list[set[str]], percentile: int = COUPLING_MASS_PERCENTILE) -> int:
+    sizes = sorted(len(s) for s in sets)
+    if not sizes:
+        return 0
+    idx = min(len(sizes) - 1, (len(sizes) * percentile) // 100)
+    return max(sizes[idx], 2)
+
+
+def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
+                   min_together: int, min_share: float) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
+    """Cross-block pairs above the thresholds, the hub files, and the number of mass commits skipped."""
+    changes: dict[str, int] = {}
+    together: dict[tuple[str, str], int] = {}
+    skipped = 0
+    for files in sets:
+        files = {f for f in files if f in owned}
+        if not files:
+            continue
+        if len(files) > cutoff:
+            skipped += 1
+            continue
+        for f in files:
+            changes[f] = changes.get(f, 0) + 1
+        ordered = sorted(files)
+        for i, a in enumerate(ordered):
+            for b in ordered[i + 1:]:
+                if set(owned[a]) & set(owned[b]):
+                    continue  # the same block reads both: not a seam
+                together[(a, b)] = together.get((a, b), 0) + 1
+    partners: dict[str, set[str]] = {}
+    for (a, b), n in together.items():
+        if n >= min_together:
+            partners.setdefault(a, set()).update(owned[b])
+            partners.setdefault(b, set()).update(owned[a])
+    hubs = {f for f, bl in partners.items() if len(bl) >= COUPLING_HUB_BLOCKS}
+    pairs = []
+    for (a, b), n in together.items():
+        if n < min_together or a in hubs or b in hubs:
+            continue
+        share_a, share_b = n / changes[a], n / changes[b]
+        if max(share_a, share_b) < min_share:
+            continue
+        pairs.append({"a": a, "b": b, "blocks_a": owned[a], "blocks_b": owned[b],
+                      "together": n, "share_a": share_a, "share_b": share_b})
+    pairs.sort(key=lambda p: (-p["together"], -max(p["share_a"], p["share_b"]), p["a"], p["b"]))
+    hub_rows = sorted((f, partners[f]) for f in hubs)
+    return pairs, hub_rows, skipped
+
+
+def cmd_coupling(args) -> int:
+    """Pairs of files that change together but belong to different blocks — the seams."""
+    owned, _, _ = coverage_map()
+    sets = commit_file_sets(args.since)
+    if not sets:
+        print("no commits in the history — nothing to couple")
+        return 0
+    cutoff = mass_cutoff(sets)
+    pairs, hubs, skipped = coupling_pairs(owned, sets, cutoff, args.min_together, args.min_share)
+    print(f"commits: {len(sets)}; mass commits skipped (> {cutoff} files, the "
+          f"{COUPLING_MASS_PERCENTILE}th percentile of this repository): {skipped}")
+    print(f"thresholds: together ≥ {args.min_together}, share ≥ {args.min_share:.0%}, "
+          f"hub = coupled with ≥ {COUPLING_HUB_BLOCKS} blocks\n")
+    if hubs:
+        print(f"shared nodes ({len(hubs)}) — coupled with many blocks, excluded from the pairs; "
+              f"they belong in ref_paths of everyone who touches them:")
+        for f, bl in hubs:
+            print(f"  {f}  ← {len(bl)} blocks: {', '.join(sorted(bl))}")
+        print()
+    if not pairs:
+        print("no cross-block pairs above the thresholds")
+    else:
+        print(f"cross-block pairs ({len(pairs)}):")
+        for p in pairs:
+            ba, bb = "+".join(p["blocks_a"]), "+".join(p["blocks_b"])
+            lead, other, lead_block = ((p["a"], p["b"], bb) if p["share_a"] >= p["share_b"]
+                                       else (p["b"], p["a"], ba))
+            print(f"  {p['together']:>3}×  {ba} {p['a']}  ↔  {bb} {p['b']}  "
+                  f"({p['share_a']:.0%} / {p['share_b']:.0%})")
+            print(f"        → add `{other}` to ref_paths of the block that reads `{lead}`; "
+                  f"hypothesis: a value leaving `{lead}` reaches `{other}` unchanged")
+        # a cluster of pairs between the same two blocks is a seam worth its own block
+        clusters: dict[tuple[str, str], int] = {}
+        for p in pairs:
+            key = (p["blocks_a"][0], p["blocks_b"][0])
+            clusters[key] = clusters.get(key, 0) + 1
+        strong = sorted(((n, k) for k, n in clusters.items() if n >= args.min_together), reverse=True)
+        if strong:
+            print("\nclusters — several pairs between the same two blocks; a seam block "
+                  "(one chain from input to storage, one named instance of the data) is due:")
+            for n, (x, y) in strong:
+                print(f"  {x} ↔ {y}: {n} pairs")
+    if args.write:
+        lines = ["a\tblocks_a\tb\tblocks_b\ttogether\tshare_a\tshare_b"]
+        for p in pairs:
+            lines.append(f"{p['a']}\t{'+'.join(p['blocks_a'])}\t{p['b']}\t{'+'.join(p['blocks_b'])}"
+                         f"\t{p['together']}\t{p['share_a']:.2f}\t{p['share_b']:.2f}")
+        COUPLING_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"\nwritten: {COUPLING_FILE.relative_to(ROOT)}")
+    return 0
+
+
 # ------------------------------------------------------------------------- prompt
 
 
@@ -2520,6 +2658,11 @@ def main() -> int:
     c.add_argument("--under", help="only under this directory")
     c.add_argument("--unassigned", action="store_true", help="only unowned files")
     sub.add_parser("sizes", help="size of every block against the readability ceiling")
+    c = sub.add_parser("coupling", help="files that change together but sit in different blocks — the seams")
+    c.add_argument("--since", help="only commits since this date (git --since)")
+    c.add_argument("--min-together", type=int, default=COUPLING_MIN_TOGETHER, help="joint commits a pair needs")
+    c.add_argument("--min-share", type=float, default=COUPLING_MIN_SHARE, help="share of one file's commits the pair must cover")
+    c.add_argument("--write", action="store_true", help="also write docs/review/coupling.tsv")
 
     c = sub.add_parser("roots", help="finding roots: how many instances and what closes the class")
     c.add_argument("block", nargs="?")
@@ -2541,7 +2684,7 @@ def main() -> int:
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
-        "inventory": cmd_inventory, "sizes": cmd_sizes,
+        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling,
         "setup": cmd_setup,
     }[args.cmd](args)
 
