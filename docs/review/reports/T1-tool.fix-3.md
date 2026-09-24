@@ -224,12 +224,14 @@ class has produced a fix in every round of this block — the fence, then the in
 comment, now the nested fence and the substance gates. A list of fixed places has not held
 it.
 
-The guard is `tests/test_review.py::SourceRuleTest::test_цитаты_распознаются_одним_местом`,
+The guard is `tests/test_review.py::SourceRuleTest.test_цитаты_распознаются_одним_местом`,
 and from this round it no longer works off a list of names: it finds a markdown parser by its
 shape and demands that it ask the one tracker. It is shown red above on three parsers that do
 not exist in the tool, and it went red **on the tool as it stood** — `acceptance_of`, a place
-no finding named. That is recorded on the findings as
-`--rule tests/test_review.py::SourceRuleTest::test_цитаты_распознаются_одним_местом`.
+no finding named. That is recorded on T1-032 and T1-033 as
+`--rule tests/test_review.py::SourceRuleTest.test_цитаты_распознаются_одним_местом`, and on
+T1-034 — whose subject is the rule itself — as
+`--rule tests/test_review.py::SourceRuleTest.test_узда_видит_разборщика_которого_ещё_нет`.
 
 `names_file` is deliberately outside the rule and outside the class: a path is evidence of
 reading wherever it is written, and a real path inside a pasted diff fence is exactly that
