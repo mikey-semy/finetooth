@@ -61,7 +61,10 @@ def read_stream(path: str) -> dict:
                                 key += f"@{inp.get('offset', 0)}+{inp.get('limit', '')}"
                             reads[key] += 1
             elif t == "result":
-                result = ev
+                # a run can emit several results (a background task finishing after the
+                # main answer reports 2 turns and 19 s); the run is the longest of them
+                if result is None or (ev.get("num_turns") or 0) >= (result.get("num_turns") or 0):
+                    result = ev
     usage: collections.Counter = collections.Counter()
     for u in per_msg.values():
         for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):

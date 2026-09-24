@@ -56,6 +56,14 @@ task is to **close them correctly**, not quickly.
     was replaced on the server and the three screens that must agree with it were left
     untouched. A defect with two addresses and one fix is still a defect, and now with a
     comment saying it is fixed.
+11. **The version, the release and the history are not yours.** Do not bump `VERSION` or a
+    version field, do not write a release heading in a changelog, do not rewrite history —
+    changelog entries go under "Unreleased". A release is the maintainer's decision after the
+    diff review.
+12. **Spend turns on fixes, not on ceremony.** The measured cost of a run is turns × context:
+    run the full gates once at the end of the series and the relevant test after each fix;
+    do not re-run the whole suite at every commit in separate worktrees unless the maintainer
+    asked for a bisectable history (the kit's own first fix run: 329 turns, most of them that).
 
 # Project invariants
 
