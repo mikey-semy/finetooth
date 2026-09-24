@@ -2901,5 +2901,60 @@ class FreshnessGateTest(unittest.TestCase):
         self.assertIn("git remote set-head origin -a", out.stdout)
 
 
+class ThresholdTest(unittest.TestCase):
+    """Порог, который не держит на краю своего диапазона, — не порог."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def test_на_молодой_истории_стартовый_коммит_считается_массовым(self):
+        """95-й процентиль на истории короче двадцати коммитов равен самому большому
+        коммиту: не отсекалось ничего, и стартовый коммит со всем деревом связывал
+        каждый файл с каждым."""
+        names = [f"f{i}" for i in range(12)]
+        for n in names:
+            self.s.write(f"src/{n}.ts", "0\n")
+        extra = [{"id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+                  "goal": "г", "paths": [f"src/f{i}.ts" for i in range(6, 12)], "ref_paths": []}]
+        self.s.blocks(paths=[f"src/f{i}.ts" for i in range(6)], extra_blocks=extra)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()          # стартовый коммит: всё дерево разом
+
+        def touch(*files):
+            for f in files:
+                p = self.s.root / "src" / (f + ".ts")
+                p.write_text(p.read_text(encoding="utf-8") + "1\n", encoding="utf-8")
+            self.s.git("add", "-A")
+            self.s.git("commit", "-q", "-m", "t")
+        for _ in range(3):       # настоящая пара через блоки
+            touch("f0", "f6")
+        for _ in range(3):       # и мелкие правки, чтобы выброс был виден как выброс
+            touch("f1")
+        self.s.run("init")
+        out = self.s.run("coupling").stdout
+        self.assertRegex(out, r"mass commits skipped \(> \d+ files, Tukey's fence over \d+ "
+                              r"commits — fewer than 20, too few for a percentile\): 1")
+        self.assertIn("H1 src/f0.ts  ↔  H2 src/f6.ts", out)
+        self.assertNotIn("src/f2.ts", out, "пары из стартового коммита не должны выжить")
+
+    def test_на_длинной_истории_порог_остаётся_процентилем(self):
+        self.s.write("src/a.ts", "0\n")
+        self.s.write("src/b.ts", "0\n")
+        self.s.blocks(paths=["src/a.ts"], extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+            "goal": "г", "paths": ["src/b.ts"], "ref_paths": []}])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        for i in range(25):
+            p = self.s.root / "src" / "a.ts"
+            p.write_text(p.read_text(encoding="utf-8") + "1\n", encoding="utf-8")
+            self.s.git("add", "-A")
+            self.s.git("commit", "-q", "-m", "t")
+        self.s.run("init")
+        out = self.s.run("coupling").stdout
+        self.assertIn("95th percentile of this repository", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -118,6 +119,12 @@ FIX_AGE_DAYS = 7
 # report, which is prose and has room for them. Without a cap the field drifts
 # into a paragraph — the verifier of the first block pasted its whole
 # verification into it — and the table it feeds stops being a table.
+#
+# The two numbers are the measured ceiling of honest findings, not round figures: over the
+# 24 findings of this kit's own first block the claim runs 82…202 characters (median 178,
+# 90th percentile 194) and the scenario 452…690 (median 586, 90th percentile 665). Both
+# caps sit just above the longest real one — they cut a field that has turned into a
+# report, not a field that is thorough.
 CLAIM_MAX = 220
 SCENARIO_MAX = 700
 ROLES = ["hunter", "verify", "fix", "fixreview"]
@@ -940,15 +947,31 @@ def cmd_sizes(args) -> int:
 #   COUPLING_MIN_TOGETHER — a pair counts from this many joint commits (support);
 #   COUPLING_MIN_SHARE    — and when the joint commits are at least this share of the
 #                           commits of one of the two files (confidence, the stronger side);
-#   COUPLING_HUB_BLOCKS   — a file coupled with this many blocks is a shared node (schema,
+#   hub_blocks()          — a file coupled with that many blocks is a shared node (schema,
 #                           dictionary), printed apart: it explains most cross-block pairs
 #                           and says nothing about a specific seam.
 # The mass-commit cutoff is not a constant: it is the 95th percentile of files per commit
 # IN THIS repository, so a codemod or a formatting sweep does not manufacture pairs.
 COUPLING_MIN_TOGETHER = 3
 COUPLING_MIN_SHARE = 0.5
-COUPLING_HUB_BLOCKS = 6
 COUPLING_MASS_PERCENTILE = 95
+# Fewer commits than this and the percentile cannot separate anything at all: its rank,
+# ceil(0.95·n), equals n for every n up to 20. See `mass_cutoff`.
+COUPLING_MIN_SAMPLE = 20
+# The hub threshold is a SHARE of the review, not a fixed count, and both halves are
+# derived rather than chosen. A seam runs between two blocks; a file that reaches a third
+# is no longer describing one seam, which is the floor. The share reproduces the number the
+# kit has run with since the command appeared — 6 on the 59-block review it was measured on
+# (59 × 10% = 5.9) — so a big review keeps the behaviour it was tuned to, while on a review
+# of four blocks a "hub coupled with six of four blocks" cannot exist and the filter would
+# be dead code.
+COUPLING_HUB_SHARE = 0.10
+COUPLING_HUB_FLOOR = 3
+
+
+def hub_blocks(n_blocks: int) -> int:
+    """How many blocks a file must be coupled with to count as a shared node."""
+    return max(COUPLING_HUB_FLOOR, math.ceil(n_blocks * COUPLING_HUB_SHARE))
 COUPLING_FILE = REVIEW / "coupling.tsv"
 
 
@@ -1023,16 +1046,46 @@ def commit_file_sets(since: str | None = None) -> list[set[str]]:
     return sets
 
 
+def quantile(sorted_sizes: list[int], q: float) -> int:
+    """Nearest-rank quantile: the smallest value at or below which at least `q` of the
+    sample lies. Rank ceil(q·n), 1-based — the textbook definition, and the one that
+    actually leaves the top of the distribution outside the cutoff."""
+    return sorted_sizes[max(0, math.ceil(q * len(sorted_sizes)) - 1)]
+
+
 def mass_cutoff(sets: list[set[str]], percentile: int = COUPLING_MASS_PERCENTILE) -> int:
+    """How many files a commit may touch before it stops being a joint change.
+
+    A 95th percentile needs a sample: its rank is ceil(0.95·n), which for n ≤ 20 equals n
+    itself — the cutoff came out EQUAL to the largest commit and not a single one was ever
+    skipped. A young repository is exactly where `coupling` is run first, and its initial
+    commit holds the whole tree: it paired every file with every other, and three formatting
+    sweeps were enough to push those pairs over the threshold.
+
+    Below the sample floor the outlier is found instead by Tukey's fence — Q3 + 1.5·IQR
+    (Tukey, Exploratory Data Analysis, 1977), the standard outlier rule, which asks for no
+    large sample and leaves a history without outliers untouched.
+    """
     sizes = sorted(len(s) for s in sets)
     if not sizes:
         return 0
-    idx = min(len(sizes) - 1, (len(sizes) * percentile) // 100)
-    return max(sizes[idx], 2)
+    if len(sizes) >= COUPLING_MIN_SAMPLE:
+        return max(quantile(sizes, percentile / 100), 2)
+    q1, q3 = quantile(sizes, 0.25), quantile(sizes, 0.75)
+    return max(int(q3 + 1.5 * (q3 - q1)), 2)
+
+
+def mass_basis(sets: list[set[str]]) -> str:
+    """What the cutoff rests on — printed, because a threshold nobody can trace is a guess."""
+    if len(sets) >= COUPLING_MIN_SAMPLE:
+        return f"the {COUPLING_MASS_PERCENTILE}th percentile of this repository"
+    return (f"Tukey's fence over {len(sets)} commits — fewer than {COUPLING_MIN_SAMPLE}, "
+            f"too few for a percentile")
 
 
 def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
-                   min_together: int, min_share: float) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
+                   min_together: int, min_share: float,
+                   hub_at: int) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
     """Cross-block pairs above the thresholds, the hub files, and the number of mass commits skipped."""
     changes: dict[str, int] = {}
     together: dict[tuple[str, str], int] = {}
@@ -1057,7 +1110,7 @@ def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: in
         if n >= min_together:
             partners.setdefault(a, set()).update(owned[b])
             partners.setdefault(b, set()).update(owned[a])
-    hubs = {f for f, bl in partners.items() if len(bl) >= COUPLING_HUB_BLOCKS}
+    hubs = {f for f, bl in partners.items() if len(bl) >= hub_at}
     pairs = []
     for (a, b), n in together.items():
         if n < min_together or a in hubs or b in hubs:
@@ -1080,11 +1133,13 @@ def cmd_coupling(args) -> int:
         print("no commits in the history — nothing to couple")
         return 0
     cutoff = mass_cutoff(sets)
-    pairs, hubs, skipped = coupling_pairs(owned, sets, cutoff, args.min_together, args.min_share)
-    print(f"commits: {len(sets)}; mass commits skipped (> {cutoff} files, the "
-          f"{COUPLING_MASS_PERCENTILE}th percentile of this repository): {skipped}")
+    hub_at = hub_blocks(len(blocks()["blocks"]))
+    pairs, hubs, skipped = coupling_pairs(owned, sets, cutoff, args.min_together,
+                                          args.min_share, hub_at)
+    print(f"commits: {len(sets)}; mass commits skipped (> {cutoff} files, "
+          f"{mass_basis(sets)}): {skipped}")
     print(f"thresholds: together ≥ {args.min_together}, share ≥ {args.min_share:.0%}, "
-          f"hub = coupled with ≥ {COUPLING_HUB_BLOCKS} blocks\n")
+          f"hub = coupled with ≥ {hub_at} blocks\n")
     if hubs:
         print(f"shared nodes ({len(hubs)}) — coupled with many blocks, excluded from the pairs; "
               f"they belong in ref_paths of everyone who touches them:")
@@ -1410,6 +1465,12 @@ def demote(md: str) -> str:
     return "\n".join(out)
 
 
+# Where a list of context files stops being a list and becomes a wall. Measured, not
+# guessed: a path in a real tree is about 31 characters on average (this repository; the
+# 90th percentile is 45), so 80 of them are ~2.5 thousand characters, about 600 tokens —
+# the last size that still reads as an enumeration next to the manifest and the invariants
+# on one screen. Above it the patterns say the same thing in four lines, and the agent
+# expands the part it needs with `git ls-files`.
 REF_LIST_LIMIT = 80
 
 
@@ -1976,6 +2037,14 @@ def cmd_findings(args) -> int:
 # without breaking a single check. The ceiling is three times what was read, with margin,
 # to catch what is plainly impossible.
 READABLE_LINES = 6000  # default; overridden by the `readable_lines` field in blocks.json
+
+# Below this a manifest holds nothing but its own headings. Measured on the scaffold the
+# kit itself hands out: the six headings of `assets/manifest.example.md`, with the title,
+# come to 171 characters, and a manifest copied and not filled in is exactly that file with
+# the text deleted. 200 is the first round number above it, so the gate catches the empty
+# copy and not a terse real one — the shortest real manifest measured here is 4 743
+# characters, more than twenty times the bound.
+MANIFEST_MIN_CHARS = 200
 
 
 def readable_lines() -> int:
@@ -2586,7 +2655,7 @@ def cmd_check(args) -> int:
         manifest = manifest_path(b)
         if not manifest.exists():
             problems.append(f"{bid}: no manifest {manifest.relative_to(ROOT)}")
-        elif len(manifest.read_text(encoding="utf-8").strip()) < 200:
+        elif len(manifest.read_text(encoding="utf-8").strip()) < MANIFEST_MIN_CHARS:
             # An empty file passed the "manifest exists" check.
             problems.append(f"{bid}: manifest {manifest.relative_to(ROOT)} is empty or nearly empty")
 
