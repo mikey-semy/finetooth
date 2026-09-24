@@ -363,12 +363,40 @@ merge". By our estimate such a block costs about twelve agents against two for a
 Convergence is the only honest sign that it is time to stop — the stopping rule is set in
 advance, and not by the number of findings but by their kind.
 
+## Where it is going
+
+The detailed roadmap — with measurements, sources and the order of work — lives in the
+maintainer's knowledge base; this is the short version. Directions, roughly in order:
+
+- **A fix-phase gate.** The next block does not start while the previous one has open
+  high-severity findings; deferring needs a reason. The method finds faster than a project
+  fixes — this is the lever.
+- **Seams between blocks.** A `coupling` command over `git log`: files that change together
+  but live in different blocks become `ref_paths` and hypotheses; clusters become a
+  cross-block slice.
+- **Order by risk, then by churn.** A command that ranks blocks by cost of failure first and
+  change frequency second.
+- **Measuring what is missed.** A corpus of real past defects with a known answer; cheap
+  sampling of closed blocks by a different model as an upper bound.
+- **A lens bank.** Property question sets (access, money, privacy, data integrity,
+  reliability, tests, documentation truth) as sources of hypotheses for manifests — in the
+  form "what to check → how to prove it", never as a checklist.
+- **Threat model as a block kind.** A textual data-flow diagram per trust boundary with STRIDE
+  hypotheses; the diagram outlives the review directory.
+- **Token economy.** The cost of a block does not depend on its size, so the spend goes to
+  tool output and re-reads: measure first, then cache TTL, output filtering, one-read rule.
+- **The summary that outlives the review directory**, a run manifest, two reviewers at once,
+  a block spanning two repositories, portability to another language.
+
+What we will not do: turn the kit into a diff reviewer, add dependencies, build a web UI or a
+database, automate finding without a human accepting each one, reward being first. Each has
+a reason in the knowledge base.
+
 ## What not to do
 
-The long-term plan and what is not worth doing are in the roadmap (in the knowledge base). Briefly,
-on the near term: the method's main blind spot is **how much it misses**. We know that what
-it finds is real (6 planted findings out of 6 rejected), and we do not know what share of
-what exists that is.
+Briefly, on the near term: the method's main blind spot is **how much it misses**. We know
+that what it finds is real (6 planted findings out of 6 rejected), and we do not know what
+share of what exists that is.
 
 
 - do not start with domain blocks: until the cross-cutting ones have set the language, they
