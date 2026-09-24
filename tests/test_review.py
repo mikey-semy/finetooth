@@ -2459,6 +2459,44 @@ class ReportShapeTest(unittest.TestCase):
         out = self.s.run("check")
         self.assertNotIn("not named by full", out.stdout)
 
+    def test_путь_с_приставкой_точки_или_заголовка_диффа_засчитывается(self):
+        """`./src/api.ts` и `a/src/api.ts` — тот же путь, написанный иначе: первое агент
+        пишет по привычке, второе приходит из вставленного заголовка диффа. Отказ оставлял
+        честный полный отчёт без починки, кроме переписывания путей."""
+        self.s.write("src/api.ts", "a\n")
+        self.s.write("src/util.ts", "u\n")
+        self.s.blocks(paths=["src"], named_files=True)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Прочитано\n- ./src/api.ts\n- --- a/src/util.ts\n"
+                              "## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertNotIn("not named by full", out.stdout)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_приставка_не_делает_названным_файл_из_другого_каталога(self):
+        """Обратная сторона: приставка засчитывается только там, где она сама начинает
+        путь. `docs/src/api.ts` и `lib/a/src/api.ts` — другие файлы, а не тот же."""
+        self.s.write("src/api.ts", "a\n")
+        self.s.write("docs/src/api.ts", "d\n")
+        self.s.write("lib/a/src/api.ts", "l\n")
+        self.s.blocks(paths=["src"], named_files=True)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Прочитано\n- docs/src/api.ts\n- lib/a/src/api.ts\n"
+                              "## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("not named by full", out.stdout)
+
 
 class GitTruthTest(unittest.TestCase):
     """Правда о файлах берётся из индекса, а пути — NUL-разделёнными."""

@@ -2606,8 +2606,15 @@ def names_file(text: str, rel: str) -> bool:
     `index.ts` under a longer directory. The occurrence must be a whole path: what follows
     may not continue the name, and what precedes may not be the rest of a longer one.
     A trailing period ("I read src/api.ts.") is a sentence, not a longer path.
+
+    Three prefixes are the SAME path written another way and are accepted: `./`, which an
+    agent writes out of habit, and the `a/`, `b/` of a pasted diff header. Refusing them
+    left an honest, complete report with no repair but rewriting its paths — and a gate
+    that stops accepting honest reports is discovered by the person whose work it refuses.
+    They are accepted only where the prefix itself starts a path, so `docs/src/api.ts`
+    and `lib/a/src/api.ts` still name files of their own.
     """
-    pattern = (r"(?<![A-Za-z0-9_./-])" + re.escape(rel)
+    pattern = (r"(?<![A-Za-z0-9_./-])(?:\./|a/|b/)?" + re.escape(rel)
                + r"(?![A-Za-z0-9_-]|[./][A-Za-z0-9_-])")
     return re.search(pattern, text) is not None
 
