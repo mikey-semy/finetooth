@@ -4291,6 +4291,15 @@ class QuotationMapTest(unittest.TestCase):
             "| 1 | `- H1.1 — not checked` | x |\n", "H1")
         self.assertEqual(got.get("H1.1"), ["checked"])
 
+    def test_раздел_охвата_в_незакрытой_ограде_пуст(self):
+        """R6-004: раздел «Границы охвата» отчёта, целиком внутри незакрытой ограды, — цитата,
+        а не ответ: гейт обязан счесть раздел пустым."""
+        mod = self._mod()
+        md = "# report\n````\n## Coverage limits\n- nothing was skipped\n"
+        self.assertIsNone(mod.section_body(md, mod.LIMITS_HEADING, "quoted"))
+        # a manifest read the same way keeps its section: there doubt means "text"
+        self.assertIsNotNone(mod.section_body(md, mod.LIMITS_HEADING, "text"))
+
     def _mod(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
@@ -4298,6 +4307,59 @@ class QuotationMapTest(unittest.TestCase):
         spec.loader.exec_module(mod)
         return mod
 
+
+
+class VerdictTableTest(unittest.TestCase):
+    """What a report line says about a hypothesis — held as a table, both ways. The class
+    produced a defect in six consecutive fix rounds of the kit's own review while it was
+    patched rule by rule; the fence rule next door, held by a table, stopped moving."""
+
+    # (report text, expected verdicts of H1.1 — [] means no verdict at all)
+    CASES = [
+        # answers
+        ("- H1.1 — checked: ran the mutation, the test went red", ["checked"]),
+        ("- H1.1 — проверена: частичный уникальный индекс не даёт второй строки", ["checked"]),
+        ("- H1.1 — неприменима: частичных индексов в блоке нет", ["not applicable"]),
+        ("- H1.1 — проверена: x < 10 держится тестом", ["checked"]),
+        ("- **H1.1 — проверена, находок нет.** Таблица пересобрана", ["checked"]),
+        ("- H1.1 — проверена исполнением, находка подтверждена", ["checked"]),
+        ("- `H1.1 — проверена: атомарности нет — `aiQuota` читает агрегат", ["checked"]),
+        ("- H1.1 — не проверена: стенд не поднят", ["not checked"]),
+        ("- H1.1 — not applicable: not about this code", ["not applicable"]),
+        # partial qualifier — not checked
+        ("- H1.1 — проверена частично: только чтение", ["not checked"]),
+        ("- H1.1 — проверена лишь частично: прогона не было", ["not checked"]),
+        ("- H1.1 — проверена, но частично: прогона не было", ["not checked"]),
+        ("- H1.1 — проверена частичным прогоном: только бэкенд", ["not checked"]),
+        ("- H1.1 — проверена — частичный прогон, только бэкенд", ["not checked"]),
+        ("- H1.1 — checked partially: read only, no run", ["not checked"]),
+        ("- H1.1 — проверена частично, мутацией не прогнана. Причина:\n  нужен живой Postgres", ["not checked"]),
+        # no basis — no verdict
+        ("- H1.1 — проверена", []),
+        ("- H1.1 — проверена: …", []),
+        ("- H1.1 — checked: <how it was proven>", []),
+        # mentions and quotations — no verdict
+        ('H1.1 is "not applicable" when the parser reads a path', []),
+        ("the skeleton ``- `H1.1 — not checked: …` `` misled the parser", []),
+        ("- `H1.1` — the `n/a` token in a path is handled; checked by test", ["checked"]),
+        ("- H1.1 (`features/curation/adapter.ts`) — проверена: да", ["checked"]),
+        ("```\n- H1.1 — checked: example\n```", []),
+        ("| # | line | expected |\n|---|---|---|\n| 1 | H1.1 — not checked: x | y |", []),
+        # tables about hypotheses, and the free form
+        ("| # | hypothesis | outcome |\n|---|---|---|\n| 1 | predicate | not checked |", ["not checked"]),
+        ("hypothesis 1 refuted by experiment", ["checked"]),
+        # the verifier's disagreement is a verdict wherever it stands
+        ("## Where I disagree with the hunter\n- H1.1 — не проверена: стенда не было", ["not checked"]),
+    ]
+
+    def test_строка_отчёта_и_вердикт(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for text, want in self.CASES:
+            got = mod.verdict_mentions(text, "H1").get("H1.1", [])
+            self.assertEqual(got, want, text)
 
 if __name__ == "__main__":
     unittest.main()
