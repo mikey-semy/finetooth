@@ -3,19 +3,19 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **10** of 68 records.
+Open: **0** of 68 records.
 
-## high (2 open / 5)
+## high (0 open / 5)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
 | T1-001 | T1 | fixed | `skills/finetooth/scripts/review.py:2137` | verdict_mentions tracks neither fences nor code spans, so hypothesis verdicts quoted from the role template's own skeleton close the hypotheses and check goes green with the questions unanswered |
 | T1-041 | T1 | fixed | `skills/finetooth/scripts/review.py:1480` | [R4-001, fix review round 4] the new fence rule lets an indented inner fence close the outer one, and a quoted verdict becomes an answer again |
 | T1-046 | T1 | fixed | `skills/finetooth/scripts/review.py:1529` | [R5-001, round 5] "an unclosed fence is text" hands the template's own skeleton back as the report's answers, and `check` goes green |
-| T1-059 | T1 | open | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
-| T1-060 | T1 | open | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
+| T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
+| T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (5 open / 28)
+## medium (0 open / 28)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -37,18 +37,18 @@ Open: **10** of 68 records.
 | T1-037 | T1 | fixed | `skills/finetooth/scripts/review.py:1487` | [R3-001, fix review round 3] the nested-fence fix silently truncates a manifest again, and `check` goes green on it |
 | T1-042 | T1 | fixed | `skills/finetooth/scripts/review.py:1476` | [R4-002, fix review round 4] an unclosed fence inside a list item swallows the rest of the manifest, and `check` goes green on one hypothesis of four |
 | T1-047 | T1 | fixed | `CHANGELOG.md:14` | [R5-002, round 5] the changelog entry restates the review's totals and gets them wrong, in both languages |
-| T1-048 | T1 | fixed | `skills/finetooth/scripts/review.py:2481` | [R5-003, round 5] the block's own acceptance criterion cannot be written without making `check` red, and this round closed the gate by re-marking the report instead of filing it |
+| T1-048 | T1 | deferred | `skills/finetooth/scripts/review.py:2481` | [R5-003, round 5] the block's own acceptance criterion cannot be written without making `check` red, and this round closed the gate by re-marking the report instead of filing it |
 | T1-052 | T1 | fixed | `skills/finetooth/scripts/review.py:2648` | [R6-001, round 6] the exception for the old answer form strips every backtick in the line, and a quoted verdict word becomes the line's verdict again |
 | T1-053 | T1 | fixed | `skills/finetooth/scripts/review.py:2638` | [R6-002, round 6] the hypotheses-section filter silently drops the verifier's overriding verdict, and the tool prints the hunter's word instead |
 | T1-054 | T1 | fixed | `skills/finetooth/references/hunter.md:89` | [R6-003, round 6] `check` refuses a report that writes its verdicts the way the hunter template still promises, and the template now contradicts itself in both languages |
 | T1-055 | T1 | fixed | `skills/finetooth/scripts/review.py:3202` | [R6-004, round 6] the coverage-limits gate still reads a quoted section as the report's own words — the round's principle does not reach it |
-| T1-061 | T1 | open | `skills/finetooth/scripts/review.py:2700` | [R7-003, round 7] the hunter template's own indented-proof form yields no verdict at all, and the refusal names a requirement the report already meets |
-| T1-062 | T1 | open | `skills/finetooth/scripts/review.py:2713` | [R7-004, round 7] the partial qualifier is searched over the whole clause whenever there is no colon, so an honest "checked" is recorded as "not checked" |
-| T1-063 | T1 | open | `skills/finetooth/scripts/review.py:2662` | [R7-005, round 7] the round's central rule — no basis, no verdict — does not reach the table or the free form, so it is bypassed by writing the same answer as a table |
-| T1-064 | T1 | open | `skills/finetooth/scripts/review.py:3195` | [R7-006, round 7] the file-map gate reads the report raw, so the block's file list can be satisfied entirely out of a quotation |
-| T1-065 | T1 | open | `skills/finetooth/scripts/review.py:3229` | [R7-007, round 7] the R6-004 fix is untested: reverting the gate's `"quoted"` mode leaves the whole suite green |
+| T1-061 | T1 | fixed | `skills/finetooth/scripts/review.py:2700` | [R7-003, round 7] the hunter template's own indented-proof form yields no verdict at all, and the refusal names a requirement the report already meets |
+| T1-062 | T1 | fixed | `skills/finetooth/scripts/review.py:2713` | [R7-004, round 7] the partial qualifier is searched over the whole clause whenever there is no colon, so an honest "checked" is recorded as "not checked" |
+| T1-063 | T1 | fixed | `skills/finetooth/scripts/review.py:2662` | [R7-005, round 7] the round's central rule — no basis, no verdict — does not reach the table or the free form, so it is bypassed by writing the same answer as a table |
+| T1-064 | T1 | deferred | `skills/finetooth/scripts/review.py:3195` | [R7-006, round 7] the file-map gate reads the report raw, so the block's file list can be satisfied entirely out of a quotation |
+| T1-065 | T1 | fixed | `skills/finetooth/scripts/review.py:3229` | [R7-007, round 7] the R6-004 fix is untested: reverting the gate's `"quoted"` mode leaves the whole suite green |
 
-## low (3 open / 35)
+## low (0 open / 35)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -84,7 +84,7 @@ Open: **10** of 68 records.
 | T1-056 | T1 | fixed | `docs/review/findings.jsonl:47` | [R6-005, round 6] the three register rows this round wrote carry a `fixed_in` naming a file that holds none of their fixes — including the row that records this defect |
 | T1-057 | T1 | fixed | `docs/review/findings.jsonl:38` | [R6-006, round 6] the round left `check` red on its own bookkeeping |
 | T1-058 | T1 | fixed | `skills/finetooth/scripts/review.py:1451` | [R6-007, round 6] a second code-span parser lives outside the one quotation tracker, and the class guard cannot see span parsers |
-| T1-066 | T1 | open | `tests/test_review.py:4074` | [R7-008, round 7] T1-058 is recorded `fixed` while the half of it about the class guard is untouched — a third span parser is still invisible |
-| T1-067 | T1 | open | `CHANGELOG.md:19` | [R7-009, round 7] the changelog and the fix report say the new table holds 29 lines; it holds 28 |
-| T1-068 | T1 | open | `skills/finetooth/scripts/review.py:3231` | [R7-010, round 7] a coverage-limits section swallowed by an unclosed fence is reported as a missing section, and the message does not name the cause |
+| T1-066 | T1 | deferred | `tests/test_review.py:4074` | [R7-008, round 7] T1-058 is recorded `fixed` while the half of it about the class guard is untouched — a third span parser is still invisible |
+| T1-067 | T1 | fixed | `CHANGELOG.md:19` | [R7-009, round 7] the changelog and the fix report say the new table holds 29 lines; it holds 28 |
+| T1-068 | T1 | fixed | `skills/finetooth/scripts/review.py:3231` | [R7-010, round 7] a coverage-limits section swallowed by an unclosed fence is reported as a missing section, and the message does not name the cause |
 
