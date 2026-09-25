@@ -31,6 +31,72 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent.parent
 
 
+def die(msg: str) -> None:
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+# Subcommands and options whose output CARRIES PATHS. For them `-z` is not a nicety:
+# without it git C-quotes a non-ASCII name (`"src/\320\272…"`) and separates fields with a
+# tab, a colon or a newline — all three legal inside a path. The list is what the tool asks
+# git for; `git()` below adds `-z` to such a run itself, so no call site can forget it.
+GIT_PRINTS_PATHS = ("ls-files", "--name-only", "--name-status", "--others", "grep")
+
+
+class GitRun:
+    """What one git run produced: the exit code, the output, and the paths already split.
+
+    The two traps of reading git are invisible from a call site — the `-z` that has to be
+    asked for whenever the output carries paths, and the NUL split that has to read it
+    back. They were therefore repeated at every call site and forgotten at some: three
+    places parsed a path list line by line, and a review of a repository with a Cyrillic
+    file name recorded paths that do not exist. `git()` is the only place in the tool that
+    starts git, so the two belong here and nowhere else.
+    """
+
+    def __init__(self, argv: list[str], code: int, out, err: str) -> None:
+        self.argv, self.code, self.out, self.err = argv, code, out, err
+
+    @property
+    def fields(self) -> list[str]:
+        """A NUL-separated stream (`ls-files -z`, `show --name-only -z`, `log … -z`) as the
+        raw fields git wrote: no unquoting, no line splitting, empty tails dropped."""
+        return [f for f in self.out.split("\0") if f]
+
+    @property
+    def records(self) -> list[list[str]]:
+        """`git grep -z` records: one per line, the fields inside separated by NUL — the
+        separator git uses for grep, where a `:` would be ambiguous inside a path."""
+        return [ln.split("\0") for ln in self.out.splitlines() if ln]
+
+
+def git(*args: str, binary: bool = False, at_root: bool = True) -> GitRun:
+    """Run git — THE ONE PLACE in the tool where a process is started.
+
+    Everything the callers used to repeat lives here: the repository to work in, `-z` for
+    every run whose output carries paths, and the reading of that output. A call site that
+    wants a path list cannot get one that is not NUL-separated, because it does not build
+    the command line — that is the whole point of a single entry.
+
+    `at_root=False` is for the one run that asks git where the root IS: there is nothing to
+    point `-C` at yet.
+    """
+    rest = list(args)
+    if any(a in GIT_PRINTS_PATHS for a in rest) and "-z" not in rest:
+        # After the subcommand and before any `--`: that is where an option belongs.
+        rest.insert(1, "-z")
+    argv = ["git", *(["-C", str(ROOT)] if at_root else []), *rest]
+    try:
+        out = subprocess.run(argv, capture_output=True, text=not binary, check=False)
+    except OSError as exc:
+        # Without git the kit cannot answer a single question. Said once, plainly: the
+        # alternative is a traceback out of whichever command the user typed first.
+        die(f"git does not run ({exc}) — the kit reads the repository through git: "
+            f"install it and repeat the command")
+    err = out.stderr if isinstance(out.stderr, str) else out.stderr.decode("utf-8", "replace")
+    return GitRun(argv, out.returncode, out.stdout, err)
+
+
 def repo_root() -> Path | None:
     """Root of the repository UNDER REVIEW — taken from the working directory, not from the file.
 
@@ -41,14 +107,9 @@ def repo_root() -> Path | None:
     silently write its state there. The repository under review is the one you work in —
     that is the one we ask.
     """
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        return Path(out) if out else None
-    except (OSError, subprocess.CalledProcessError):
-        return None
+    out = git("rev-parse", "--show-toplevel", at_root=False)
+    top = out.out.strip()
+    return Path(top) if out.code == 0 and top else None
 
 
 IN_REPO = repo_root()
@@ -310,11 +371,6 @@ def now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    sys.exit(2)
-
-
 def load_json(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -348,20 +404,15 @@ def index_rows(pathspecs: list[str] | None) -> list[tuple[str, str, str]]:
     use for exclusions). A refusal from git used to reach the user as a traceback with
     exit 1 — which reads as "the state is red", not as "your pattern is malformed".
     """
-    cmd = ["git", "-C", str(ROOT), "ls-files", "--stage", "-z"]
-    if pathspecs is not None:
-        cmd += ["--"] + pathspecs
-    out = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if out.returncode != 0:
+    out = git("ls-files", "--stage", *(["--", *pathspecs] if pathspecs is not None else []))
+    if out.code != 0:
         where = ", ".join(f"`{p}`" for p in pathspecs or []) or "(no patterns)"
-        die(f"git refuses the pattern(s) {where}: {out.stderr.strip() or 'unknown error'}\n"
+        die(f"git refuses the pattern(s) {where}: {out.err.strip() or 'unknown error'}\n"
             f"The patterns are the `paths`, `ref_paths` and `exclusions` fields of "
             f"docs/review/blocks.json — fix the one git names and re-run. "
             f"They are git pathspecs: `src/**/*.ts`, `:(exclude)src/generated/**`.")
     rows = []
-    for row in out.stdout.split("\0"):
-        if not row:
-            continue
+    for row in out.fields:
         head, _, path = row.partition("\t")
         mode, _, rest = head.partition(" ")
         rows.append((mode, rest.split(" ", 1)[0], path))
@@ -376,9 +427,7 @@ def listed(pathspecs: list[str] | None) -> set[str]:
 def untracked_files(specs: list[str]) -> list[str]:
     """Files on disk that match the specs but are not in the index (`npx skills add`,
     a fresh generator, an unpacked archive): `check` would otherwise call them absent."""
-    cmd = ["git", "-C", str(ROOT), "ls-files", "--others", "--exclude-standard", "-z", "--", *specs]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
-    return [f for f in out.split("\0") if f]
+    return git("ls-files", "--others", "--exclude-standard", "--", *specs).fields
 
 
 def git_files(pathspecs: list[str]) -> set[str]:
@@ -426,9 +475,7 @@ def file_sha(rel: str) -> str | None:
         # with the same contents would go unnoticed. What is hashed is what the symlink is.
         return "link:" + hashlib.sha1(os.readlink(p).encode("utf-8")).hexdigest()
     if p.is_file():
-        out = subprocess.run(["git", "-C", str(ROOT), "hash-object", "--", rel],
-                             capture_output=True, text=True)
-        return out.stdout.strip() or None
+        return git("hash-object", "--", rel).out.strip() or None
     # `:(literal)` — the path is a name, not a pattern: a `[handle]` in it is a directory,
     # not a character class.
     rows = index_rows([f":(literal){rel}"])
@@ -439,8 +486,7 @@ def file_sha(rel: str) -> str | None:
         # A symlink not laid out on disk: the index holds its target as the blob. Hashed
         # the same way as the laid-out branch, so the fingerprint does not jump when a
         # sparse checkout lays the link out.
-        blob = subprocess.run(["git", "-C", str(ROOT), "show", f":{rel}"],
-                              capture_output=True, check=False).stdout
+        blob = git("show", f":{rel}", binary=True).out
         return "link:" + hashlib.sha1(blob).hexdigest()
     return entry[1]
 
@@ -511,13 +557,12 @@ def file_lines(rel: str) -> int | None:
     prints it). Opening such a path means crashing for no reason or silently losing it
     from the denominator.
     """
-    out = subprocess.run(["git", "-C", str(ROOT), "show", f":{rel}"],
-                         capture_output=True, check=False)
+    out = git("show", f":{rel}", binary=True)
     # A binary file is not lines: a "two-thousand-line" picture inflated the block and
     # the readability ceiling. The sign is a NUL byte near the start, as git itself does it.
-    if out.returncode == 0 and b"\0" in out.stdout[:8192]:
+    if out.code == 0 and b"\0" in out.out[:8192]:
         return None
-    if out.returncode != 0:
+    if out.code != 0:
         p = ROOT / rel
         if not p.is_file():
             return None
@@ -526,7 +571,7 @@ def file_lines(rel: str) -> int | None:
                 return sum(1 for _ in fh)
         except OSError:
             return None
-    return out.stdout.count(b"\n") + (0 if out.stdout.endswith(b"\n") or not out.stdout else 1)
+    return out.out.count(b"\n") + (0 if out.out.endswith(b"\n") or not out.out else 1)
 
 
 # What a block definition must carry for the tool to be able to do anything with it. The
@@ -578,7 +623,7 @@ def check_definition(defn: dict) -> None:
                     f"{', '.join(BLOCK_FIELDS)}; the example is {example}")
         # Both lists go to git as pathspecs. Written as one string they were spliced into
         # the pathspec list a character at a time; an entry that is not a string reached
-        # `subprocess` as an argument it cannot pass.
+        # git as an argument it cannot pass.
         for field in ("paths", "ref_paths"):
             value = b.get(field)
             if value is None:
@@ -856,13 +901,9 @@ def mainline_ref() -> str | None:
     remote, which is exactly the vendored copy of a neighbouring service the freshness
     threshold was written for. Every remote is asked, not just `origin`.
     """
-    remotes = subprocess.run(["git", "-C", str(ROOT), "remote"],
-                             capture_output=True, text=True, check=False).stdout.split()
+    remotes = git("remote").out.split()
     for name in (["origin"] if "origin" in remotes else []) + [r for r in remotes if r != "origin"]:
-        ref = subprocess.run(
-            ["git", "-C", str(ROOT), "symbolic-ref", "--short", f"refs/remotes/{name}/HEAD"],
-            capture_output=True, text=True, check=False,
-        ).stdout.strip()
+        ref = git("symbolic-ref", "--short", f"refs/remotes/{name}/HEAD").out.strip()
         if ref:
             return ref
     return None
@@ -877,8 +918,7 @@ def freshness_inert() -> str | None:
     """
     if mainline_ref():
         return None
-    remotes = subprocess.run(["git", "-C", str(ROOT), "remote"],
-                             capture_output=True, text=True, check=False).stdout.split()
+    remotes = git("remote").out.split()
     if not remotes:
         return ("no remote in this repository, so the freshness of the tree cannot be "
                 "checked at all — findings from a stale copy describe what is already "
@@ -900,16 +940,16 @@ def stale_tree() -> tuple[float, str] | None:
         return None
 
     def stamp(rev: str) -> int | None:
-        out = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%ct", rev],
-                             capture_output=True, text=True)
-        return int(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+        # `show -s`, not `log`: reading a commit's date is not reading the history, and the
+        # marked `git log` stream has exactly one reader (`log_records`).
+        out = git("show", "-s", "--format=%ct", rev)
+        return int(out.out.strip()) if out.code == 0 and out.out.strip() else None
 
     # Counted from the POINT OF DIVERGENCE, not from our own tip: a fresh commit in a
     # long-ago branch makes its tip newer than the remote one and hides the fact that the
     # branch contains not a single fix made by others in all that time.
-    base = subprocess.run(["git", "-C", str(ROOT), "merge-base", "HEAD", ref],
-                          capture_output=True, text=True)
-    anchor = base.stdout.strip() if base.returncode == 0 and base.stdout.strip() else "HEAD"
+    base = git("merge-base", "HEAD", ref)
+    anchor = base.out.strip() if base.code == 0 and base.out.strip() else "HEAD"
     mine, theirs = stamp(anchor), stamp(ref)
     if mine is None or theirs is None:
         return None
@@ -1058,19 +1098,20 @@ COUPLING_FILE = REVIEW / "coupling.tsv"
 LOG_MARK = "\x01"
 
 
-def log_records(cmd: list[str]) -> list[tuple[str, list[str]]]:
-    """Commit records of a `git log --format=%x01%H … -z` run: (sha, the tokens after it).
+def log_records(*args: str) -> list[tuple[str, list[str]]]:
+    """Commit records of a `git log` run: (sha, the tokens after it). The caller passes the
+    rest of the arguments — the record marker and the format are set HERE.
 
-    ONE reader for the whole tool, because the trap is not visible from the call site: git
-    terminates the `--format` line with a newline of its own, and `-z` leaves that newline
-    GLUED to the first token of the commit — the stream is `…<sha>\\0` + `\\nsrc/a.ts\\0`.
-    Read without stripping it, a file that comes first in one commit and not in another is
-    counted under two names, and `summary --aged` over-reported the drift of every real
-    history for exactly that reason.
+    ONE reader AND the only caller of `git log` in the tool, because the trap is not visible
+    from a call site: git terminates the `--format` line with a newline of its own, and `-z`
+    leaves that newline GLUED to the first token of the commit — the stream is `…<sha>\\0` +
+    `\\nsrc/a.ts\\0`. Read without stripping it, a file that comes first in one commit and
+    not in another is counted under two names, and `summary --aged` over-reported the drift
+    of every real history for exactly that reason. Two parsers of one stream is how that
+    happened: whoever wants records asks here, and nobody else has a marked stream to parse.
     """
-    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
     records: list[tuple[str, list[str]]] = []
-    for token in (t for t in out.split("\0") if t):
+    for token in git("log", f"--format={LOG_MARK}%H", *args).fields:
         if token.startswith(LOG_MARK):
             records.append((token[1:], []))
         elif records:
@@ -1095,14 +1136,13 @@ def commit_file_sets(since: str | None = None) -> list[set[str]]:
     records let the old name be translated into the current one. The log is walked
     newest-first, so a rename `old → new` seen at a commit renames everything OLDER than it.
     """
-    cmd = ["git", "-C", str(ROOT), "log", "--first-parent", "--no-merges", "--name-status",
-           "-z", "-M", f"--format={LOG_MARK}%H"]
+    args = ["--first-parent", "--no-merges", "--name-status", "-M"]
     if since:
-        cmd.append(f"--since={since}")
+        args.append(f"--since={since}")
     sets: list[set[str]] = []
     # old path -> the name that path bears today
     alias: dict[str, str] = {}
-    for _sha, tokens in log_records(cmd):
+    for _sha, tokens in log_records(*args):
         current: set[str] = set()
         renames: list[tuple[str, str]] = []   # (old, new) of the commit being read
         i = 0
@@ -1361,11 +1401,8 @@ def acceptance_of(b: dict) -> str:
 
 
 def git_head() -> tuple[str, str]:
-    sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True,
-                         text=True, check=False).stdout.strip()
-    branch = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
-                            capture_output=True, text=True, check=False).stdout.strip()
-    return sha, branch
+    return (git("rev-parse", "HEAD").out.strip(),
+            git("rev-parse", "--abbrev-ref", "HEAD").out.strip())
 
 
 def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
@@ -1466,17 +1503,13 @@ def cmd_summary(args) -> int:
             die(f"{path.name}: the machine block is not valid JSON ({exc}) — "
                 f"it is generated, not written by hand; regenerate it with `{CLI} summary`")
         base = machine["base"]
-        n = subprocess.run(["git", "-C", str(ROOT), "rev-list", "--count", f"{base}..HEAD"],
-                           capture_output=True, text=True, check=False).stdout.strip() or "0"
+        n = git("rev-list", "--count", f"{base}..HEAD").out.strip() or "0"
         print(T("aged_head", sha=base[:12], n=n))
         drift = []
         for bid, info in machine["blocks"].items():
             if not info.get("paths"):
                 continue
-            # `-z` and the commit marker: without them a non-ASCII path comes out C-quoted
-            # and the same file is counted under two names.
-            records = log_records(["git", "-C", str(ROOT), "log", f"--format={LOG_MARK}%H",
-                                   "--name-only", "-z", f"{base}..HEAD", "--", *info["paths"]])
+            records = log_records("--name-only", f"{base}..HEAD", "--", *info["paths"])
             files = {p for _sha, paths in records for p in paths}
             if records:
                 drift.append((len(records), len(files), bid, info.get("title", "")))
@@ -1507,18 +1540,17 @@ def review_refs() -> list[tuple[str, int, str, str]]:
     ids = sorted({f.get("id") for f in findings() if f.get("id")})
     if not ids:
         return []
-    # `-z`: git grep quotes a non-ASCII path (`"src/\320\274…"`) and separates fields with
-    # `:`, which a path may legitimately contain. With -z the record is
-    # path NUL line NUL text — raw, and unambiguous.
-    cmd = ["git", "-C", str(ROOT), "grep", "-z", "-n", "-I", "-w", "-F", "--full-name"]
+    # A grep record is `path NUL line NUL text` — raw and unambiguous, which is why the
+    # fields are read with `records` and not split on `:`, a character a path may hold.
+    args = ["grep", "-n", "-I", "-w", "-F", "--full-name"]
     for fid in ids:
-        cmd += ["-e", fid]
-    cmd += ["--", ".", ":(exclude)docs/review/**"]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+        args += ["-e", fid]
+    args += ["--", ".", ":(exclude)docs/review/**"]
     hits = []
-    for ln in out.splitlines():
-        path, _, rest = ln.partition("\0")
-        num, _, text = rest.partition("\0")
+    for record in git(*args).records:
+        # A record git prints short (no line number for some reason) is not worth a
+        # traceback: the fields that are there are read, the rest come out empty.
+        path, num, text = (record + ["", ""])[:3]
         for fid in ids:
             if re.search(rf"(?<![\w-]){re.escape(fid)}(?![\w-])", text):
                 hits.append((path, int(num) if num.isdigit() else 0, fid, text.strip()))
@@ -1790,15 +1822,14 @@ def report_path(b: dict, role: str, rnd: int = 1, scope: str | None = None) -> s
 
 def diff_text(rng: str) -> str:
     """The whole diff of a range, for the fix reviewer: it reads the diff, not a report about it."""
-    stat = subprocess.run(["git", "-C", str(ROOT), "diff", "--stat", rng],
-                          capture_output=True, text=True)
-    full = subprocess.run(["git", "-C", str(ROOT), "diff", rng], capture_output=True, text=True)
-    if full.returncode != 0:
-        die(f"git diff {rng}: {full.stderr.strip()}")
-    if not full.stdout.strip():
+    stat = git("diff", "--stat", rng)
+    full = git("diff", rng)
+    if full.code != 0:
+        die(f"git diff {rng}: {full.err.strip()}")
+    if not full.out.strip():
         die(f"diff {rng} is empty — the fix reviewer has nothing to read")
     # A fence of four backticks: triple ones occur inside a diff.
-    return f"{stat.stdout}\n````diff\n{full.stdout}\n````"
+    return f"{stat.out}\n````diff\n{full.out}\n````"
 
 
 def diff_volume(diff: str) -> str:
@@ -2553,8 +2584,7 @@ def cmd_backfill(args) -> int:
     """
     defn, st, rows = blocks(), state(), findings()
     idx = block_index(defn)
-    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-                          capture_output=True, text=True).stdout.strip() or "?"
+    head = git("rev-parse", "--short", "HEAD").out.strip() or "?"
     stamped_blocks, stamped_findings = [], []
     for bid, s in st["blocks"].items():
         if (s.get("status") in POST_VERIFY and bid in idx
@@ -2953,23 +2983,82 @@ def names_file(text: str, rel: str) -> bool:
                for line in text.split("\n") if (m := DIFF_HEADER.search(line)))
 
 
+class Refusals:
+    """Everything `check` has to say, and the one way for a gate to say it.
+
+    A gate is a mechanism that must not be removable in silence: CONTRIBUTING promises that
+    each one comes with a test, and the suite holds a table pairing every gate with the test
+    that reddens when it is disabled. For that table to be complete, the gates have to be
+    countable — and while a gate was "a line that appends to a list called `problems`", they
+    were not: a gate written in a helper whose parameter is called something else, or
+    accumulated with `extend`, or assigned, gave no name to pair, no test, and could be
+    deleted later with the whole suite green. Three rounds of review found that same shape
+    three times, in a new spelling each time.
+
+    So a refusal is a pair — the gate's KEY, which the call site writes itself, and the text
+    a human reads. The key is never printed: the user reads the message, and the key is what
+    the gate is called by the suite's table and by the mutation run that proves the table.
+    There is one container and two verbs, `refuse` (the state is wrong: exit 1) and `warn`
+    (worth a look, exit unchanged), so adding a gate anywhere in the tool means naming it.
+    """
+
+    def __init__(self) -> None:
+        self.said: list[tuple[bool, str, str]] = []      # (fatal, key, message)
+
+    def refuse(self, key: str, message: str) -> None:
+        """The state is wrong: `check` prints the message and exits 1."""
+        self.said.append((True, key, message))
+
+    def warn(self, key: str, message: str) -> None:
+        """Worth a human's eye, but not a red state: printed, exit code unchanged."""
+        self.said.append((False, key, message))
+
+    @property
+    def problems(self) -> list[str]:
+        return [m for fatal, _, m in self.said if fatal]
+
+    @property
+    def warnings(self) -> list[str]:
+        return [m for fatal, _, m in self.said if not fatal]
+
+    def report(self) -> int:
+        """Print what the gates said and give `check` its exit code.
+
+        The code is computed here and nowhere else: a gate that printed its own refusal and
+        returned by itself would be outside every table that counts them.
+        """
+        if self.warnings:
+            print("WARNINGS (do not fail the check):\n")
+            for w in self.warnings:
+                print(f"  · {w}")
+            print()
+        if self.problems:
+            print("CHECK FAILED:\n")
+            for p in self.problems:
+                print(f"  · {p}")
+            return 1
+        print("review state is consistent")
+        return 0
+
+
 def cmd_check(args) -> int:
     defn, st, rows = blocks(), state(), findings()
     idx = block_index(defn)
-    problems: list[str] = []
-    warnings: list[str] = []
+    gates = Refusals()
 
     # 1. state and definition agree
     for bid in idx:
         if bid not in st["blocks"]:
-            problems.append(f"{bid}: no record in state.json — run `{CLI} init`")
+            gates.refuse("state/no-record", f"{bid}: no record in state.json — run `{CLI} init`")
     for bid in st["blocks"]:
         if bid not in idx:
-            problems.append(f"{bid}: present in state.json but missing from blocks.json")
+            gates.refuse("state/block-not-in-definition",
+                         f"{bid}: present in state.json but missing from blocks.json")
         # `set-status` checked the vocabulary, but nobody checked what was written in by hand.
         status = st["blocks"][bid].get("status")
         if status not in STATUSES:
-            problems.append(f"{bid}: status '{status}' is not in the vocabulary — written in past set-status")
+            gates.refuse("state/status-unknown",
+                         f"{bid}: status '{status}' is not in the vocabulary — written in past set-status")
 
     # Array order is execution order, and the phases must not decrease: a phase-3 block
     # written in between the first and the second, `next` hands out ahead of time, and
@@ -2978,7 +3067,8 @@ def cmd_check(args) -> int:
     for b in defn["blocks"]:
         ph = b.get("phase")
         if prev is not None and ph is not None and ph < prev:
-            problems.append(
+            gates.refuse(
+                "blocks/phase-order",
                 f"{b['id']}: phase {ph} comes after phase {prev} — the blocks array is ordered by "
                 f"phase, because that is the execution order"
             )
@@ -2987,7 +3077,8 @@ def cmd_check(args) -> int:
     # what it is waiting for.
     for bid, s in st["blocks"].items():
         if s.get("status") == "blocked" and not (s.get("note") or "").strip():
-            problems.append(f"{bid}: blocked without a note — waiting for what? `{CLI} set-status {bid} blocked --note '...'`")
+            gates.refuse("state/blocked-without-note",
+                         f"{bid}: blocked without a note — waiting for what? `{CLI} set-status {bid} blocked --note '...'`")
 
     # The manifest is asked only of a block that GOT to work: the manifest is written
     # before its block, and demanding it of all at once fails the check always — then it
@@ -2997,10 +3088,11 @@ def cmd_check(args) -> int:
             continue
         manifest = manifest_path(b)
         if not manifest.exists():
-            problems.append(f"{bid}: no manifest {manifest.relative_to(ROOT)}")
+            gates.refuse("manifest/missing", f"{bid}: no manifest {manifest.relative_to(ROOT)}")
         elif len(manifest.read_text(encoding="utf-8").strip()) < MANIFEST_MIN_CHARS:
             # An empty file passed the "manifest exists" check.
-            problems.append(f"{bid}: manifest {manifest.relative_to(ROOT)} is empty or nearly empty")
+            gates.refuse("manifest/too-short",
+                         f"{bid}: manifest {manifest.relative_to(ROOT)} is empty or nearly empty")
 
     # A block declared verified or closed must produce the VERIFIER's report.
     # Otherwise `set-status closed` closes a block with the hunter's report alone,
@@ -3010,18 +3102,20 @@ def cmd_check(args) -> int:
         if stt in POST_VERIFY:
             rep = REVIEW / "reports" / f"{b['id']}-{b['slug']}.verify.md"
             if not rep.exists():
-                problems.append(
+                gates.refuse(
+                    "report/verify-missing",
                     f"{b['id']}: status {stt}, but there is no verifier report — "
                     f"the verification rests on the agent's own word"
                 )
             elif why := verify_report_problem(rep, any(f.get("block") == b["id"] for f in rows)):
-                problems.append(f"{b['id']}: {why}")
+                gates.refuse("report/verify-weak", f"{b['id']}: {why}")
 
     # 3. declared reports exist
     for bid, s in st["blocks"].items():
         for r in s.get("reports", []):
             if not (ROOT / r).exists():
-                problems.append(f"{bid}: state.json declares report {r}, which is not on disk")
+                gates.refuse("report/declared-missing",
+                             f"{bid}: state.json declares report {r}, which is not on disk")
 
     # 4. a block cannot be past `running` without a hunter report
     for b in defn["blocks"]:
@@ -3029,25 +3123,29 @@ def cmd_check(args) -> int:
         if s.get("status") in ("hunted", "verified", "triaged", "fixing", "closed"):
             hunter = REVIEW / "reports" / f"{b['id']}-{b['slug']}.hunter.md"
             if not hunter.exists():
-                problems.append(
+                gates.refuse(
+                    "report/hunter-missing",
                     f"{b['id']}: status {s['status']}, but there is no hunter report — the status is not backed by work"
                 )
 
     # 5. a session that died mid-block
     for bid, s in st["blocks"].items():
         if s.get("status") == "running" and not s.get("started"):
-            problems.append(f"{bid}: stuck in running without a timestamp — when it started is unknown")
+            gates.refuse("state/running-without-timestamp",
+                         f"{bid}: stuck in running without a timestamp — when it started is unknown")
         if s.get("status") == "running" and s.get("started"):
             try:
                 started = dt.datetime.strptime(s["started"], "%Y-%m-%dT%H:%M:%SZ").replace(
                     tzinfo=dt.timezone.utc
                 )
             except ValueError:
-                problems.append(f"{bid}: timestamp '{s['started']}' cannot be parsed")
+                gates.refuse("state/timestamp-unparsable",
+                             f"{bid}: timestamp '{s['started']}' cannot be parsed")
                 continue
             hours = (dt.datetime.now(dt.timezone.utc) - started).total_seconds() / 3600
             if hours > STALE_RUNNING_HOURS:
-                problems.append(
+                gates.refuse(
+                    "state/running-too-long",
                     f"{bid}: stuck in running for {hours:.0f} h — the session probably died; restart the block"
                 )
 
@@ -3057,32 +3155,38 @@ def cmd_check(args) -> int:
     for f in rows:
         fid = f.get("id", "<no id>")
         if fid in seen_ids:
-            problems.append(f"finding {fid}: duplicate id")
+            gates.refuse("finding/duplicate-id", f"finding {fid}: duplicate id")
         seen_ids.add(fid)
         for field in ("id", "block", "severity", "confidence", "status", "file", "claim", "scenario"):
             if not f.get(field):
-                problems.append(f"finding {fid}: field {field} is empty")
+                gates.refuse("finding/empty-field", f"finding {fid}: field {field} is empty")
         if f.get("block") not in idx:
-            problems.append(f"finding {fid}: refers to nonexistent block {f.get('block')}")
+            gates.refuse("finding/unknown-block",
+                         f"finding {fid}: refers to nonexistent block {f.get('block')}")
         if f.get("severity") not in SEVERITIES:
-            problems.append(f"finding {fid}: severity={f.get('severity')} is not in the vocabulary")
+            gates.refuse("finding/severity-unknown",
+                         f"finding {fid}: severity={f.get('severity')} is not in the vocabulary")
         if f.get("confidence") not in CONFIDENCE:
-            problems.append(f"finding {fid}: confidence={f.get('confidence')} is not in the vocabulary")
+            gates.refuse("finding/confidence-unknown",
+                         f"finding {fid}: confidence={f.get('confidence')} is not in the vocabulary")
         if f.get("status") not in FINDING_STATUS:
-            problems.append(f"finding {fid}: status={f.get('status')} is not in the vocabulary")
+            gates.refuse("finding/status-unknown",
+                         f"finding {fid}: status={f.get('status')} is not in the vocabulary")
         # Only open and deferred findings must point at a live file: a fixed finding is
         # history, and renaming the file after the fix does not make it false. The check
         # used to demand the file for any status and stayed red on history forever.
         if (f.get("status") in ("open", "deferred") and f.get("file")
                 and f["file"] not in tracked and not f["file"].startswith("(")):
-            problems.append(f"finding {fid}: file {f['file']} is not in the repository")
+            gates.refuse("finding/file-missing",
+                         f"finding {fid}: file {f['file']} is not in the repository")
         # A deferred finding does not count as open and therefore survives the whole
         # review unnoticed. The reason is what turns it from silence into a decision: the
         # summary publishes deferred findings as accepted risks, by that reason and no
         # other text. The message used to demand that every deferral be resolved before
         # the end, which is not what the tool holds and not what the summary does with it.
         if f.get("status") == "deferred" and not (f.get("defer_reason") or "").strip():
-            problems.append(
+            gates.refuse(
+                "finding/deferred-without-reason",
                 f"finding {fid}: deferred without a reason — `{CLI} set-finding {fid} deferred "
                 f"--reason '...'`; a deferral is an accepted risk, and the summary publishes it by that reason"
             )
@@ -3093,7 +3197,8 @@ def cmd_check(args) -> int:
             # does not exist; that is what happened with the finding about the other core.
             repo, _, sha = str(f["fix_commit"]).partition(":")
             if not repo or not sha:
-                problems.append(
+                gates.refuse(
+                    "finding/external-fix-malformed",
                     f"finding {fid}: an external fix is written as `<repository>:<commit>`"
                 )
         elif f.get("status") == "fixed" and f.get("fix_commit"):
@@ -3101,34 +3206,36 @@ def cmd_check(args) -> int:
             # neighbouring project pointed at a commit that did not touch the named file at
             # all: the fix was made in another module, and the record stayed as it was. By
             # hand nobody checks that — and nobody did for half a year.
-            # `-z`: without it git C-quotes a non-ASCII path (`"src/\320\274…"`) and no
-            # finding on a Cyrillic-named file could ever be marked fixed — the gate stayed
-            # red on a truthful state for ever. Paths are compared as git prints them with
-            # `ls-files -z`, that is raw and NUL-separated.
-            touched = subprocess.run(
-                ["git", "-C", str(ROOT), "show", "--name-only", "-z", "--format=", f["fix_commit"]],
-                capture_output=True, text=True,
-            )
-            if touched.returncode != 0:
-                problems.append(f"finding {fid}: commit {f['fix_commit']} is not in the repository")
-            elif f.get("file") and not ({f["file"], *f.get("fixed_in", [])}
-                                        & {p for p in touched.stdout.split("\0") if p}):
-                problems.append(
+            # The paths are compared as git prints them for `ls-files`: raw and
+            # NUL-separated. C-quoted, a Cyrillic name matched nothing, and no finding on
+            # such a file could ever be marked fixed — the gate stayed red on a truthful
+            # state for ever.
+            touched = git("show", "--name-only", "--format=", f["fix_commit"])
+            if touched.code != 0:
+                gates.refuse("finding/commit-missing",
+                             f"finding {fid}: commit {f['fix_commit']} is not in the repository")
+            elif f.get("file") and not ({f["file"], *f.get("fixed_in", [])} & set(touched.fields)):
+                gates.refuse(
+                    "finding/commit-does-not-touch",
                     f"finding {fid}: commit {f['fix_commit']} does not touch {f['file']} — "
                     f"either the mark belongs to another finding, or the fix was made elsewhere: "
                     f"then name it (`{CLI} set-finding {fid} fixed --commit <sha> "
                     f"--fixed-in <path>`)"
                 )
         if f.get("status") == "fixed" and not f.get("fix_commit"):
-            problems.append(f"finding {fid}: marked fixed, but no fix commit is given")
+            gates.refuse("finding/fixed-without-commit",
+                         f"finding {fid}: marked fixed, but no fix commit is given")
         if f.get("status") == "duplicate" and not f.get("dup_of"):
-            problems.append(f"finding {fid}: marked duplicate, but not of what exactly")
+            gates.refuse("finding/duplicate-without-target",
+                         f"finding {fid}: marked duplicate, but not of what exactly")
         elif f.get("status") == "duplicate" and (why := dup_problem(fid, f["dup_of"], rows)):
-            problems.append(why)
+            gates.refuse("finding/duplicate-target-unusable", why)
         if f.get("confidence") == "rejected" and f.get("status") == "open":
-            problems.append(f"finding {fid}: rejected by the verifier, but still open")
+            gates.refuse("finding/rejected-but-open",
+                         f"finding {fid}: rejected by the verifier, but still open")
         if f.get("status") == "rejected" and f.get("confidence") != "rejected":
-            problems.append(
+            gates.refuse(
+                "finding/rejected-without-confidence",
                 f"finding {fid}: status rejected but confidence {f.get('confidence')} — "
                 f"the register claims 'rejected' and 'not rejected' at once"
             )
@@ -3137,14 +3244,16 @@ def cmd_check(args) -> int:
         # moved makes the next pass argue with nonexistent code.
         if (f.get("status") in ("open", "deferred") and not f.get("code_sha")
                 and file_sha(f.get("file", ""))):
-            problems.append(
+            gates.refuse(
+                "finding/no-code-fingerprint",
                 f"finding {fid}: no code fingerprint — changes in {f.get('file')} under it are not "
                 f"tracked; `{CLI} backfill`"
             )
         if f.get("status") in ("open", "deferred") and f.get("code_sha"):
             fresh = file_sha(f.get("file", ""))
             if fresh and fresh != f["code_sha"]:
-                problems.append(
+                gates.refuse(
+                    "finding/code-changed",
                     f"finding {fid}: code in {f.get('file')} changed since import — "
                     f"re-check: either it is already closed (`{CLI} set-finding {fid} fixed "
                     f"--commit <sha>`), or the description is stale, or the defect is still there "
@@ -3160,14 +3269,16 @@ def cmd_check(args) -> int:
         # quoted one silently, which is worse than having no gate.
         if f.get("line") is not None and (isinstance(f["line"], bool)
                                           or not isinstance(f["line"], int)):
-            problems.append(
+            gates.refuse(
+                "finding/line-not-a-number",
                 f"finding {fid}: line={f['line']!r} is not a number — write the line as a "
                 f"number without quotes, or leave the field out"
             )
         elif f.get("status") in ("open", "deferred") and f.get("line"):
             n = file_lines(f.get("file", ""))
             if n is not None and f["line"] > n:
-                problems.append(
+                gates.refuse(
+                    "finding/line-past-end",
                     f"finding {fid}: line {f['line']} is cited, but {f.get('file')} has {n}"
                 )
         # A rejected finding stays in the register for the sake of the reject reason —
@@ -3182,18 +3293,21 @@ def cmd_check(args) -> int:
             said = (f.get("reject_reason") or "").strip() or (
                 claim if re.match(r"отвергнут|отклонен|отклонён|не подтверд|rejected|not confirmed", claim, re.I) else "")
             if not said:
-                problems.append(
+                gates.refuse(
+                    "finding/rejected-without-reason",
                     f"finding {fid}: rejected, but the reject reason is not recorded — "
                     f"`{CLI} set-finding {fid} rejected --reason '...'` or a claim that starts "
                     f"with 'Rejected: …' (in the review language)"
                 )
         if len(f.get("claim") or "") > CLAIM_MAX:
-            problems.append(
+            gates.refuse(
+                "finding/claim-too-long",
                 f"finding {fid}: claim is {len(f['claim'])} characters against a limit of {CLAIM_MAX} — "
                 "it is a headline for the summary table, the evidence goes into the block report"
             )
         if len(f.get("scenario") or "") > SCENARIO_MAX:
-            problems.append(
+            gates.refuse(
+                "finding/scenario-too-long",
                 f"finding {fid}: scenario is {len(f['scenario'])} characters against a limit of {SCENARIO_MAX}"
             )
 
@@ -3203,7 +3317,8 @@ def cmd_check(args) -> int:
     #    two is the newer truth.
     if FINDINGS_MD.exists():
         if FINDINGS_MD.read_text(encoding="utf-8") != render_findings_md(rows):
-            problems.append(f"findings.md diverged from findings.jsonl — run `{CLI} findings`")
+            gates.refuse("findings-md/stale",
+                         f"findings.md diverged from findings.jsonl — run `{CLI} findings`")
 
     # 8. a pattern that matches nothing silently shrinks a block's scope: the
     #    manifest promises to read code that was never handed to the agent.
@@ -3213,13 +3328,15 @@ def cmd_check(args) -> int:
                 if not git_files([spec]):
                     untracked = untracked_files([spec])
                     if untracked:
-                        problems.append(
+                        gates.refuse(
+                            "paths/only-untracked",
                             f"{b['id']}: {key} pattern `{spec}` matches only untracked files "
                             f"({len(untracked)}) — the tool sees the index, not the disk: "
                             f"`git add -- {spec}`"
                         )
                     else:
-                        problems.append(
+                        gates.refuse(
+                            "paths/matches-nothing",
                             f"{b['id']}: {key} pattern `{spec}` matches no file — "
                             "the block silently shrank"
                         )
@@ -3227,7 +3344,8 @@ def cmd_check(args) -> int:
     # 9. coverage
     _, _, unassigned = coverage_map()
     if unassigned:
-        problems.append(f"{len(unassigned)} files belong to no block — `{CLI} coverage`")
+        gates.refuse("coverage/unowned-files",
+                     f"{len(unassigned)} files belong to no block — `{CLI} coverage`")
 
     # The coverage map on disk must match the recount: otherwise the consumer reads
     # yesterday's ownership and does not know it. That is exactly how it diverged —
@@ -3242,7 +3360,8 @@ def cmd_check(args) -> int:
             if ln.strip() and not ln.startswith("#") and ln != "file\tblocks"
         }
         if fresh != on_disk:
-            problems.append(
+            gates.refuse(
+                "coverage/stale",
                 f"coverage.tsv is stale: {len(on_disk)} lines on disk, "
                 f"the recount gives {len(fresh)} — run `{CLI} coverage`"
             )
@@ -3257,7 +3376,8 @@ def cmd_check(args) -> int:
         manifest = manifest_path(b)
         ids = hypotheses(b["id"], manifest)
         if not ids:
-            problems.append(
+            gates.refuse(
+                "manifest/no-hypotheses",
                 f"{b['id']}: the manifest has no hypotheses — such a block yields a review "
                 f"'by general impression'; a 'Hypotheses' section, one item per hypothesis"
             )
@@ -3268,14 +3388,16 @@ def cmd_check(args) -> int:
             rp = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
             if rp.exists():
                 for h, vs in verdict_conflicts(rp.read_text(encoding="utf-8"), b["id"]).items():
-                    problems.append(
+                    gates.refuse(
+                        "report/verdicts-conflict",
                         f"{b['id']}: {rp.name} gives hypothesis {h} different verdicts "
                         f"({' / '.join(vs)}) — the outcome would depend on line order; leave one"
                     )
         seen = verdicts_for(b)
         missing = [h for h in ids if h not in seen]
         if missing:
-            problems.append(
+            gates.refuse(
+                "report/hypothesis-without-verdict",
                 f"{b['id']}: {len(missing)} of {len(ids)} hypotheses without a verdict "
                 f"({', '.join(missing[:5])}{'…' if len(missing) > 5 else ''}) — "
                 f"each is closed with the word 'checked', 'not checked' or 'not applicable'"
@@ -3292,13 +3414,15 @@ def cmd_check(args) -> int:
             # Skipping silently is not allowed: then any edit to such a block's files passes
             # unnoticed while the check stays green. That was the case for every block
             # verified before the fingerprint appeared.
-            problems.append(
+            gates.refuse(
+                "state/no-reviewed-fingerprint",
                 f"{b['id']}: block in status {s.get('status')} without a fingerprint of what was reviewed — "
                 f"edits to its files are not tracked; `{CLI} backfill` or `{CLI} restamp {b['id']}`"
             )
             continue
         if changed_since_review(b, s["reviewed_sha"]):
-            problems.append(
+            gates.refuse(
+                "state/files-changed",
                 f"{b['id']}: block files changed after the review — the block is closed on another "
                 f"version of the code; re-run it or, if the edits do not concern the block's subject, "
                 f"re-stamp: `{CLI} restamp {b['id']}`"
@@ -3310,19 +3434,23 @@ def cmd_check(args) -> int:
         # without looking — then the fingerprint of the block's own files stops working too.
         if b.get("ref_paths"):
             if not s.get("refs_sha"):
-                warnings.append(f"{b['id']}: no context fingerprint (ref_paths) — `{CLI} backfill`")
+                gates.warn("state/no-refs-fingerprint",
+                           f"{b['id']}: no context fingerprint (ref_paths) — `{CLI} backfill`")
             elif s["refs_sha"] != refs_sha(b):
-                warnings.append(
+                gates.warn(
+                    "state/refs-changed",
                     f"{b['id']}: context files (ref_paths) changed after verification — "
                     f"if the block's conclusions leaned on them, re-check; otherwise `{CLI} restamp {b['id']}`"
                 )
         if not s.get("hypotheses_sha"):
-            problems.append(
+            gates.refuse(
+                "state/no-hypotheses-fingerprint",
                 f"{b['id']}: no hypotheses fingerprint — an edit of the manifest after verification is not "
                 f"tracked; `{CLI} backfill`"
             )
         elif s["hypotheses_sha"] != hypotheses_sha(b):
-            problems.append(
+            gates.refuse(
+                "state/hypotheses-changed",
                 f"{b['id']}: manifest hypotheses changed after verification — the verdicts by "
                 f"number were given to the previous questions; re-check the new ones or, if the "
                 f"meaning did not change, re-stamp: `{CLI} restamp {b['id']}`"
@@ -3350,7 +3478,8 @@ def cmd_check(args) -> int:
             )
             missing = [f for f in owned if not names_file(text, f)]
             if missing:
-                problems.append(
+                gates.refuse(
+                    "report/files-not-named",
                     f"{b['id']}: {len(missing)} of {len(owned)} block files are not named by full "
                     f"path in any report ({', '.join(missing[:4])}{'…' if len(missing) > 4 else ''}) "
                     f"— what was not read is named by path in 'Coverage limits', what was read — "
@@ -3366,7 +3495,8 @@ def cmd_check(args) -> int:
             continue
         if any(f.get("block") == b["id"] and f.get("status") == "fixed" for f in rows):
             if not list((REVIEW / "reports").glob(f"{b['id']}-{b['slug']}.fixreview-*.md")):
-                problems.append(
+                gates.refuse(
+                    "state/closed-without-fix-review",
                     f"{b['id']}: closed with fixed findings, but there is no fix reviewer report — "
                     f"`{CLI} prompt {b['id']} --role fixreview --diff <range>`"
                 )
@@ -3381,7 +3511,8 @@ def cmd_check(args) -> int:
         if hunter.exists():
             body = section_body(hunter.read_text(encoding="utf-8"), LIMITS_HEADING, "quoted")
             if body is None:
-                problems.append(
+                gates.refuse(
+                    "report/no-coverage-limits",
                     f"{b['id']}: the hunter report has no 'Coverage limits' section outside a "
                     f"fence or a quotation — what was deliberately not read and why, as the "
                     f"report's own heading (a heading inside an example, or after a fence that "
@@ -3392,7 +3523,8 @@ def cmd_check(args) -> int:
                 # A heading without text is the same silence as no heading: neither what
                 # was not reviewed is named, nor that there is nothing of the kind. A
                 # section holding only the template's fenced example is that same silence.
-                problems.append(
+                gates.refuse(
+                    "report/empty-coverage-limits",
                     f"{b['id']}: the 'Coverage limits' section of the hunter report is empty — "
                     f"name what was not read or say outright that there is nothing, as an "
                     f"ordinary line and not inside a fence or a quotation"
@@ -3408,10 +3540,11 @@ def cmd_check(args) -> int:
         if rules:
             for r in sorted(rules):
                 if why := rule_problem(r):
-                    problems.append(f"root '{root}': {why}")
+                    gates.refuse("root/guard-unusable", f"root '{root}': {why}")
             continue
         ids = ", ".join(f.get("id", "?") for f in items[:4])
-        problems.append(
+        gates.refuse(
+            "root/no-guard",
             f"root '{root}': {len(items)} instances ({ids}) and no guard — "
             f"a class that repeated {ROOT_RULE_AT} times is closed by a rule, not by a list of "
             f"fixes; record which: `{CLI} set-finding <ID> <status> --rule <path-to-guard>`"
@@ -3421,11 +3554,12 @@ def cmd_check(args) -> int:
     # pass describe code that no longer exists, and "confirmed by execution" sounds just as
     # convincing as on a fresh tree.
     if inert := freshness_inert():
-        warnings.append(f"the freshness gate is not running: {inert}")
+        gates.warn("freshness/inert", f"the freshness gate is not running: {inert}")
     stale = stale_tree()
     if stale:
         days, ref = stale
-        problems.append(
+        gates.refuse(
+            "freshness/tree-behind",
             f"the tree is behind {ref} by {days:.0f} days — the findings of such a pass may "
             f"describe what is already fixed; `git fetch` and compare with {ref} before "
             f"filing them"
@@ -3436,7 +3570,8 @@ def cmd_check(args) -> int:
         if not b.get("paths"):
             continue
         if b.get("proof", "read") not in PROOFS:
-            problems.append(f"{bid}: proof '{b.get('proof')}' is not in the vocabulary: {', '.join(PROOFS)}")
+            gates.refuse("blocks/proof-unknown",
+                         f"{bid}: proof '{b.get('proof')}' is not in the vocabulary: {', '.join(PROOFS)}")
             continue
         # The ceiling is a promise to read in full; a measured block makes no such promise.
         if b.get("proof", "read") == "measured":
@@ -3444,7 +3579,8 @@ def cmd_check(args) -> int:
         n, lines = block_lines(b["paths"])
         limit = readable_lines()
         if lines > limit:
-            problems.append(
+            gates.refuse(
+                "blocks/too-big-to-read",
                 f"{bid}: {n} files, {lines} lines — cannot be read in one session "
                 f"(ceiling {limit}). Split the block, or the report will lie about coverage"
             )
@@ -3452,27 +3588,18 @@ def cmd_check(args) -> int:
     refs = review_refs()
     if refs:
         sample = ", ".join(f"{p}:{n} ({fid})" for p, n, fid, _ in refs[:4])
-        warnings.append(f"{len(refs)} reference(s) to findings in the code: {sample} — the ids die "
-                        f"with docs/review/; `{CLI} refs` lists them")
+        gates.warn("refs/findings-named-in-code",
+                   f"{len(refs)} reference(s) to findings in the code: {sample} — the ids die "
+                   f"with docs/review/; `{CLI} refs` lists them")
     old = open_findings_age(findings())
     if old:
         oldest = max(age for _, age in old)
         sample = ", ".join(f"{f.get('id')} ({age}d)" for f, age in sorted(old, key=lambda x: -x[1])[:5])
-        warnings.append(f"{len(old)} open finding(s) older than {FIX_AGE_DAYS} days (oldest {oldest}d): "
-                        f"{sample} — fix debt: fix, defer with a reason or reject; a register that "
-                        f"outlives the code it describes stops being true")
-    if warnings:
-        print("WARNINGS (do not fail the check):\n")
-        for w in warnings:
-            print(f"  · {w}")
-        print()
-    if problems:
-        print("CHECK FAILED:\n")
-        for p in problems:
-            print(f"  · {p}")
-        return 1
-    print("review state is consistent")
-    return 0
+        gates.warn("findings/fix-debt-age",
+                   f"{len(old)} open finding(s) older than {FIX_AGE_DAYS} days (oldest {oldest}d): "
+                   f"{sample} — fix debt: fix, defer with a reason or reject; a register that "
+                   f"outlives the code it describes stops being true")
+    return gates.report()
 
 
 # ---------------------------------------------------------------------------- log
