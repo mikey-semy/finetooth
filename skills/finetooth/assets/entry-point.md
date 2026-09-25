@@ -9,7 +9,7 @@ session that knows nothing runs one command and sees the full picture.
 {{CLI}} coverage                   # the file → block map; fails if a file is unowned
 {{CLI}} check                      # the state is consistent
 {{CLI}} hypotheses H1              # which of the block's hypotheses are closed
-{{CLI}} roots                      # defect classes: how many instances, what closes each
+{{CLI}} roots                      # defect classes: how many instances, which guard each carries
 {{CLI}} prompt H1 --role hunter    # a ready prompt for an agent
 ```
 
@@ -50,7 +50,8 @@ session that knows nothing runs one command and sees the full picture.
    round is `--role fix --round N`: without the flag the second fixer's report overwrites
    the first one's. Findings are moved with `set-finding <ID…> fixed --commit <sha>`, and a
    defect class with a third instance is closed by a guard (`--rule <path to the test or
-   rule>`), not by a list of fixes.
+   rule>`), not by a list of fixes. The guard is recorded only on the findings named in the
+   command; `roots` shows which guard each instance carries.
    **The fix gate:** `set-status <next ID> running` refuses while findings at the `fix_gate`
    severity or above (`high` by default, set in `blocks.json`) are still open in the blocks
    already passed — the method finds faster than a project fixes. `status` shows that debt

@@ -98,6 +98,9 @@ by violation / what was reproduced live. Honestly about what you did not do.
 **Root:** a short name of the defect class if it is not the only one of its kind — one
 phrase, the same for every instance. It goes into the register as the `root` field of the
 finding; from the third instance the state check demands the class be closed by a guard.
+A guard is recorded per finding, not per root: check in `roots` that each guard the fixer
+recorded goes red on the defect of every finding it is recorded on — a guard green on one of
+them is a finding.
 
 ## Checked and found correct
 Fixes that looked suspicious but turned out to be right — with an explanation.
