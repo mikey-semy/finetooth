@@ -2630,8 +2630,14 @@ class ParallelKitLessonsTest(unittest.TestCase):
                       "выход из положения — тот флаг, который дифф действительно уменьшает")
         part = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...{middle}")
         self.assertEqual(part.returncode, 0, part.stderr)
-        self.assertLess(len(part.stdout), len(whole.stdout) * 3 // 4,
+        self.assertLess(len(part.stdout), len(whole.stdout),
                         "названный выход обязан уменьшать промпт, а не переименовывать отчёт")
+        # Доля меряется на вклеенном диффе, а не на всём промпте: неизменная часть шаблона
+        # растёт с каждым правилом, и доля от целого краснела, когда шаблон получил правило
+        # о коммитах проекта, хотя дифф по-прежнему делился пополам.
+        pasted = lambda out: out.stdout.split("````diff", 1)[1]
+        self.assertLess(len(pasted(part)), len(pasted(whole)) * 3 // 4,
+                        "более узкий диапазон вклеивает меньше диффа")
         # Вторая сторона: `--scope` остаётся тем, чем был, — делит ответственность за
         # отчёт, и сообщение больше не выдаёт его за способ уменьшить чтение.
         scoped = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD",
@@ -8838,6 +8844,121 @@ class TemplateContractTest(unittest.TestCase):
                 suffix = ".md" if not lang else f".{lang}.md"
                 self.assertTrue((SKILL / "references" / f"{role}{suffix}").exists(),
                                 f"{role}{suffix}")
+
+
+class CommitRulesTest(unittest.TestCase):
+    """Правила коммитов проекта — в задании исполнителя и ревьюера правок (see #33).
+
+    Шаблон исполнителя велел коммитить каждую правку и молчал о том, что у проекта свои
+    правила коммитов: в ревью самого набора исполнители сделали двенадцать коммитов без
+    `Signed-off-by`, джоба `dco` их отвергла, и PR стоял, пока историю не переписали.
+    Требование ищется в файлах проекта и подставляется `{{COMMIT_RULES}}` в шаблоны обеих
+    ролей, что коммитят и что проверяют коммиты, на обоих языках.
+    """
+
+    SAID = {"ru": ("Проект требует подпись DCO", "правил коммитов проекта не найдено"),
+            "en": ("The project requires a DCO sign-off", "no commit rules of the project were found")}
+
+    def setUp(self) -> None:
+        self._fresh()
+
+    def _fresh(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _stand(self, lang: str = "ru", **files: str) -> str:
+        """Блок и, по желанию, файлы правил проекта; возвращает диапазон одной правки."""
+        self.s.write("src/one.ts", "a\n")
+        for rel, text in files.items():
+            self.s.write(rel.replace("__", "/"), text)
+        self.s.blocks(paths=["src/one.ts"], lang=lang)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\nпочинено\n")
+        self.s.commit("починка")
+        self.s.run("init")
+        return f"{base}...HEAD"
+
+    def _prompt(self, role: str, rng: str) -> str:
+        args = ("prompt", "H1", "--role", role) + (("--diff", rng) if role == "fixreview" else ())
+        out = self.s.run(*args)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("{{", out.stdout.split("````diff")[0], "все подстановки заполнены")
+        return out.stdout
+
+    def test_скрипт_dco_даёт_исполнителю_требование_подписи_на_обоих_языках(self):
+        for lang in ("ru", "en"):
+            with self.subTest(язык=lang):
+                self._fresh()
+                rng = self._stand(lang, **{".github__dco.sh": "#!/bin/sh\nexit 0\n"})
+                fix = self._prompt("fix", rng)
+                self.assertIn(self.SAID[lang][0], fix, "требование подписи в задании")
+                self.assertIn("`.github/dco.sh`", fix, "названо, откуда оно взято")
+                self.assertNotIn(self.SAID[lang][1], fix)
+
+    def test_ревьюер_правок_прогоняет_проверку_коммитов_проекта_по_диапазону(self):
+        for lang in ("ru", "en"):
+            with self.subTest(язык=lang):
+                self._fresh()
+                rng = self._stand(lang, **{".github__dco.sh": "#!/bin/sh\nexit 0\n"})
+                review = self._prompt("fixreview", rng).split("````diff")[0]
+                self.assertIn(self.SAID[lang][0], review)
+                self.assertIn(f"`.github/dco.sh {rng}`", review,
+                              "проверка названа готовой командой по диапазону диффа")
+
+    def test_без_признаков_dco_нейтральная_строка_и_ни_слова_о_подписи(self):
+        """Обратная сторона: проект без DCO не получает требования, которого у него нет, —
+        лишний `-s` безвреден, но задание, придумывающее проекту правила, учит агента не
+        верить заданию. Файл для участников при этом назван: смотреть надо в него."""
+        rng = self._stand(**{"CONTRIBUTING.md": "Пишите тесты.\n"})
+        for role in ("fix", "fixreview"):
+            with self.subTest(роль=role):
+                out = self._prompt(role, rng).split("````diff")[0]
+                self.assertIn(self.SAID["ru"][1], out)
+                self.assertIn("`CONTRIBUTING.md`", out)
+                self.assertNotIn(self.SAID["ru"][0], out)
+
+    def test_требование_в_документах_или_в_ci_узнаётся_без_скрипта(self):
+        """DCO, заявленный словами в CONTRIBUTING, экшеном в CI или конфигом бота."""
+        cases = {"CONTRIBUTING.md": "Every commit carries Signed-off-by (git commit -s).\n",
+                 ".github__workflows__ci.yml": "jobs:\n  sign:\n    steps:\n"
+                                               "      - uses: tim-actions/dco@v1\n",
+                 ".github__dco.yml": "require:\n  members: false\n",
+                 "AGENTS.md": "Commits follow the Developer Certificate of Origin.\n"}
+        for rel, text in cases.items():
+            with self.subTest(файл=rel):
+                self._fresh()
+                rng = self._stand(**{rel: text})
+                name = rel.replace("__", "/")
+                self.assertIn(self.SAID["ru"][0], self._prompt("fix", rng))
+                review = self._prompt("fixreview", rng).split("````diff")[0]
+                self.assertIn(f"`{name}`", review)
+                self.assertIn("trailers:key=Signed-off-by", review,
+                              "без своего скрипта ревьюер читает подписи из git log")
+                self.assertNotIn(f".github/dco.sh {rng}", review, "скрипта, которого нет, не зовут")
+
+    def test_правило_стоит_в_шаблонах_и_без_находки_инструмента(self):
+        """Подстановка говорит, что нашлось; правило — что делать, когда не нашлось ничего, а
+        проект всё равно чего-то требует: прочитать правила до первого коммита (исполнитель)
+        и прогнать проверку коммитов по диапазону (ревьюер правок)."""
+        refs = SKILL / "references"
+        said = {"fix.md": ("before the first commit read", "`git commit -s`",
+                           "not whatever global git identity"),
+                "fix.ru.md": ("до первого коммита прочитай", "`git commit -s`",
+                              "не под случайной глобальной идентичностью"),
+                "fixreview.md": ("`.github/dco.sh <range>`", "run it over the diff range"),
+                "fixreview.ru.md": ("`.github/dco.sh <диапазон>`", "прогони её по диапазону диффа")}
+        for name, rules in said.items():
+            text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8")).lower()
+            for rule in rules:
+                with self.subTest(шаблон=name, правило=rule):
+                    self.assertIn(rule.lower(), text, f"{name}: правило снято из шаблона")
+
+    def test_охотник_правил_коммитов_не_получает(self):
+        """Охотник не коммитит: подстановки нет в его шаблоне, и файлы проекта не читаются."""
+        rng = self._stand(**{".github__dco.sh": "#!/bin/sh\n"})
+        self.assertNotIn(self.SAID["ru"][0], self._prompt("hunter", rng))
 
 
 class NamedExitTest(unittest.TestCase):

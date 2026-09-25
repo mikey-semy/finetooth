@@ -264,6 +264,13 @@ MSG = {
   "vol_legend": "\n▲ — beyond the line. Not a ban on opening them: it is what you must name as unread if you did not.",
   "vol_lines": "lines",
   "gates_missing": "(the \"gates\" field in blocks.json is empty — list the project's gate commands)",
+  "commit_dco": "**The project requires a DCO sign-off** — stated in {where}. Commit every fix with `git commit -s`, under the name and email the project expects: the sign-off must name the commit's own author, and the global git identity of this machine is not that by default. The rest of the commit rules (message convention, language) are in the same files — read them before the first commit.",
+  "commit_no_docs": "the contribution docs (the project has neither CONTRIBUTING nor AGENTS.md)",
+  "commit_none": "(no commit rules of the project were found: no sign-off requirement in {docs} or in `.github/` — look at CONTRIBUTING and at the CI jobs about commits yourself before the first commit)",
+  "commit_dco_review": "**The project requires a DCO sign-off** — stated in {where}. Check every commit of the diff range: {gate} A commit without `Signed-off-by`, or signed off by someone other than its own author, is a finding — the project's CI refuses it, and the change cannot land until the history is rewritten.",
+  "commit_gate_script": "run the project's own check, `{script} {range}`, and put its output in the report.",
+  "commit_gate_log": "the project has no script for it, so read the trailers: `git log --format='%h %an <%ae> %(trailers:key=Signed-off-by,valueonly,separator=%x2C )' {range}`.",
+  "commit_none_review": "(no commit rules of the project were found: no sign-off requirement in {docs} or in `.github/` — if CONTRIBUTING or a CI job states one after all, check the commits of the range against it)",
   "proof_live": "**The block owns no files: it works against the running system.** What to bring up, what to run and which artifact to hand in is in the manifest below; without that artifact the block is not closed. Read code only as much as is needed to set up the experiment and explain its outcome.",
   "proof_measured_verify": "**The block is proven by artifacts, not by reading** (`proof: measured`). Do not re-read files after the hunter: rebuild every artifact from the manifest with the same command and compare line by line with what was handed in. A discrepancy is a finding; an artifact that cannot be rebuilt means the block is not closed.",
   "proof_measured": "**The block is proven by artifacts, not by reading** (`proof: measured`). The file list below outlines the area, not a reading assignment: which artifacts to hand in and how to obtain them is in the manifest, and without them the block is not closed. Read what the artifact needs and do not report reading that did not happen.",
@@ -318,6 +325,13 @@ MSG = {
   "vol_legend": "\n▲ — то, что за границей. Это не запрет их открывать: это то, что вы обязаны назвать непрочитанным, если не открыли.",
   "vol_lines": "строк",
   "gates_missing": "(в blocks.json не заполнено поле \"gates\" — впишите команды ворот проекта)",
+  "commit_dco": "**Проект требует подпись DCO** — это сказано в {where}. Каждую правку коммить через `git commit -s` и под тем именем и почтой, которых ждёт проект: подпись обязана называть автора самого коммита, а глобальная идентичность git на этой машине — не она по умолчанию. Остальные правила коммитов (соглашение о сообщениях, язык) — в тех же файлах; прочитай их до первого коммита.",
+  "commit_no_docs": "документах для участников (у проекта нет ни CONTRIBUTING, ни AGENTS.md)",
+  "commit_none": "(правил коммитов проекта не найдено: требования подписи нет ни в {docs}, ни в `.github/` — до первого коммита сам посмотри CONTRIBUTING и джобы CI о коммитах)",
+  "commit_dco_review": "**Проект требует подпись DCO** — это сказано в {where}. Проверь каждый коммит диапазона диффа: {gate} Коммит без `Signed-off-by` или подписанный не своим автором — находка: CI проекта его отвергает, и правка не войдёт, пока историю не перепишут.",
+  "commit_gate_script": "прогони собственную проверку проекта, `{script} {range}`, и вклей её вывод в отчёт.",
+  "commit_gate_log": "своего скрипта для этого у проекта нет, поэтому прочитай подписи: `git log --format='%h %an <%ae> %(trailers:key=Signed-off-by,valueonly,separator=%x2C )' {range}`.",
+  "commit_none_review": "(правил коммитов проекта не найдено: требования подписи нет ни в {docs}, ни в `.github/` — если CONTRIBUTING или джоба CI всё же его ставит, сверь с ним коммиты диапазона)",
   "proof_live": "**У блока нет файлов: он работает на запущенной системе.** Что поднять, что прогнать и какой артефакт сдать — в манифесте ниже; без артефакта блок не закрыт. Код читай ровно настолько, чтобы поставить опыт и объяснить исход.",
   "proof_measured_verify": "**Блок доказывается артефактами, а не чтением** (`proof: measured`). Не перечитывай файлы за охотником: пересобери каждый артефакт манифеста той же командой и сверь построчно с тем, что он сдал. Расхождение — находка; артефакт, который не пересобирается, — блок не закрыт.",
   "proof_measured": "**Блок доказывается артефактами, а не чтением** (`proof: measured`). Список файлов ниже очерчивает область, а не задание на прочтение: какие артефакты сдать и как их получить — в манифесте, без них блок не закрыт. Читай то, что нужно для артефакта, и не отчитывайся о чтении, которого не было.",
@@ -1911,6 +1925,58 @@ def diff_volume(diff: str) -> str:
              lines=diff.count("\n"), k=max(1, len(diff) // 4000))
 
 
+# Where a project writes down its commit rules. Tracked files only, read from the index:
+# a rule that is not committed is not the project's rule yet. The places are the ones
+# GitHub itself looks in for contribution guidelines (the root, `.github/`, `docs/`),
+# plus `AGENTS.md`, which is written for exactly the agent that makes the commits.
+COMMIT_RULE_DOCS = ("CONTRIBUTING*", ".github/CONTRIBUTING*", "docs/CONTRIBUTING*", "AGENTS.md")
+# The CI side: a workflow that checks commits. A git pathspec `*` crosses `/`, so nested
+# workflow files are reached too.
+COMMIT_RULE_CI = (".github/workflows/*",)
+# Files whose mere presence is the requirement: the project's own gate over a commit range
+# (named to the fix reviewer by its path) and the DCO GitHub App's config, which may be as
+# little as `require: members: false`.
+DCO_SCRIPT = ".github/dco.sh"
+DCO_APP = ".github/dco.yml"
+# What reads as a sign-off requirement: the certificate's name, its abbreviation as a word
+# (`tim-actions/dco`, `dco-check`, a job called `dco`) and the trailer itself.
+DCO_SIGN = re.compile(r"\bdco\b|signed-off-by|developer certificate of origin", re.I)
+
+
+def index_text(rel: str) -> str:
+    """A tracked file's text as the index holds it — the same source `file_lines` counts."""
+    out = git("show", f":{rel}", binary=True)
+    return out.out.decode("utf-8", errors="replace") if out.code == 0 else ""
+
+
+def commit_rules(role: str, diff_range: str) -> str:
+    """`{{COMMIT_RULES}}`: the project's commit rules, as far as its files state them.
+
+    The fix template told the fixer to commit every fix and never said the project's own
+    commit rules apply: in the kit's own review the fixers made twelve commits without
+    `Signed-off-by`, the project's `dco` job refused them, and the PR stood until the
+    history was rewritten. So the requirement is looked up in the project's files and
+    stated to the role that commits and to the role that checks the commits.
+
+    Looked up at `prompt` time, not recorded by `setup`: a copy in `blocks.json` would be a
+    second source of truth, stale from the day the project adds DCO to its CI.
+    """
+    docs = sorted(git_files(list(COMMIT_RULE_DOCS)))
+    ci = sorted(git_files(list(COMMIT_RULE_CI)))
+    signs = [rel for rel in (DCO_SCRIPT, DCO_APP) if named_file(rel)] + [
+        rel for rel in docs + ci if DCO_SIGN.search(index_text(rel))]
+    script = DCO_SCRIPT in signs
+    if not signs:
+        return T("commit_none_review" if role == "fixreview" else "commit_none",
+                 docs=", ".join(f"`{d}`" for d in docs) or T("commit_no_docs"))
+    where = ", ".join(f"`{s}`" for s in signs)
+    if role != "fixreview":
+        return T("commit_dco", where=where)
+    gate = (T("commit_gate_script", script=DCO_SCRIPT, range=diff_range) if script
+            else T("commit_gate_log", range=diff_range))
+    return T("commit_dco_review", where=where, gate=gate)
+
+
 PLACEHOLDER = re.compile(r"\{\{[A-Z_]+\}\}")
 
 
@@ -1985,6 +2051,10 @@ def cmd_prompt(args) -> int:
         "{{PROJECT}}": defn.get("project", ROOT.name),
         "{{GATES}}": "\n".join(f"- `{g}`" for g in defn.get("gates", []))
         or T("gates_missing"),
+        # Read from the project's files only when the template asks: a hunter has no
+        # commits to make, and the lookup is a git run per file it reads.
+        "{{COMMIT_RULES}}": commit_rules(args.role, args.diff or "")
+        if "{{COMMIT_RULES}}" in body else "",
     }
     if diff:
         # The diff is a substitution like any other and goes in the SAME pass. Applied

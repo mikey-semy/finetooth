@@ -70,6 +70,15 @@ task is to **close them correctly**, not quickly.
     run the full gates once at the end of the series and the relevant test after each fix;
     do not re-run the whole suite at every commit in separate worktrees unless the maintainer
     asked for a bisectable history (the kit's own first fix run: 329 turns, most of them that).
+13. **The project's commit rules are the project's, not yours.** Before the first commit read
+    how the project wants commits made — CONTRIBUTING, AGENTS.md, the CI jobs that check
+    commits (a DCO sign-off, a message convention, a signature) — and follow them. If the
+    project requires DCO, commit with `git commit -s`; commit under the identity the project
+    requires, not whatever global git identity this machine happens to have. A commit the
+    project's CI refuses stops the whole change until the history is rewritten. What the
+    tool found in the project's files:
+
+    {{COMMIT_RULES}}
 
 # Project invariants
 
@@ -113,7 +122,8 @@ one will appear on its own.
 # What to deliver
 
 1. Fixes in the working tree, split into meaningful commits — in the style and language
-   accepted in the project (see the invariants and the `git log` history).
+   accepted in the project (see the invariants and the `git log` history), signed and
+   attributed as rule 13 says.
 2. The file `{{REPORT_PATH}}`, written as you go:
    - a table: finding → verdict (closed / rejected) → commit;
    - for every finding: the probe that **reproduced it on the current code before the fix**;
