@@ -35,12 +35,46 @@ SKILL = KIT / "skills" / "finetooth"
 TOOL = Path(os.environ.get("FINETOOTH_TOOL", SKILL / "scripts" / "review.py"))
 
 
+if "utf-8" not in (sys.getfilesystemencoding() or "").lower().replace("utf8", "utf-8"):
+    # Потомкам локаль задаёт child_env, но argv кодирует РОДИТЕЛЬ: имена тестов, пути
+    # стенда и сообщения коммитов здесь не-ASCII, и в локали C без режима UTF-8 прогон
+    # рассыпается двумя сотнями UnicodeEncodeError, ни один из которых не называет
+    # причину. Лучше один отказ, который её называет.
+    raise RuntimeError(
+        f"кодировка файловой системы — {sys.getfilesystemencoding()}, а набор говорит "
+        f"по-русски: пути, имена тестов и сообщения коммитов не-ASCII. Запустите прогон "
+        f"в UTF-8-локали или с PYTHONUTF8=1: "
+        f"`PYTHONUTF8=1 python3 -m unittest discover -s tests`")
+
+
+def child_env(**extra: str) -> dict:
+    """Окружение ЛЮБОГО потомка теста: инструмента, git, оболочки.
+
+    Приговор набора не должен зависеть от машины, на которой он идёт.
+
+    Локаль. Только `Stand.run` задавал UTF-8, остальные запуски брали её у среды — и
+    держалось всё на том, что CPython сам включает режим UTF-8 в локали C. Со снятой
+    подстраховкой (`PYTHONUTF8=0 PYTHONCOERCECLOCALE=0`, локаль C) набор краснел
+    пятнадцатью падениями и 195 ошибками из 248, начиная с UnicodeEncodeError в `print`
+    промпта.
+
+    git. Глобальный конфиг разработчика решал, пройдёт ли прогон: `core.excludesFile`
+    с `vendor/` роняет тест про нетрекнутые файлы, `commit.gpgsign=true` без ключа —
+    шесть тестов. Конфиг потомка — только локальный, заведённый самим стендом; ветка по
+    умолчанию тоже перестаёт зависеть от `init.defaultBranch` разработчика.
+    """
+    return dict(os.environ,
+                LC_ALL="C.UTF-8", LANG="C.UTF-8", PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
+                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                GIT_CONFIG_NOSYSTEM="1", **extra)
+
+
 class Stand:
     """Временный репозиторий с установленным набором."""
 
     block_id = "H1"
 
-    def __init__(self) -> None:
+    def __init__(self, branch: str = "master") -> None:
         self.root = Path(tempfile.mkdtemp(prefix="finetooth-test-"))
         # Инструмент НЕ копируется в проект: он лежит в скилле, а скилл сам — в чужом
         # git-репозитории (этом). Так каждый тест заодно проверяет, что корень берётся
@@ -48,13 +82,19 @@ class Stand:
         self.tool = TOOL
         for d in ("docs/review/blocks", "docs/review/reports", "src"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
-        self.git("init", "-q", ".")
-        self.git("config", "user.email", "test@example.com")
-        self.git("config", "user.name", "test")
+        # Имя ветки названо явно: глобального конфига у потомка нет, а полагаться на
+        # встроенное умолчание git значит снова зависеть от версии git на машине.
+        self.git("init", "-q", "-b", branch, ".", check=True)
+        self.git("config", "user.email", "test@example.com", check=True)
+        self.git("config", "user.name", "test", check=True)
 
-    def git(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", "-C", str(self.root), *args],
-                              capture_output=True, text=True, check=False)
+    def git(self, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+        out = subprocess.run(["git", "-C", str(self.root), *args],
+                             capture_output=True, text=True, check=False, env=child_env())
+        if check and out.returncode != 0:
+            raise AssertionError(f"git {' '.join(args)} → {out.returncode}: "
+                                 f"{(out.stderr or out.stdout).strip()}")
+        return out
 
     def write(self, rel: str, text: str) -> None:
         p = self.root / rel
@@ -62,13 +102,19 @@ class Stand:
         p.write_text(text, encoding="utf-8")
 
     def commit(self, message: str = "wip") -> None:
-        self.git("add", "-A")
-        self.git("commit", "-qm", message)
+        """Коммит стенда обязан состояться.
+
+        Пока он молчал о своём коде возврата, стенд, не дошедший до нужного состояния,
+        читался как исправный: тест, который потом ищет в выводе ОТСУТСТВИЕ жалобы,
+        зелен и тогда, когда до этого состояния дело не дошло. Глобальный
+        `commit.gpgsign=true` роняет так шесть тестов, и ни один не называет причину.
+        """
+        self.git("add", "-A", check=True)
+        self.git("commit", "-qm", message, check=True)
 
     def run(self, *args: str) -> subprocess.CompletedProcess:
-        env = dict(os.environ, LC_ALL="C.UTF-8")
-        return subprocess.run(["python3", str(self.tool), *args], cwd=self.root,
-                              capture_output=True, text=True, check=False, env=env)
+        return subprocess.run([sys.executable, str(self.tool), *args], cwd=self.root,
+                              capture_output=True, text=True, check=False, env=child_env())
 
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
                ref_paths: list[str] | None = None, readable_lines: int | None = None,
@@ -217,15 +263,15 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("src/real.ts", "одна\nдве\nтри\n")
         (self.s.root / "src" / "link.ts").symlink_to("real.ts")
         sub = self.s.root / "vendor"
-        subprocess.run(["git", "init", "-q", str(sub)], check=True)
+        subprocess.run(["git", "init", "-q", str(sub)], check=True, env=child_env())
         for k, v in (("user.email", "t@e"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(sub), "config", k, v], check=True)
+            subprocess.run(["git", "-C", str(sub), "config", k, v], check=True, env=child_env())
         (sub / "f.txt").write_text("x\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(sub), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(sub), "commit", "-qm", "sub"], check=True)
+        subprocess.run(["git", "-C", str(sub), "add", "-A"], check=True, env=child_env())
+        subprocess.run(["git", "-C", str(sub), "commit", "-qm", "sub"], check=True, env=child_env())
         subprocess.run(["git", "-C", str(self.s.root), "-c", "protocol.file.allow=always",
                         "submodule", "add", "-q", "./vendor", "lib"],
-                       check=False, capture_output=True)
+                       check=False, capture_output=True, env=child_env())
 
         self.s.blocks(paths=["src"])
         self.s.manifest(hypotheses=1)
@@ -1145,19 +1191,19 @@ class ReviewToolTest(unittest.TestCase):
         path = Path(self.s.root, "stream.jsonl")
         path.write_text(stream, encoding="utf-8")
         out = subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"), str(path), "--journal"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, env=child_env())
         self.assertEqual(out.returncode, 0, out.stderr)
         # два сообщения по 1001 на вход, не три
         self.assertIn("input 0.0M tokens (90% from cache", out.stdout)
         self.assertIn("re-reads 1", out.stdout)
         self.assertIn("output 0k", out.stdout)
         full = subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"), str(path)],
-                              capture_output=True, text=True).stdout
+                              capture_output=True, text=True, env=child_env()).stdout
         self.assertIn("input total          2,002", full)
 
     def test_run_role_отказывает_на_неизвестной_роли(self):
         out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "nosuch"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, env=child_env())
         self.assertEqual(out.returncode, 2)
         self.assertIn("unknown role", out.stderr)
 
@@ -1563,7 +1609,13 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("is not in the repository", self.s.run("check").stdout)
 
     def test_путь_с_пробелом_не_ломает_проверку_коммита(self):
+        """Обе стороны: на пути с пробелом ворота ПРОПУСКАЮТ верный коммит и ЛОВЯТ чужой.
+
+        Пока тест проверял только отсутствие жалобы, он был зелен и тогда, когда ворота
+        для таких путей выключены вовсе, — измерено мутацией.
+        """
         self.s.write("src/my file.ts", "a\n")
+        self.s.write("src/other.ts", "b\n")
         self.s.blocks(paths=["src"])
         self.s.manifest(hypotheses=1)
         self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
@@ -1572,12 +1624,29 @@ class ReviewToolTest(unittest.TestCase):
             ensure_ascii=False) + "\n")
         self.s.commit()
         self.s.run("init")
+        self.s.run("coverage")
         self.s.run("import", "H1")
+
+        # правка сделана в соседнем файле — ворота обязаны сработать и здесь
+        self.s.write("src/other.ts", "b\nправка не там\n")
+        self.s.commit("правка соседнего модуля")
+        wrong = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(
+            self.s.run("set-finding", "H1-001", "fixed", "--commit", wrong).returncode, 0)
+        self.s.run("findings")
+        self.assertIn("does not touch src/my file.ts", refused(self.s.run("check")))
+
+        # а правка самого файла принимается
         self.s.write("src/my file.ts", "a\nпочинено\n")
         self.s.commit("починка")
         sha = self.s.git("rev-parse", "HEAD").stdout.strip()
-        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
-        self.assertNotIn("does not touch", self.s.run("check").stdout)
+        self.assertEqual(
+            self.s.run("set-finding", "H1-001", "fixed", "--commit", sha).returncode, 0)
+        self.s.run("coverage")
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("does not touch", out.stdout)
 
     def test_починка_в_общем_модуле_называется_явно(self):
         """Маршрут чинят в общем стороже — проверка не должна требовать правки не там."""
@@ -1879,7 +1948,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
 
         bare = self.s.root.parent / (self.s.root.name + "-origin.git")
-        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, bare, True)
         self.s.git("remote", "add", "origin", str(bare))
         self.s.git("push", "-q", "origin", "HEAD:refs/heads/master")
@@ -1896,7 +1965,7 @@ class ReviewToolTest(unittest.TestCase):
         # а не числом коммитов — ветка, отведённая час назад, отстаёт на десяток коммитов
         # и не устарела ничуть.
         long_ago = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14)).isoformat()
-        env = dict(os.environ, GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
+        env = child_env(GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
         subprocess.run(["git", "-C", str(self.s.root), "commit", "-q", "--amend",
                         "--no-edit", f"--date={long_ago}"], env=env, check=True,
                        capture_output=True)
@@ -1922,13 +1991,13 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
 
         bare = self.s.root.parent / (self.s.root.name + "-origin2.git")
-        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, bare, True)
         self.s.git("remote", "add", "origin", str(bare))
 
         # общий предок — двухнедельной давности
         long_ago = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14)).isoformat()
-        env = dict(os.environ, GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
+        env = child_env(GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
         subprocess.run(["git", "-C", str(self.s.root), "commit", "-q", "--amend", "--no-edit",
                         f"--date={long_ago}"], env=env, check=True, capture_output=True)
         self.s.git("push", "-q", "origin", "HEAD:refs/heads/master")
@@ -1965,8 +2034,8 @@ class ReviewToolTest(unittest.TestCase):
         kit_state = KIT / "docs" / "review" / "state.json"
         before = kit_state.read_bytes() if kit_state.exists() else None
         self.s.run("init")
-        out = subprocess.run(["python3", str(TOOL), "status"], cwd=self.s.root / "src",
-                             capture_output=True, text=True, check=False)
+        out = subprocess.run([sys.executable, str(TOOL), "status"], cwd=self.s.root / "src",
+                             capture_output=True, text=True, check=False, env=child_env())
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("H1", out.stdout, "из подкаталога — тот же корень")
         after = kit_state.read_bytes() if kit_state.exists() else None
@@ -1975,12 +2044,12 @@ class ReviewToolTest(unittest.TestCase):
     def test_вне_репозитория_инструмент_отказывает(self):
         plain = Path(tempfile.mkdtemp(prefix="finetooth-plain-"))
         self.addCleanup(shutil.rmtree, plain, True)
-        out = subprocess.run(["python3", str(TOOL), "status"], cwd=plain,
-                             capture_output=True, text=True, check=False)
+        out = subprocess.run([sys.executable, str(TOOL), "status"], cwd=plain,
+                             capture_output=True, text=True, check=False, env=child_env())
         self.assertEqual(out.returncode, 2)
         self.assertIn("git", out.stderr)
-        self.assertEqual(subprocess.run(["python3", str(TOOL), "version"], cwd=plain,
-                                        capture_output=True, text=True).returncode, 0,
+        self.assertEqual(subprocess.run([sys.executable, str(TOOL), "version"], cwd=plain,
+                                        capture_output=True, text=True, env=child_env()).returncode, 0,
                          "версию можно спросить откуда угодно")
 
     def test_шаблон_роли_из_скилла_и_проектная_замена(self):
@@ -2423,16 +2492,16 @@ class SetupTest(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="finetooth-install-"))
         self.addCleanup(shutil.rmtree, self.root, True)
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, env=child_env())
         for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True)
+            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True, env=child_env())
         (self.root / "app.ts").write_text("x\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True, env=child_env())
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True, env=child_env())
 
     def install(self, *extra: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["python3", str(TOOL), "setup", *extra], cwd=self.root,
-                              capture_output=True, text=True, check=False)
+        return subprocess.run([sys.executable, str(TOOL), "setup", *extra], cwd=self.root,
+                              capture_output=True, text=True, check=False, env=child_env())
 
     def test_после_setup_инструмент_работает_и_советует_команду_проекта(self):
         out = self.install("--cli", "npm run review --", "--project", "Демо")
@@ -2451,8 +2520,8 @@ class SetupTest(unittest.TestCase):
         ver = re.search(r'^VERSION = "([^"]+)"', TOOL.read_text(encoding="utf-8"), re.M).group(1)
         self.assertEqual(bj["kit_version"], ver)
 
-        run = lambda *a: subprocess.run(["python3", str(TOOL), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: subprocess.run([sys.executable, str(TOOL), *a], cwd=self.root,
+                                        capture_output=True, text=True, env=child_env())
         self.assertEqual(run("init").returncode, 0)
         cov = run("coverage")
         self.assertEqual(cov.returncode, 1, "непокрытый файл обязан ронять карту")
@@ -2462,11 +2531,11 @@ class SetupTest(unittest.TestCase):
         """Скилл коммитят в проект ради CI — его файлы не предмет ревью."""
         inside = self.root / ".claude" / "skills" / "finetooth"
         shutil.copytree(SKILL, inside, ignore=shutil.ignore_patterns("__pycache__"))
-        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "скилл в проекте"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True, env=child_env())
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "скилл в проекте"], check=True, env=child_env())
         tool = inside / "scripts" / "review.py"
-        run = lambda *a: subprocess.run(["python3", str(tool), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: subprocess.run([sys.executable, str(tool), *a], cwd=self.root,
+                                        capture_output=True, text=True, env=child_env())
         self.assertEqual(run("setup").returncode, 0)
         run("init")
         out = run("coverage").stdout
@@ -2830,6 +2899,25 @@ class GitTruthTest(unittest.TestCase):
         self.s = Stand()
         self.addCleanup(self.s.cleanup)
 
+    def test_главная_ветка_проекта_ничего_не_решает(self):
+        """Обратная сторона пришпиленного конфига git: стенд больше не берёт имя ветки у
+        разработчика — и обязан работать на любом. `main` — умолчание большинства живых
+        проектов, а набор целиком ходил по `master`."""
+        s = Stand(branch="main")
+        self.addCleanup(s.cleanup)
+        s.write("src/one.ts", "a\n")
+        s.blocks(paths=["src/one.ts"])
+        s.manifest(hypotheses=1)
+        s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                         "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        s.commit()
+        self.assertEqual(s.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        self.assertEqual(s.run("init").returncode, 0)
+        self.assertEqual(s.run("coverage").returncode, 0)
+        s.run("set-status", "H1", "verified")
+        out = s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
     def test_файл_из_индекса_не_выложенный_на_диск_даёт_отпечаток_и_строки(self):
         """Разреженная выкладка (и файл, удалённый без коммита): `ls-files` его перечисляет,
         а отпечаток сводился к одному имени — содержимое можно было переписать, и «файлы
@@ -2884,6 +2972,7 @@ class GitTruthTest(unittest.TestCase):
              "file": "src/обычный файл.ts", "claim": "пробел", "scenario": "с"}]) + "\n")
         self.s.commit()
         self.s.run("init")
+        self.s.run("coverage")
         self.s.run("import", "H1")
         self.s.write("src/модуль.ts", "починено\n")
         self.s.write("src/обычный файл.ts", "починено\n")
@@ -2891,9 +2980,11 @@ class GitTruthTest(unittest.TestCase):
         sha = self.s.git("rev-parse", "HEAD").stdout.strip()
         for fid in ("H1-001", "H1-002"):
             self.assertEqual(self.s.run("set-finding", fid, "fixed", "--commit", sha).returncode, 0)
+        self.s.run("coverage")
         self.s.run("findings")
-        out = self.s.run("check").stdout
-        self.assertNotIn("does not touch", out)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("does not touch", out.stdout)
 
     def test_коммит_не_касающийся_кириллического_файла_по_прежнему_ловится(self):
         self.s.write("src/модуль.ts", "a\n")
@@ -2912,8 +3003,7 @@ class GitTruthTest(unittest.TestCase):
         sha = self.s.git("rev-parse", "HEAD").stdout.strip()
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
         self.s.run("findings")
-        out = self.s.run("check").stdout
-        self.assertIn("does not touch src/модуль.ts", out)
+        self.assertIn("does not touch src/модуль.ts", refused(self.s.run("check")))
 
     def test_переименование_не_обрывает_историю_изменений_блока(self):
         """`--name-only` печатает только новое имя: частота изменений блока обрывалась на
@@ -3252,14 +3342,14 @@ class FreshnessGateTest(unittest.TestCase):
     def _server(self, remote_name: str) -> None:
         """Соседний «сервер» с коммитом двухнедельной давности впереди нашего."""
         server = self.s.root.parent / (self.s.root.name + "-server")
-        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, server, True)
         self.s.git("remote", "add", remote_name, str(server))
         self.s.git("push", "-q", remote_name, "HEAD:refs/heads/master")
         self.s.write("src/server.ts", "серверная правка\n")
         self.s.git("add", "src/server.ts")
         future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        env = dict(os.environ, GIT_AUTHOR_DATE=future, GIT_COMMITTER_DATE=future)
+        env = child_env(GIT_AUTHOR_DATE=future, GIT_COMMITTER_DATE=future)
         subprocess.run(["git", "-C", str(self.s.root), "commit", "-qm", "серверная правка"],
                        env=env, check=False, capture_output=True)
         self.s.git("push", "-q", remote_name, "HEAD:refs/heads/master")
@@ -3284,7 +3374,7 @@ class FreshnessGateTest(unittest.TestCase):
 
     def test_удалённый_без_HEAD_называет_команду(self):
         server = self.s.root.parent / (self.s.root.name + "-bare")
-        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, server, True)
         self.s.git("remote", "add", "origin", str(server))
         out = self.s.run("check")
@@ -3377,7 +3467,7 @@ class SpendTest(unittest.TestCase):
 
     def _axes(self, path: Path, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"),
-                               str(path), *args], capture_output=True, text=True)
+                               str(path), *args], capture_output=True, text=True, env=child_env())
 
     def test_поток_без_события_result_не_выдаётся_за_измерение(self):
         """«0 min, None turns, $0.00» в формате настоящего замера записывало дорогой
@@ -3506,8 +3596,8 @@ class SpendTest(unittest.TestCase):
                             f'exec {review} "$@"\n', encoding="utf-8")
             wrap.chmod(0o755)
             review = str(wrap)
-        env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}",
-                   REVIEW=review, TMPDIR=str(self.s.root / "runs"))
+        env = child_env(PATH=f"{stub_dir}:{os.environ['PATH']}",
+                        REVIEW=review, TMPDIR=str(self.s.root / "runs"))
         (self.s.root / "runs").mkdir()
         out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "hunter"],
                              cwd=self.s.root, capture_output=True, text=True, env=env)
@@ -3568,7 +3658,7 @@ class SpendTest(unittest.TestCase):
         self.s.run("init")
         runs = self.s.root / "runs"
         runs.mkdir()
-        env = dict(os.environ, REVIEW=f"{sys.executable} {TOOL}", TMPDIR=str(runs))
+        env = child_env(REVIEW=f"{sys.executable} {TOOL}", TMPDIR=str(runs))
         out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "НЕТБЛОКА", "hunter"],
                              cwd=self.s.root, capture_output=True, text=True, env=env)
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
@@ -3596,7 +3686,7 @@ class GuardGrepTest(unittest.TestCase):
         return subprocess.run(
             ["bash", str(SKILL / "assets" / "guard-grep.sh"), "--pattern", r"\.Publish\(",
              "--marker", "outbox-allowed:", "--", *paths],
-            capture_output=True, text=True)
+            capture_output=True, text=True, env=child_env())
 
     def test_один_маркер_освобождает_один_вызов(self):
         """Ровно тот дефект, ради замены которого скрипт и написан: `grep -B` склеивал
@@ -4303,7 +4393,7 @@ class GateMutationTest(unittest.TestCase):
                 [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests"),
                  "-k", name],
                 cwd=KIT, capture_output=True, text=True,
-                env=dict(os.environ, FINETOOTH_TOOL=str(tool)))
+                env=child_env(FINETOOTH_TOOL=str(tool)))
         if "Ran 1 test" not in out.stderr:
             return (f"по имени `{name}` запустился не один тест, а "
                     f"{out.stderr.strip().splitlines()[-3:]}")
@@ -4328,6 +4418,96 @@ class GateMutationTest(unittest.TestCase):
         которое инструмент отказался принять: сообщение печатается прежнее, а код
         возврата нулевой. Тест ворот обязан смотреть и на код возврата тоже."""
         self._all(self._flipped)
+
+
+def _spawns(source: str) -> list[tuple[int, str]]:
+    """Запуски потомков в наборе и то, чем они грешат: (строка, жалоба).
+
+    Потомок запускается здесь три десятка раз, и каждый раз — это вопрос «зависит ли
+    приговор от машины». Два ответа обязаны быть одинаковыми везде: окружение задаёт
+    `child_env`, а интерпретатор — тот же, на котором идёт прогон.
+    """
+    tree = ast.parse(source)
+
+    def is_child_env(node) -> bool:
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "child_env")
+
+    # `env=env` — обычная форма, когда одно окружение нужно двум запускам: переменная
+    # годится ровно настолько, насколько годится всё, что в неё когда-либо клали.
+    assigned: dict[str, list] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    assigned.setdefault(t.id, []).append(node.value)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "subprocess"
+                and node.func.attr in ("run", "Popen", "call", "check_output", "check_call")):
+            continue
+        why = []
+        passed = next((k.value for k in node.keywords if k.arg == "env"), None)
+        if passed is None:
+            why.append("без env=child_env(): локаль и конфиг git достаются от машины")
+        elif isinstance(passed, ast.Name):
+            values = assigned.get(passed.id, [])
+            if not values or not all(is_child_env(v) for v in values):
+                why.append(f"env={passed.id}, а он собран не из child_env()")
+        elif not is_child_env(passed):
+            why.append("env= собран не из child_env()")
+        argv = node.args[0] if node.args else None
+        first = next((e.value for e in getattr(argv, "elts", [])[:1]
+                      if isinstance(e, ast.Constant) and isinstance(e.value, str)), "")
+        if re.fullmatch(r"python[\d.]*", first):
+            why.append(f"`{first}` из PATH вместо sys.executable: прогон на другом "
+                       f"интерпретаторе измерил бы не его")
+        if why:
+            offenders.append((node.lineno, "; ".join(why)))
+    return offenders
+
+
+class TestSuiteRuleTest(unittest.TestCase):
+    """УЗДА КЛАССА «приговор набора зависит от машины».
+
+    Прогон запускает потомков три десятка раз. Локаль задавал один `Stand.run`, а
+    остальные брали её у среды; интерпретатор брался из PATH там, где прогон идёт на
+    другом. Правило по исходнику держит и те запуски, которых ещё нет, — список мест не
+    держал бы: следующий запуск напишут копией соседнего.
+    """
+
+    def test_каждый_потомок_запускается_с_общим_окружением(self):
+        offenders = _spawns(Path(__file__).read_text(encoding="utf-8"))
+        self.assertEqual(
+            offenders, [],
+            "запуск потомка мимо общего окружения: env=child_env(...) и sys.executable")
+
+    # Обе стороны правила на исходниках, которых в наборе нет: узда обязана видеть
+    # нарушение по виду и не придираться к тому, что написано верно.
+    OFFENDERS = {
+        "без окружения": 'subprocess.run(["git", "status"], capture_output=True)',
+        "чужое окружение": 'subprocess.run(["git", "status"], env=dict(os.environ, X="1"))',
+        "окружение из переменной мимо child_env":
+            'e = dict(os.environ)\nsubprocess.run(["git", "status"], env=e)',
+        "интерпретатор из PATH":
+            'subprocess.run(["python3", str(TOOL)], env=child_env())',
+    }
+    INNOCENT = {
+        "прямой вызов": 'subprocess.run([sys.executable, str(TOOL)], env=child_env())',
+        "окружение с добавкой": 'subprocess.run(["bash", "x.sh"], env=child_env(TMPDIR="/t"))',
+        "окружение из переменной": 'e = child_env(X="1")\nsubprocess.run(["git"], env=e)',
+    }
+
+    def test_узда_видит_запуск_которого_ещё_нет(self):
+        for why, src in self.OFFENDERS.items():
+            with self.subTest(нарушение=why):
+                self.assertNotEqual(_spawns(src), [], "узда не увидела запуск по виду")
+        for why, src in self.INNOCENT.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(_spawns(src), [], "узда придирается к верной записи")
 
 
 class SourceRuleTest(unittest.TestCase):

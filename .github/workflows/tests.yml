@@ -11,15 +11,16 @@ permissions:
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    # Приговор набора не должен зависеть от машины. Имя, почту и имя ветки стенд задаёт
+    # себе сам (глобальный конфиг git у его потомков отключён), а локаль задаётся здесь:
+    # имена тестов и сообщения коммитов не-ASCII, и в локали C без режима UTF-8 прогон
+    # рассыпается двумя сотнями UnicodeEncodeError.
+    env:
+      PYTHONUTF8: "1"
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
     steps:
       - uses: actions/checkout@v5
-      # Тесты ставят набор во временные git-репозитории и дёргают командную строку,
-      # поэтому git обязан уметь коммитить: в чистом раннере имени и почты нет.
-      - name: Настроить git
-        run: |
-          git config --global user.email "tests@example.com"
-          git config --global user.name "finetooth tests"
-          git config --global init.defaultBranch master
       - name: Прогнать тесты
         run: python3 -m unittest discover -s tests -v
       # Формат скилла — тем же валидатором, что предлагает спецификация Agent Skills.
