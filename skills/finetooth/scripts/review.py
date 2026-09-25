@@ -3013,11 +3013,14 @@ def cmd_check(args) -> int:
                 and f["file"] not in tracked and not f["file"].startswith("(")):
             problems.append(f"finding {fid}: file {f['file']} is not in the repository")
         # A deferred finding does not count as open and therefore survives the whole
-        # review unnoticed. The reason is the only thing that will make anyone come back to it.
+        # review unnoticed. The reason is what turns it from silence into a decision: the
+        # summary publishes deferred findings as accepted risks, by that reason and no
+        # other text. The message used to demand that every deferral be resolved before
+        # the end, which is not what the tool holds and not what the summary does with it.
         if f.get("status") == "deferred" and not (f.get("defer_reason") or "").strip():
             problems.append(
                 f"finding {fid}: deferred without a reason — `{CLI} set-finding {fid} deferred "
-                f"--reason '...'`; by the end of the review every deferred finding is fixed or rejected with a reason"
+                f"--reason '...'`; a deferral is an accepted risk, and the summary publishes it by that reason"
             )
         if f.get("status") == "fixed" and f.get("fix_commit") and ":" in str(f["fix_commit"]):
             # A fix in a NEIGHBOURING repository: `<repository>:<commit>`. It is not here and

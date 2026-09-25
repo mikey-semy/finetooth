@@ -4879,5 +4879,77 @@ class DocumentedSurfaceTest(unittest.TestCase):
                       "ревьюер правок круга 2 читает отчёт исполнителя того же круга")
 
 
+class DeferredIsAnAcceptedRiskTest(unittest.TestCase):
+    """Что такое отложенная находка к концу ревью — у набора один ответ, а не два.
+
+    Урок 13 требовал перед завершением каждую отложенную починить или отвергнуть, а
+    инструмент отправляет её в сводку принятым риском и требует только причину; условия
+    завершения в `SKILL.md` и в точке входа отложенного не упоминали вовсе. Ведущая сессия,
+    прочитавшая уроки первыми, держала ревью открытым ради находок, которые ревью и должны
+    были покинуть; прочитавшая в другом порядке — считала дефектом сам раздел сводки.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def test_отложенная_с_причиной_доживает_до_сводки_принятым_риском(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "medium", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n",
+                       verify="# отчёт проверяющего\n\n## Вердикты по находкам охотника\n"
+                              "Находка охотника подтверждена: воспроизвёл вызовом на матрице значений.\n\n"
+                              "## Состояние охвата блока\nОхват полный: файл прочитан, гипотеза прогнана.\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        out = self.s.run("set-finding", "H1-001", "deferred", "--reason", "ждёт блок H2")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.s.run("findings")
+        self.s.run("set-status", "H1", "closed")
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0,
+                         "отложенная с причиной не должна держать ревью красным: " + check.stdout)
+        self.assertIn("all blocks closed", self.s.run("status").stdout,
+                      "ревью с отложенной находкой считается завершённым")
+        self.assertEqual(self.s.run("summary").returncode, 0)
+        summary = (self.s.root / "docs" / "review-summary.md").read_text(encoding="utf-8")
+        self.assertIn("Принятые риски", summary)
+        self.assertIn("ждёт блок H2", summary,
+                      "принятый риск уезжает из ревью вместе с причиной")
+
+    def test_отложенная_без_причины_по_прежнему_роняет_проверку(self):
+        """Вторая сторона: запрещено не откладывать, а откладывать молча."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "medium", "confidence": "confirmed", "status": "deferred",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.assertIn("deferred without a reason", self.s.run("check").stdout)
+
+    def test_урок_про_отложенное_говорит_то_же_что_инструмент(self):
+        for name, token in (("lessons.md", "accepted risk"), ("lessons.ru.md", "принятый риск")):
+            with self.subTest(file=name):
+                text = (SKILL / "references" / name).read_text(encoding="utf-8")
+                item = next(b for b in re.split(r"\n(?=\d+\. )", text) if "`deferred`" in b)
+                self.assertIn(token, item,
+                              f"{name}: урок об отложенной находке расходится с тем, что делает "
+                              f"с ней инструмент — сводка публикует её принятым риском")
+
+
 if __name__ == "__main__":
     unittest.main()
