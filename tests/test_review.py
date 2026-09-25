@@ -2438,6 +2438,54 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertIn(self.LIMITS_REFUSAL, refused(self.s.run("check")),
                       "непрочитанное названо мимо раздела ограничений охвата, а ворота молчат")
 
+    # Раздел отчёта проверяющего про охват: его заголовок ворота не читают (заголовки
+    # отброшены), а читают строки под ним — и там обязан стоять вердикт.
+    VERIFY_COVERAGE = {"en": "Block coverage status", "ru": "Состояние охвата блока"}
+    QUOTED_VERDICT = re.compile(r"[\"“«]([^\"”»\n]+)[\"”»]")
+
+    def test_отчёт_проверяющего_по_предупреждению_об_объёме_проходит_ворота(self):
+        """Предупреждение проверяющему — два указания: КУДА писать непрочитанное и ЧТО там
+        сказать. Раздел держит `NamedExitTest`, а слова — только этот тест: пути под
+        заголовком раздела вердиктом охвата не являются, и ворота отказывают отчёт
+        «no coverage verdict». Удалённая из сообщения оговорка оставляла весь набор
+        зелёным (T2 fix review round 3, R3-002) — тот же дефект, что T2-023, у второй роли.
+        Слова не вписаны в тест, а вычитаны из предупреждения на каждом языке: отчёт пишет
+        то, что велено, и ворота обязаны его принять."""
+        hunter = ("# h\n## Гипотезы\n- H1.1 — проверена: да\n"
+                  "## Ограничения охвата\n- не прочитано: src/one.ts\n")
+        for lang, section in self.VERIFY_COVERAGE.items():
+            with self.subTest(lang=lang):
+                s = Stand()
+                self.addCleanup(s.cleanup)
+                s.write("src/one.ts", "a\n" * 100)
+                s.blocks(paths=["src/one.ts"], readable_lines=50, lang=lang)
+                s.manifest(hypotheses=1)
+                s.commit()
+                s.run("init")
+                prompt = s.run("prompt", "H1", "--role", "verify")
+                self.assertEqual(prompt.returncode, 0, prompt.stderr)
+                warning = next((l for l in prompt.stdout.splitlines() if "⚠️" in l), "")
+                self.assertTrue(warning, "предупреждения об объёме в промпте проверяющего нет")
+                said = self.QUOTED_VERDICT.findall(warning)
+                self.assertTrue(said, f"предупреждение не даёт проверяющему слов, которыми "
+                                      f"сказать, что охват неполный: {warning}")
+                paths_only = (f"# v\n\n## Verdicts\nНаходок нет.\n\n## {section}\n"
+                              f"- src/one.ts\n")
+                s.reports(hunter=hunter, verify=paths_only.replace(
+                    f"## {section}\n", f"## {section}\n{said[-1]}.\n"))
+                s.run("set-status", "H1", "hunted")
+                s.run("set-status", "H1", "verified")
+                s.commit("отчёт по предупреждению")
+                self.assertNotIn("no coverage verdict", refused(s.run("check")),
+                                 f"проверяющий написал ровно то, что велело предупреждение "
+                                 f"({said[-1]!r}), и ворота отказали")
+                # Вторая сторона: одни пути под заголовком раздела вердиктом не являются —
+                # иначе тест выше зеленел бы и без слов, которые он проверяет.
+                s.reports(verify=paths_only)
+                s.commit("только пути")
+                self.assertIn("no coverage verdict", refused(s.run("check")),
+                              "пути без вердикта приняты: слова предупреждения не нагружены")
+
     def test_правило_шаблона_называет_тот_же_выход_что_и_замер(self):
         """Ведущая сессия читает сообщение об объёме, агент — правило 1 своего шаблона, и
         разойтись им нельзя: правило звало просить половину через `--scope`, который диффа
