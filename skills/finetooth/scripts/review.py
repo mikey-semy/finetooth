@@ -179,7 +179,7 @@ MSG = {
   "refs_cut": "\n\n({n} files. The list is collapsed to patterns — expand the part you need yourself: `git ls-files -- <pattern>`.)",
   "vol_head": "Files: {n}. Lines: {lines}. Order of magnitude: ~{k}k tokens just to read, before any reasoning or tool calls.",
   "vol_fits": "This fits what can be read in one session (ceiling {limit} lines).",
-  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage-limits section. Do not pretend you read it.",
+  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage section of your report. Do not pretend you read it.",
   "vol_border": "\nWhere the budget line runs (largest first, cumulative):",
   "vol_more": "  … and {n} more file(s)",
   "vol_legend": "\n▲ — beyond the line. Not a ban on opening them: it is what you must name as unread if you did not.",
@@ -193,8 +193,8 @@ MSG = {
   "files_live": "Block files: none — the block works against the running system",
   "files_measured": "Block files ({n}) — the block's area; proof is the manifest's artifacts",
   "files_read": "Block files ({n}) — read all",
-  "scope_line": " Your half of the diff: **{scope}** — read the rest for context, file findings for your half.",
-  "diff_vol": "The diff below: {kb} KB, {lines} lines. Order of magnitude: ~{k}k tokens just to read it, before any reasoning or tool calls. If that does not fit what you can hold at once, do not read half of it and report on the whole: say so in the report and take one half through `--scope <half>` — the lead runs a second reviewer on the other, and the two reports get names of their own.",
+  "scope_line": " Your half of the fixes: **{scope}** — you file findings for this half; whatever else is in the diff below, read it for context.",
+  "diff_vol": "The diff below: {kb} KB, {lines} lines. Order of magnitude: ~{k}k tokens just to read it, before any reasoning or tool calls. If that does not fit what you can hold at once, do not read half of it and report on the whole: say so in the report, and the lead splits the RANGE — `--diff <first part>` for you and `--diff <second>` for a second reviewer; that is what makes the diff smaller. `--scope <half>` does not: it names your half in the report and in its file name.",
   "no_open_findings": "(no open findings for this block — ask the lead session why the fixer was started)",
   "rec_none": "(nothing is recorded against this block yet)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(recorded {date})_",
@@ -231,7 +231,7 @@ MSG = {
   "refs_cut": "\n\n({n} файлов. Список сокращён до шаблонов — разверни нужную часть сам: `git ls-files -- <шаблон>`.)",
   "vol_head": "Файлов: {n}. Строк: {lines}. Порядок величины: ~{k}k токенов только на чтение, без рассуждений и вызовов инструментов.",
   "vol_fits": "Это укладывается в то, что читается за сеанс (порог {limit} строк).",
-  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе об ограничениях охвата. Не делайте вид, что прочитали.",
+  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта про охват. Не делайте вид, что прочитали.",
   "vol_border": "\nГде проходит граница бюджета (по убыванию размера, накопительно):",
   "vol_more": "  … и ещё {n} файл(ов)",
   "vol_legend": "\n▲ — то, что за границей. Это не запрет их открывать: это то, что вы обязаны назвать непрочитанным, если не открыли.",
@@ -245,8 +245,8 @@ MSG = {
   "files_live": "Файлы блока: нет — блок работает на запущенной системе",
   "files_measured": "Файлы блока ({n} шт.) — область блока; доказательство — артефакты манифеста",
   "files_read": "Файлы блока ({n} шт.) — прочитать все",
-  "scope_line": " Твоя половина диффа: **{scope}** — остальное читай для контекста, находки оформляй по своей половине.",
-  "diff_vol": "Дифф ниже: {kb} КБ, {lines} строк. Порядок величины: ~{k}k токенов только на чтение, до рассуждений и вызовов инструментов. Если это не помещается в то, что ты держишь за раз, — не читай половину, отчитываясь за целое: скажи об этом в отчёте и возьми одну половину через `--scope <половина>`; ведущая сессия запустит второго ревьюера на другую, и у отчётов будут свои имена.",
+  "scope_line": " Твоя половина правок: **{scope}** — находки ты оформляешь по ней; то, что кроме неё есть в диффе ниже, читай для контекста.",
+  "diff_vol": "Дифф ниже: {kb} КБ, {lines} строк. Порядок величины: ~{k}k токенов только на чтение, до рассуждений и вызовов инструментов. Если это не помещается в то, что ты держишь за раз, — не читай половину, отчитываясь за целое: скажи об этом в отчёте, и ведущая сессия разделит ДИАПАЗОН — `--diff <первая часть>` тебе и `--diff <вторая>` второму ревьюеру; уменьшает дифф именно это. `--scope <половина>` его не уменьшает: он называет твою половину в отчёте и в его имени.",
   "no_open_findings": "(открытых находок по блоку нет — уточни у ведущей сессии, зачем запущен фиксер)",
   "rec_none": "(за блоком пока ничего не записано)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(записана {date})_",
@@ -1807,8 +1807,11 @@ def diff_volume(diff: str) -> str:
     The budget belongs in the assignment, not in the lead session's head. The fix reviewer
     was handed a diff of any size with the rule "read it in full" and no condition: the
     first round of the kit's own tool block was 193 KB, and nothing in the prompt said so
-    or named the way out. `--scope` is the way out, and it has to stand where the volume
-    does. The token estimate is the same rough one as for the file list: about four
+    or named the way out. The way out is a narrower `--diff` range — the only thing that
+    makes the diff smaller; `--scope` divides the reporting and leaves the size alone, and
+    the message that once offered it for size sent the lead after what the mechanism does
+    not do. Both stand where the volume does.
+    The token estimate is the same rough one as for the file list: about four
     characters per token is common knowledge and more honest here than an exact count,
     because every model has its own tokenizer.
     """
@@ -1889,12 +1892,19 @@ def cmd_prompt(args) -> int:
         "{{GATES}}": "\n".join(f"- `{g}`" for g in defn.get("gates", []))
         or T("gates_missing"),
     }
+    if diff:
+        # The diff is a substitution like any other and goes in the SAME pass. Applied
+        # afterwards over the assembled body it also replaced the manifest's own mentions
+        # of "{{DIFF}}" — a block whose manifest writes about the placeholder was handed
+        # the diff three times while {{DIFF_VOLUME}}, measured on one copy, stated a third
+        # of what arrived.
+        subs["{{DIFF}}"] = diff
     # An unfilled substitution would reach the agent as the text "{{SOMETHING}}" — and it
     # would read it as an assignment. Checked on the TEMPLATE, not on the assembled text:
     # substituted content (a finding about a template, a manifest quoting one) legally
     # carries "{{FILES}}" as a quotation, and the assembled check refused the fix prompt
     # of the kit's own review for exactly that.
-    left = sorted(set(PLACEHOLDER.findall(body)) - set(subs) - {"{{DIFF}}"})
+    left = sorted(set(PLACEHOLDER.findall(body)) - set(subs))
     # ONE pass over the template, not one pass per substitution: a manifest that writes
     # about the placeholders ("the template uses {{FILES}}") had its own prose rewritten
     # with the file list, because MANIFEST was substituted before FILES. What the template
@@ -1902,8 +1912,6 @@ def cmd_prompt(args) -> int:
     body = PLACEHOLDER.sub(lambda m: subs.get(m.group(0), m.group(0)), body)
     if left:
         die(f"template {template.name} has substitutions left without a value: {', '.join(left)}")
-    if diff:
-        body = body.replace("{{DIFF}}", diff)
     print(body)
     return 0
 
@@ -3660,7 +3668,9 @@ def main() -> int:
     c.add_argument("--role", choices=ROLES, default="hunter")
     c.add_argument("--diff", help="fixreview: diff range of the fixes (main...HEAD)")
     c.add_argument("--round", type=int, default=1, help="round of fixing/fix review (from 1)")
-    c.add_argument("--scope", help="fixreview: the half of the diff for this reviewer (backend, ui…)")
+    c.add_argument("--scope", help="fixreview: the half of the fixes this reviewer reports on "
+                                   "(backend, ui…) — it names the half, it does not shrink the "
+                                   "diff; narrow --diff for that")
 
     c = sub.add_parser("set-status", help="move a block to a new status")
     c.add_argument("block")
