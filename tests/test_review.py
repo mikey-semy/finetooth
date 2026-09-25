@@ -3297,17 +3297,26 @@ class GitTruthTest(unittest.TestCase):
         self.assertNotIn("src/generated/x.ts", out.stdout)
 
 
-# Аргументы, при которых команда ДОХОДИТ ДО СВОЕГО ТЕЛА. Одного набора на всех не бывает:
+# Аргументы, при которых команда ДОХОДИТ ДО СВОЕЙ РАБОТЫ. Одного набора на всех не бывает:
 # `review set-status H1 s.md` — это `argparse`, отказавший до начала команды, и правило,
 # звавшее всех одинаково, проверяло бы его отказ, а не поведение команды. Измерено дважды:
 # при общем наборе `H1 s.md` до тела доходили три команды из двадцати трёх, а при наборах
 # `()` и `("H1",)` — двадцать из двадцати трёх, и мимо правила проходили ровно `set-status`,
 # `set-finding` и `log`, то есть три из тех, что ПИШУТ. Таблица одна на все обходы команд.
+#
+# Доводов, однако, мало: команда начинается и отказывается ДО своей записи, если стенду
+# нечего ей дать. Измерено на стенде обхода границы записи: `set-finding H1-001 open`
+# отвечал «finding H1-001 is not in the register» (код 2), `import H1` — «no findings file
+# for the block», `restamp H1` — «H1 is in status todo»; argparse при этом молчал, и обход
+# оставался зелёным. Стенд доводит `body_stand`, и вместе они — один договор: довод и то
+# состояние, при котором этот довод доводит команду до записи.
 BODY_ARGV = {
     "init": (), "version": (), "setup": (), "status": (), "next": (),
     "coverage": (), "prompt": ("H1",), "set-status": ("H1", "running"),
     "import": ("H1",), "set-finding": ("H1-001", "open"), "hypotheses": ("H1",),
-    "restamp": ("H1",), "backfill": (), "inventory": (), "sizes": (),
+    # Именно находка, а не блок: `set-status` в обходе идёт раньше `restamp`, и после него
+    # блок не в том статусе, который штампуется, — блочный `restamp` отказывался бы всегда.
+    "restamp": ("H1-001",), "backfill": (), "inventory": (), "sizes": (),
     "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
     "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
 }
@@ -3319,6 +3328,26 @@ ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are requi
 def argparse_refused(stderr: str) -> str:
     """Жалоба argparse в выводе: команда до своего тела не дошла, и обход её не проверил."""
     return next((said for said in ARGPARSE_REFUSED if said in stderr), "")
+
+
+def body_stand(s: Stand) -> None:
+    """Доводит УЖЕ заведённый стенд (`init` сделан) до состояния, в котором `BODY_ARGV`
+    доводит каждую команду до её РАБОТЫ, а не до отказа перед ней.
+
+    Реестр с находкой `H1-001`: её вносит `import`, двигает `set-finding`, переснимает
+    `restamp`. Файл находки после ввоза уезжает вперёд отпечатка — иначе `restamp`
+    печатает «отпечаток уже совпадает» и не пишет ничего, а обход снова перечисляет
+    команду, не запуская её записи.
+    """
+    s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+        "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+        "file": "src/one.ts", "claim": "тут дефект",
+        "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+    s.commit("черновик находок")
+    imported = s.run("import", "H1")
+    assert imported.returncode == 0, imported.stderr
+    s.write("src/one.ts", "a\nб\n")
+    s.commit("файл находки уехал вперёд отпечатка")
 
 
 class WriteBoundaryTest(unittest.TestCase):
@@ -3344,6 +3373,7 @@ class WriteBoundaryTest(unittest.TestCase):
         self.s.manifest(hypotheses=1)
         self.s.commit()
         self.s.run("init")
+        body_stand(self.s)
 
     def _snapshot(self) -> dict[str, str]:
         """Всё дерево проекта, кроме `.git` и самого каталога ревью."""
@@ -3362,12 +3392,20 @@ class WriteBoundaryTest(unittest.TestCase):
     ARGV = dict(BODY_ARGV, summary=())
 
     def test_ни_одна_команда_не_пишет_вне_каталога_ревью(self):
-        """Каждая команда зовётся с аргументами, при которых она ДОХОДИТ ДО ТЕЛА.
+        """Каждая команда зовётся так, что ДЕЛАЕТ СВОЮ РАБОТУ.
 
         Пока обход звал всех через `()` и `("H1",)`, три команды — `set-status`,
         `set-finding` и `log` — отвергал argparse раньше их кода, и под правилом о границе
         записи они не были вовсе: ровно три из тех, что пишут. Отказ argparse поэтому не
         засчитывается как проход — иначе обход перечисляет команды, не запуская их.
+
+        Одних доводов мало. С ними, но на пустом стенде, `import`, `set-finding` и
+        `restamp` отказывались раньше своей записи (код 2, argparse молчит) — снова три
+        пишущие команды мимо правила: направь запись реестра в корень репозитория, и обход
+        оставался зелёным. Отказ команды поэтому тоже не засчитывается как проход: код 2 —
+        это «до записи не дошло», и стенд надо дописать (`body_stand`), а не смириться.
+        Код 1 — законный приговор ворот (`check`, `coverage` на красном состоянии), он
+        работу сделал.
         """
         helped = self.s.run("--help").stdout
         names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
@@ -3388,6 +3426,11 @@ class WriteBoundaryTest(unittest.TestCase):
                 self.assertFalse(argparse_refused(out.stderr),
                                  f"{cmd}: команда не начиналась — поправьте BODY_ARGV: "
                                  f"{out.stderr[-300:]}")
+                self.assertNotEqual(
+                    out.returncode, 2,
+                    f"{cmd}: отказ раньше работы команды — до своей записи она не дошла, и "
+                    f"обход её не проверил. Допишите стенд (`body_stand`) или довод в "
+                    f"BODY_ARGV: {out.stderr[-300:]}")
         after = self._snapshot()
         appeared = {rel for rel in after if rel not in before}
         changed = {rel for rel in before if after.get(rel, before[rel]) != before[rel]}
@@ -3395,6 +3438,38 @@ class WriteBoundaryTest(unittest.TestCase):
                          "файлы появились вне docs/review/ — SECURITY.md этого не обещает")
         self.assertEqual(changed, set(),
                          "файлы изменены вне docs/review/ — SECURITY.md этого не обещает")
+
+    # Команды, которые ПИШУТ В РЕЕСТР: ровно те три, что обход перечислял, не запуская.
+    REGISTER_WRITERS = ("import", "set-finding", "restamp")
+
+    def test_обход_доводит_до_записи_каждую_пишущую_в_реестр_команду(self):
+        """Что именно проверяет обход границы записи: не «команда началась», а «команда
+        записала». Со стендом без реестра `import`, `set-finding` и `restamp` отказывались
+        раньше своей записи, и направленная в корень репозитория запись реестра оставляла
+        обход зелёным — три пишущие команды из двадцати трёх мимо обещания SECURITY.md."""
+        register = self.s.root / "docs/review/findings.jsonl"
+        for cmd in self.REGISTER_WRITERS:
+            before = register.read_text(encoding="utf-8")
+            out = self.s.run(cmd, *self.ARGV[cmd])
+            with self.subTest(cmd=cmd):
+                self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+                self.assertNotEqual(
+                    register.read_text(encoding="utf-8"), before,
+                    f"{cmd} {self.ARGV[cmd]}: реестр не изменился — до своей записи команда "
+                    f"не дошла, и обход границы записи её не проверил")
+
+    def test_красный_приговор_ворот_за_несделанную_работу_не_считается(self):
+        """Обратная сторона сужения: обход требует не нуля, а того, что команда дошла до
+        работы. `check` и `coverage` на красном состоянии выходят с единицей — это их
+        приговор, а не отказ до работы; потребуй обход нуля, он краснел бы на собственном
+        стенде, и держать границу записи стало бы нечем."""
+        self.s.write("docs/review/reports/H1-demo.hunter.md", "")
+        for cmd in ("check", "coverage"):
+            out = self.s.run(cmd)
+            with self.subTest(cmd=cmd):
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertNotEqual(out.returncode, 2)
+                self.assertFalse(argparse_refused(out.stderr))
 
     def test_итог_пишется_туда_куда_сказали_и_только_туда(self):
         """Обратная сторона: разрешённое исключение обязано работать — и по умолчанию,
@@ -3444,6 +3519,9 @@ class HandWrittenInputTest(unittest.TestCase):
         self.s.manifest(hypotheses=1)
         self.s.commit()
         self.s.run("init")
+        # Стенд тот же, что у обхода границы записи: таблица доводов и состояние, при
+        # котором эти доводы доводят команду до работы, — один договор на оба обхода.
+        body_stand(self.s)
 
     def _add_block(self, **fields) -> None:
         bj = self.s.root / "docs/review/blocks.json"
