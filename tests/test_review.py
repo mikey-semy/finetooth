@@ -2040,6 +2040,26 @@ class ReviewToolTest(unittest.TestCase):
                 self.assertEqual(rows[fid].get("updated_at"), self.OLD_STAMP)
                 self.assertEqual(rows[fid].get("status"), "open" if rule is None else "fixed")
 
+    def test_узда_снимается_только_с_названной_находки(self):
+        """Узду, которая не краснеет на дефекте находки, можно снять (`--clear-rule`): иначе
+        реестр продолжает утверждать, что класс держится. Обе стороны: у названной узды нет
+        и отметка сменилась; соседи по корню остались при своих; `--rule` вместе с
+        `--clear-rule` — отказ, а не молчаливый выбор одного из двух."""
+        self._root_across_blocks()
+        out = self.s.run("set-finding", "H1-003", "fixed", "--clear-rule")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = {r["id"]: r for r in self._register()}
+        self.assertNotIn("rule", rows["H1-003"])
+        self.assertNotEqual(rows["H1-003"].get("updated_at"), self.OLD_STAMP)
+        self.assertEqual(rows["H1-003"].get("fix_commit"), "abc1234")
+        self.assertEqual(rows["H2-002"].get("rule"), "tests/old.test.ts")
+        self.assertEqual(rows["H2-002"].get("updated_at"), self.OLD_STAMP)
+        out = self.s.run("set-finding", "H2-002", "fixed", "--rule", "x", "--clear-rule")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("--clear-rule together", out.stderr)
+        self.assertEqual({r["id"]: r for r in self._register()}["H2-002"].get("rule"),
+                         "tests/old.test.ts")
+
     def test_узда_на_починенную_находку_без_повторного_коммита(self):
         """Записать узду на уже починенную находку — значит назвать её со статусом `fixed`;
         требовать `--commit` заново значило бы одной командой затереть разные коммиты

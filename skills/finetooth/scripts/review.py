@@ -2285,6 +2285,8 @@ def set_one_finding(args, rows: list[dict], fid: str) -> None:
     if not hit:
         die(f"finding {fid} is not in the register")
     f = hit[0]
+    if args.rule and getattr(args, "clear_rule", False):
+        die("--rule and --clear-rule together — record a guard or remove it, not both")
     if args.status not in FINDING_STATUS:
         die(f"unknown status {args.status}; known: {', '.join(FINDING_STATUS)}")
     # A finding already fixed keeps its commit: recording a guard on it later (`--rule`) names
@@ -2339,6 +2341,11 @@ def set_one_finding(args, rows: list[dict], fid: str) -> None:
         # `updated_at`. A guard is a claim about an instance; whoever records it names the
         # instances it goes red on, and `roots` shows a root whose instances disagree.
         f["rule"] = args.rule
+    if getattr(args, "clear_rule", False):
+        # A guard recorded on a finding it does not hold has to be removable: the self-review
+        # measured a guard that stays green on its finding's defect, and without a way to clear
+        # it the register kept asserting the class held (issue #28, T4-009).
+        f.pop("rule", None)
     f["updated_at"] = now()
 
     print(f"{fid}: {args.status}")
@@ -3880,6 +3887,8 @@ def main() -> int:
     c.add_argument("--reason", help="reject reason; required for rejected")
     c.add_argument("--dup-of", dest="dup_of", help="id of the finding this one duplicates")
     c.add_argument("--rule", help="what closes the class: path to the guard, test or linter rule")
+    c.add_argument("--clear-rule", dest="clear_rule", action="store_true",
+                   help="remove the recorded guard (it does not go red on this finding's defect)")
     c.add_argument("--fixed-in", dest="fixed_in", action="append",
                    help="where the fix was made, if not in the finding's file (repeatable)")
 
