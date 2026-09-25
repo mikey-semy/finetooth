@@ -65,7 +65,7 @@ The design and intent are in [`README.md`](README.md), the check against world p
 python3 -m unittest discover -s tests
 ```
 
-348 scenarios, about six minutes (measured on the author's machine; the number of scenarios
+368 scenarios, about six minutes (measured on the author's machine; the number of scenarios
 is held by a test, the time is not). The tests create temporary git repositories and call the tool
 from the skill folder — internals are deliberately not imported: a move survives the external
 contract, not the internal structure. The skill format:

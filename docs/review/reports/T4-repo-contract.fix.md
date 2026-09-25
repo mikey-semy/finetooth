@@ -225,9 +225,19 @@ about five minutes — the suite grew by this block's guards); the coupling para
 describes the rules the tool has, in both languages.
 
 **Guards.** `test_число_сценариев_в_документах_равно_настоящему` takes the count from the
-suite itself (`defaultTestLoader.discover(...).countTestCases()`) — the documents cannot drift
-again. `test_пороги_из_документов_читаются_из_кода` reads `COUPLING_*` out of `review.py` and
+suite itself (`scenario_count()`, its own loader) — the documents cannot drift again.
+`test_пороги_из_документов_читаются_из_кода` reads `COUPLING_*` out of `review.py` and
 requires each document that quotes a threshold to state it.
+
+> **Corrected in round 2 (this section's figures were the fixer's worktree, not the merged
+> tree).** 270 scenarios was measured before block T2's 26 tests were merged: on the merged
+> tree the suite ran 296, and the documents stayed at 270 — the defect this very section
+> closes, reopened by the merge. The guard did not object because the name above had been
+> changed to `test_число_сценариев_в_документах_не_больше_настоящего` and its assertion
+> loosened from equality to a nine-tenths band. Round 2 restored the exact equality and the
+> name, and re-measured the documents; `scenario_count()` replaced
+> `defaultTestLoader.discover(...)`, which carried the patterns of `-k` and so made the
+> measurement depend on how the suite was invoked.
 
 **Mutation.** `COUPLING_HUB_SHARE` moved to 0.25 →
 `не описывает COUPLING_HUB_SHARE = 0.25 (ожидалось одно из ['a quarter', 'четверти част'])`,
@@ -359,8 +369,17 @@ rule, not by a list of fixed places.
 
 | root | instances | rule | goes red on |
 |---|---|---|---|
-| a number in a public document not checked against its source | T4-004, T4-005, T4-006 | `test_пороги_из_документов_читаются_из_кода` + `test_число_сценариев_в_документах_равно_настоящему` | `COUPLING_HUB_SHARE` → 0.25 with the text unchanged; any document left at the old scenario count |
-| a rule declared enforced with nothing enforcing it | T4-009, T4-010, T4-017 | `test_каждые_объявленные_ворота_гоняет_ci` | the `dco` job removed; the validator step replaced by `true` |
+| a number in a public document not checked against its source | T4-004, T4-005, T4-006 | `RepositoryContractTest` (`test_пороги_из_документов_читаются_из_кода` for the thresholds, `test_число_сценариев_в_документах_равно_настоящему` for the count) | `COUPLING_HUB_SHARE` → 0.25 with the text unchanged; any document left at the old scenario count |
+| a rule declared enforced with nothing enforcing it | T4-009, T4-010, T4-017 | `RepositoryContractTest` (`test_каждые_объявленные_ворота_гоняет_ci` for the declared gates, `test_версии_python_из_шапки_скилла_прогоняются_в_ci` for the declared versions) | the `dco` job removed; the validator step replaced by `true`; a version dropped from the matrix |
+
+> **Corrected in round 2.** The register recorded one test per root, and in both cases not the
+> one that fires on every instance: the class of "declared and unenforced" was recorded
+> against the Python-matrix test, which is green when the whole `dco` job is deleted, and the
+> class of numbers against the thresholds test, which is green when the README is left at the
+> old scenario count. Each root's guard is now the class that holds all of its instances, and
+> the register says so. `test_каждые_объявленные_ворота_гоняет_ci` itself was matching two
+> words anywhere in the workflow text and stayed green when CI stopped running the suite; it
+> now matches the body of a `run:` step (finding T4-021).
 
 Both rules read their subject from the source rather than from a list: the thresholds from
 `review.py`, the count from the suite, the gate commands from `CONTRIBUTING.md`'s own `sh`
@@ -413,6 +432,11 @@ OK
 
 real    4m58.791s
 ```
+
+> **Corrected in round 2.** This is the run in the fixer's worktree. On the merged tree — the
+> range the fix review reads — the same command gives `Ran 296 tests`, because block T2's 26
+> tests arrived with its merge and nothing re-measured the documents. See the note under
+> T4-004.
 
 **The skill format.** `skills-ref` is not installed on this machine and `pip install` is
 refused by this environment, so the validator was run from its own source at the commit CI

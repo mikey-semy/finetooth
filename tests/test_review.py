@@ -36,6 +36,26 @@ SKILL = KIT / "skills" / "finetooth"
 TOOL = Path(os.environ.get("FINETOOTH_TOOL", SKILL / "scripts" / "review.py"))
 
 
+def tracked(*args: str) -> list[str]:
+    """Файлы набора — у git, по пути от корня. Список, разделённый NUL: имя файла может
+    содержать что угодно, кроме NUL, и разбор по строкам на первом же таком имени лжёт."""
+    out = subprocess.run(["git", "-C", str(KIT), "ls-files", "-z", *args],
+                         capture_output=True, text=True, check=True, env=child_env()).stdout
+    return [p for p in out.split("\0") if p]
+
+
+def shell_gate(rel: str) -> Path:
+    """Ворота, написанные на оболочке (`dco.sh`, `guard-grep.sh`) — по пути от корня.
+
+    Обычно — те, что лежат в репозитории. Переменной окружения один из них подменяет
+    мутационная узда (`ShellGateMutationTest`): она обращает в успех один отказ скрипта и
+    требует, чтобы названный рядом прогон на этой копии покраснел. Формат подмены —
+    `путь-от-корня=путь-к-копии`: подменяется ровно один скрипт, остальные остаются своими.
+    """
+    name, _, path = os.environ.get("FINETOOTH_SHELL_GATE", "").partition("=")
+    return Path(path) if name == rel and path else KIT / rel
+
+
 if "utf-8" not in (sys.getfilesystemencoding() or "").lower().replace("utf8", "utf-8"):
     # Потомкам локаль задаёт child_env, но argv кодирует РОДИТЕЛЬ: имена тестов, пути
     # стенда и сообщения коммитов здесь не-ASCII, и в локали C без режима UTF-8 прогон
@@ -1214,8 +1234,11 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("input total          2,002", full)
 
     def test_run_role_отказывает_на_неизвестной_роли(self):
-        out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "nosuch"],
-                             capture_output=True, text=True, env=child_env())
+        """Скрипт берётся через `shell_gate`: этот отказ — предмет мутационной узды ворот
+        на оболочке, а она подменяет скрипт копией через окружение."""
+        out = subprocess.run(
+            ["bash", str(shell_gate("skills/finetooth/assets/run-role.sh")), "H1", "nosuch"],
+            capture_output=True, text=True, env=child_env())
         self.assertEqual(out.returncode, 2)
         self.assertIn("unknown role", out.stderr)
 
@@ -3642,6 +3665,67 @@ class GitTruthTest(unittest.TestCase):
         self.assertNotIn("src/generated/x.ts", out.stdout)
 
 
+# Аргументы, при которых команда ДОХОДИТ ДО СВОЕЙ РАБОТЫ. Одного набора на всех не бывает:
+# `review set-status H1 s.md` — это `argparse`, отказавший до начала команды, и правило,
+# звавшее всех одинаково, проверяло бы его отказ, а не поведение команды. Измерено дважды:
+# при общем наборе `H1 s.md` до тела доходили три команды из двадцати трёх, а при наборах
+# `()` и `("H1",)` — двадцать из двадцати трёх, и мимо правила проходили ровно `set-status`,
+# `set-finding` и `log`, то есть три из тех, что ПИШУТ. Таблица одна на все обходы команд.
+#
+# Доводов, однако, мало: команда начинается и отказывается ДО своей записи, если стенду
+# нечего ей дать. Измерено на стенде обхода границы записи: `set-finding H1-001 open`
+# отвечал «finding H1-001 is not in the register» (код 2), `import H1` — «no findings file
+# for the block», `restamp H1` — «H1 is in status todo»; argparse при этом молчал, и обход
+# оставался зелёным. Стенд доводит `body_stand`, и вместе они — один договор: довод и то
+# состояние, при котором этот довод доводит команду до записи.
+BODY_ARGV = {
+    "init": (), "version": (), "setup": (), "status": (), "next": (),
+    "coverage": (), "prompt": ("H1",), "set-status": ("H1", "running"),
+    "import": ("H1",), "set-finding": ("H1-001", "open"), "hypotheses": ("H1",),
+    # Именно находка, а не блок: `set-status` в обходе идёт раньше `restamp`, и после него
+    # блок не в том статусе, который штампуется, — блочный `restamp` отказывался бы всегда.
+    "restamp": ("H1-001",), "backfill": (), "inventory": (), "sizes": (),
+    "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
+    "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
+}
+# Отказ argparse — это не поведение команды: он печатается до её начала.
+ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are required",
+                    "invalid choice")
+
+
+def argparse_refused(stderr: str) -> str:
+    """Жалоба argparse в выводе: команда до своего тела не дошла, и обход её не проверил."""
+    return next((said for said in ARGPARSE_REFUSED if said in stderr), "")
+
+
+def body_stand(s: Stand) -> None:
+    """Доводит УЖЕ заведённый стенд (`init` сделан) до состояния, в котором `BODY_ARGV`
+    доводит каждую команду до её РАБОТЫ, а не до отказа перед ней.
+
+    Реестр с находкой `H1-001`: её вносит `import`, двигает `set-finding`, переснимает
+    `restamp`. Каждой из трёх оставлена работа, которую видно в самом реестре, а не по
+    времени записи: в черновике ждёт непронумерованная вторая находка (её внесёт `import`),
+    у `H1-001` нет отметки о переводе (её поставит `set-finding`), а файл находки уехал
+    вперёд отпечатка (его переснимет `restamp`). Иначе команда доходит до записи и пишет
+    те же байты — и «реестр не изменился» означало бы то же, что отказ до записи.
+    """
+    draft = json.dumps({
+        "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+        "file": "src/one.ts", "claim": "тут дефект",
+        "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n"
+    s.write("docs/review/reports/H1-findings.jsonl", draft)
+    s.commit("черновик находок")
+    imported = s.run("import", "H1")
+    assert imported.returncode == 0, imported.stderr
+    # Вторая находка дописывается ПОСЛЕ ввоза: номер ей выдаст тот `import`, который
+    # зовёт обход, и выданный номер — это его запись в реестр.
+    numbered = (s.root / "docs/review/reports/H1-findings.jsonl").read_text(encoding="utf-8")
+    s.write("docs/review/reports/H1-findings.jsonl", numbered + draft.replace(
+        "тут дефект", "тут второй дефект"))
+    s.write("src/one.ts", "a\nб\n")
+    s.commit("вторая находка в черновике; файл находки уехал вперёд отпечатка")
+
+
 class WriteBoundaryTest(unittest.TestCase):
     """УЗДА КЛАССА «инструмент пишет не там, где обещано».
 
@@ -3665,6 +3749,7 @@ class WriteBoundaryTest(unittest.TestCase):
         self.s.manifest(hypotheses=1)
         self.s.commit()
         self.s.run("init")
+        body_stand(self.s)
 
     def _snapshot(self) -> dict[str, str]:
         """Всё дерево проекта, кроме `.git` и самого каталога ревью."""
@@ -3677,16 +3762,51 @@ class WriteBoundaryTest(unittest.TestCase):
                 out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
         return out
 
+    # `summary` зовётся без `--out`: путь по умолчанию — то самое разрешённое исключение,
+    # которое проверяет это правило, а `--out` — просьба человека, и её держит отдельный
+    # тест ниже.
+    ARGV = dict(BODY_ARGV, summary=())
+
     def test_ни_одна_команда_не_пишет_вне_каталога_ревью(self):
+        """Каждая команда зовётся так, что ДЕЛАЕТ СВОЮ РАБОТУ.
+
+        Пока обход звал всех через `()` и `("H1",)`, три команды — `set-status`,
+        `set-finding` и `log` — отвергал argparse раньше их кода, и под правилом о границе
+        записи они не были вовсе: ровно три из тех, что пишут. Отказ argparse поэтому не
+        засчитывается как проход — иначе обход перечисляет команды, не запуская их.
+
+        Одних доводов мало. С ними, но на пустом стенде, `import`, `set-finding` и
+        `restamp` отказывались раньше своей записи (код 2, argparse молчит) — снова три
+        пишущие команды мимо правила: направь запись реестра в корень репозитория, и обход
+        оставался зелёным. Отказ команды поэтому тоже не засчитывается как проход: код 2 —
+        это «до записи не дошло», и стенд надо дописать (`body_stand`), а не смириться.
+        Код 1 — законный приговор ворот (`check`, `coverage` на красном состоянии), он
+        работу сделал.
+        """
         helped = self.s.run("--help").stdout
         names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
         self.assertTrue(names, helped)
         commands = names.group(1).split(",")
         self.assertIn("summary", commands)
+        self.assertEqual(sorted(set(self.ARGV) - set(commands)), [],
+                         "в таблице есть команда, которой у инструмента больше нет")
         before = self._snapshot()
         for cmd in commands:
-            for args in ((), ("H1",)):
-                self.s.run(cmd, *args)
+            with self.subTest(cmd=cmd):
+                self.assertIn(cmd, self.ARGV,
+                              "новая команда: впишите в BODY_ARGV аргументы, при которых "
+                              "она доходит до своего тела, — иначе правило проверяет "
+                              "отказ argparse, а не запись команды")
+            out = self.s.run(cmd, *self.ARGV.get(cmd, ()))
+            with self.subTest(cmd=cmd, args=self.ARGV.get(cmd, ())):
+                self.assertFalse(argparse_refused(out.stderr),
+                                 f"{cmd}: команда не начиналась — поправьте BODY_ARGV: "
+                                 f"{out.stderr[-300:]}")
+                self.assertNotEqual(
+                    out.returncode, 2,
+                    f"{cmd}: отказ раньше работы команды — до своей записи она не дошла, и "
+                    f"обход её не проверил. Допишите стенд (`body_stand`) или довод в "
+                    f"BODY_ARGV: {out.stderr[-300:]}")
         after = self._snapshot()
         appeared = {rel for rel in after if rel not in before}
         changed = {rel for rel in before if after.get(rel, before[rel]) != before[rel]}
@@ -3694,6 +3814,38 @@ class WriteBoundaryTest(unittest.TestCase):
                          "файлы появились вне docs/review/ — SECURITY.md этого не обещает")
         self.assertEqual(changed, set(),
                          "файлы изменены вне docs/review/ — SECURITY.md этого не обещает")
+
+    # Команды, которые ПИШУТ В РЕЕСТР: ровно те три, что обход перечислял, не запуская.
+    REGISTER_WRITERS = ("import", "set-finding", "restamp")
+
+    def test_обход_доводит_до_записи_каждую_пишущую_в_реестр_команду(self):
+        """Что именно проверяет обход границы записи: не «команда началась», а «команда
+        записала». Со стендом без реестра `import`, `set-finding` и `restamp` отказывались
+        раньше своей записи, и направленная в корень репозитория запись реестра оставляла
+        обход зелёным — три пишущие команды из двадцати трёх мимо обещания SECURITY.md."""
+        register = self.s.root / "docs/review/findings.jsonl"
+        for cmd in self.REGISTER_WRITERS:
+            before = register.read_text(encoding="utf-8")
+            out = self.s.run(cmd, *self.ARGV[cmd])
+            with self.subTest(cmd=cmd):
+                self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+                self.assertNotEqual(
+                    register.read_text(encoding="utf-8"), before,
+                    f"{cmd} {self.ARGV[cmd]}: реестр не изменился — до своей записи команда "
+                    f"не дошла, и обход границы записи её не проверил")
+
+    def test_красный_приговор_ворот_за_несделанную_работу_не_считается(self):
+        """Обратная сторона сужения: обход требует не нуля, а того, что команда дошла до
+        работы. `check` и `coverage` на красном состоянии выходят с единицей — это их
+        приговор, а не отказ до работы; потребуй обход нуля, он краснел бы на собственном
+        стенде, и держать границу записи стало бы нечем."""
+        self.s.write("docs/review/reports/H1-demo.hunter.md", "")
+        for cmd in ("check", "coverage"):
+            out = self.s.run(cmd)
+            with self.subTest(cmd=cmd):
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertNotEqual(out.returncode, 2)
+                self.assertFalse(argparse_refused(out.stderr))
 
     def test_итог_пишется_туда_куда_сказали_и_только_туда(self):
         """Обратная сторона: разрешённое исключение обязано работать — и по умолчанию,
@@ -3743,6 +3895,9 @@ class HandWrittenInputTest(unittest.TestCase):
         self.s.manifest(hypotheses=1)
         self.s.commit()
         self.s.run("init")
+        # Стенд тот же, что у обхода границы записи: таблица доводов и состояние, при
+        # котором эти доводы доводят команду до работы, — один договор на оба обхода.
+        body_stand(self.s)
 
     def _add_block(self, **fields) -> None:
         bj = self.s.root / "docs/review/blocks.json"
@@ -3865,21 +4020,10 @@ class HandWrittenInputTest(unittest.TestCase):
         "blocks не списком": lambda d: d.update(blocks={"id": "H1"}),
     }
 
-    # Аргументы, при которых команда ДОХОДИТ ДО СВОЕГО ТЕЛА. Одного набора на всех не
-    # бывает: `review set-status H1 s.md` — это `argparse`, отказавший до начала команды,
-    # и правило ниже проверяло бы его отказ, а не поведение команды. Измерено: при общем
-    # наборе `H1 s.md` до тела доходили три команды из двадцати трёх.
-    ARGV = {
-        "init": (), "version": (), "setup": (), "status": (), "next": (),
-        "coverage": (), "prompt": ("H1",), "set-status": ("H1", "running"),
-        "import": ("H1",), "set-finding": ("H1-001", "open"), "hypotheses": ("H1",),
-        "restamp": ("H1",), "backfill": (), "inventory": (), "sizes": (),
-        "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
-        "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
-    }
-    # Отказ argparse — это не поведение команды: он печатается до её начала.
-    ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are required",
-                        "invalid choice")
+    # Аргументы, при которых команда доходит до своего тела, — общая таблица `BODY_ARGV`:
+    # обходы команд обязаны звать их одинаково, иначе один из них снова проверит отказ
+    # argparse вместо самой команды.
+    ARGV = BODY_ARGV
 
     def _damage(self, how) -> None:
         bj = self.s.root / "docs/review/blocks.json"
@@ -3924,10 +4068,9 @@ class HandWrittenInputTest(unittest.TestCase):
                     with self.subTest(cmd=cmd, args=args):
                         self.assertNotIn("Traceback", out.stderr,
                                          f"{name} / {cmd} {args}: {out.stderr[-400:]}")
-                        for said in self.ARGPARSE_REFUSED:
-                            self.assertNotIn(said, out.stderr,
-                                             f"{name} / {cmd}: команда не начиналась — "
-                                             "поправьте ARGV")
+                        self.assertFalse(argparse_refused(out.stderr),
+                                         f"{name} / {cmd}: команда не начиналась — "
+                                         f"поправьте BODY_ARGV")
 
     def test_отказ_на_битом_определении_называет_поле_и_файл(self):
         """Отказ читает тот, кто видит инструмент впервые: он обязан назвать, что править."""
@@ -4472,8 +4615,11 @@ class SpendTest(unittest.TestCase):
         env = child_env(PATH=f"{stub_dir}:{os.environ['PATH']}",
                         REVIEW=review, TMPDIR=str(self.s.root / "runs"))
         (self.s.root / "runs").mkdir()
-        out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "hunter"],
-                             cwd=self.s.root, capture_output=True, text=True, env=env)
+        # Через `shell_gate`: отказы этого скрипта — предмет мутационной узды ворот на
+        # оболочке, а она подменяет скрипт копией через окружение.
+        out = subprocess.run(
+            ["bash", str(shell_gate("skills/finetooth/assets/run-role.sh")), "H1", "hunter"],
+            cwd=self.s.root, capture_output=True, text=True, env=env)
         journal = (self.s.root / "docs/review/journal.md")
         return out, journal.read_text(encoding="utf-8") if journal.exists() else ""
 
@@ -4560,17 +4706,22 @@ class GuardGrepTest(unittest.TestCase):
     """Узда проекта-пользователя: один маркер — одно послабление, а несуществующий путь
     — отказ, а не тишина."""
 
+    SCRIPT = shell_gate("skills/finetooth/assets/guard-grep.sh")
+
     def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="finetooth-guard-"))
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.pkg = self.dir / "internal" / "billing"
         self.pkg.mkdir(parents=True)
 
+    def _bare(self, *args: str) -> subprocess.CompletedProcess:
+        """Скрипт без ключей от себя: отказы про сами ключи иначе не проверить."""
+        return subprocess.run(["bash", str(self.SCRIPT), *args],
+                              capture_output=True, text=True, env=child_env())
+
     def _run(self, *paths: str, extra: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["bash", str(SKILL / "assets" / "guard-grep.sh"), "--pattern", r"\.Publish\(",
-             "--marker", "outbox-allowed:", *extra, "--", *paths],
-            capture_output=True, text=True, env=child_env())
+        return self._bare("--pattern", r"\.Publish\(", "--marker", "outbox-allowed:",
+                          *extra, "--", *paths)
 
     def test_исключение_снимает_попадание_а_остальные_оставляет(self):
         """`--exclude` — второй способ не быть нарушением: вызов, который И ТАК идёт
@@ -4618,6 +4769,26 @@ class GuardGrepTest(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout)
         self.assertIn("no such path", out.stderr)
         self.assertIn("not the same as a clean tree", out.stderr)
+
+    # Ворота зовут из Makefile, и всякая опечатка в вызове — это скрипт, который ничего
+    # не просмотрел. Каждый его отказ обязан отличаться от чистого дерева кодом возврата;
+    # держит это `ShellGateMutationTest`, а без своего теста отказ не держало ничто.
+    def test_неизвестный_ключ_это_отказ_а_не_тишина(self):
+        (self.pkg / "a.go").write_text("package billing\nbroker.Publish(1)\n", encoding="utf-8")
+        out = self._run(str(self.pkg), extra=("--windwo", "3"))
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("unknown argument", out.stderr)
+
+    def test_без_образца_и_маркера_это_отказ_а_не_тишина(self):
+        out = self._bare("--", str(self.pkg))
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("--pattern", out.stderr)
+        self.assertIn("--marker", out.stderr)
+
+    def test_без_путей_это_отказ_а_не_тишина(self):
+        out = self._bare("--pattern", r"\.Publish\(", "--marker", "outbox-allowed:", "--")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("no paths", out.stderr)
 
 
 class GateCoverageTest(unittest.TestCase):
@@ -5351,6 +5522,171 @@ class GateMutationTest(unittest.TestCase):
         self._all(self._flipped)
 
 
+# Отказ ворот, написанных на оболочке: `exit` с ненулевым кодом ТАМ, ГДЕ ОБОЛОЧКА НАЧИНАЕТ
+# КОМАНДУ, — начало строки, `;`, `&&`, `||`, ветка `case` или ключевое слово `then`, `else`,
+# `do`. Ищется ПО ВИДУ, а не списком строк: отказ, дописанный завтра, попадает под правило
+# сам. Пока предшественником считались только начало строки и `;`, `if … ; then exit 3; fi`
+# — обычнейшая форма отказа, и ею написан отказ `run-role.sh` о потерянной записи в
+# дневник — правилом не считался вовсе. Отказ вида `${1:?…}` сюда не входит: его печатает
+# сама оболочка, и заглушить его нечем.
+SHELL_REFUSAL = re.compile(
+    r"(?:^|[;)]|\|\||&&|\b(?:then|else|do))(\s*exit\s+)[1-9][0-9]*\b")
+
+
+def _shell_gates(source: str) -> list[int]:
+    """Номера строк, на которых скрипт-ворота отказывает.
+
+    Строка-комментарий отказом не считается: оба скрипта объясняют свои коды возврата
+    прозой рядом с ними («a path that does not exist is a REFUSAL (exit 2)»), и мутанту
+    из комментария нечего заглушать.
+    """
+    return [i for i, line in enumerate(source.splitlines(), 1)
+            if not line.lstrip().startswith("#") and SHELL_REFUSAL.search(line)]
+
+
+def _silence_refusal(line: str) -> str:
+    """Отказ обращён в успех: `exit 2` → `exit 0`.
+
+    Мутант обязан оставаться исполнимым скриптом — иначе «прогон покраснел» значило бы
+    «копия не запускается», а не «отказ держит тест».
+    """
+    return SHELL_REFUSAL.sub(
+        lambda m: m.group(0)[:m.end(1) - m.start(0)] + "0", line, count=1)
+
+
+class ShellGateMutationTest(unittest.TestCase):
+    """УЗДА КЛАССА «ворота, которые нечем уронить» — для ворот, написанных на оболочке.
+
+    `GateMutationTest` глушит ворота внутри `cmd_check` и ворот на оболочке не видит
+    вовсе. А они есть, и красноречиво: `dco.sh` печатал «all commits are signed off» и
+    выходил с нулём, когда git не смог разобрать диапазон, а три отказа `guard-grep.sh`
+    (неизвестный ключ, нет образца, нет путей) не держал ни один тест — каждый из них
+    можно было обратить в успех, и прогон оставался зелёным. Здесь каждый отказ по очереди
+    становится `exit 0`, и названный рядом прогон обязан на такой копии покраснеть.
+    """
+
+    # Скрипт-ворота → прогоны, которые обязаны его держать (образцы `-k`, годится и имя
+    # класса, и имя теста). Список не «те скрипты, о которых вспомнили»: он сверяется с
+    # `git ls-files` тестом ниже, и скрипт с отказом, которого здесь нет, роняет прогон,
+    # называя себя. Пока список был написан от руки, `run-role.sh` лежал вне правила, а
+    # четвёртые ворота попали бы туда же молча.
+    GATES = {".github/dco.sh": ("DcoGateTest",),
+             "skills/finetooth/assets/guard-grep.sh": ("GuardGrepTest",),
+             "skills/finetooth/assets/run-role.sh": (
+                 "test_run_role_отказывает_на_неизвестной_роли",
+                 "test_потерянная_запись_в_журнал_не_выдаёт_себя_за_чистый_прогон")}
+    # Мутанты ждут не процессора, а своих подпроцессов (git, bash, awk).
+    WORKERS = 8
+
+    def test_каждые_ворота_на_оболочке_под_правилом(self):
+        """Предмет правила берётся у git, а не из памяти автора. Скрипт без отказов уздой
+        не проверяется — глушить в нём нечего; скрипт с отказом обязан назвать прогон,
+        который эти отказы держит."""
+        with_refusals = [rel for rel in tracked("*.sh")
+                         if _shell_gates((KIT / rel).read_text(encoding="utf-8"))]
+        self.assertTrue(with_refusals, "в наборе не нашлось ни одного скрипта с отказом")
+        self.assertEqual(
+            sorted(set(with_refusals) - set(self.GATES)), [],
+            "скрипт с отказом вне правила: впишите его в GATES вместе с прогоном, который "
+            "его отказы держит, — иначе ворота можно обратить в успех, и прогон зелёный")
+        self.assertEqual(
+            sorted(set(self.GATES) - set(with_refusals)), [],
+            "в GATES назван скрипт, у которого отказов нет: глушить в нём нечего, и "
+            "правило о нём молчит — уберите строку или напишите отказ")
+
+    # Соседи, без которых копия скрипта не работает: `run-role.sh` зовёт `axes.py` путём от
+    # самого себя, и копия в голом временном каталоге падала бы не от мутации, а оттого, что
+    # соседа рядом нет — «прогон покраснел» перестало бы что-либо доказывать. Названо
+    # явно: угадывать, что именно скрипту нужно рядом, значит угадывать молча.
+    NEIGHBOURHOOD = {"skills/finetooth/assets/run-role.sh": "skills/finetooth"}
+
+    @classmethod
+    def _run_suite(cls, rel: str, source: str | None,
+                   suites: tuple[str, ...]) -> subprocess.CompletedProcess:
+        """Прогоняет названные наборы на КОПИИ скрипта, подменённой через окружение."""
+        with tempfile.TemporaryDirectory(prefix="finetooth-shell-") as d:
+            if rel in cls.NEIGHBOURHOOD:
+                near = cls.NEIGHBOURHOOD[rel]
+                shutil.copytree(KIT / near, Path(d, near))
+                copy = Path(d, rel)
+            else:
+                copy = Path(d, Path(rel).name)
+            copy.write_text((KIT / rel).read_text(encoding="utf-8")
+                            if source is None else source, encoding="utf-8")
+            copy.chmod(0o755)  # бит исполнения смотрит тест «скрипт без вызова — не ворота»
+            keys = [a for s in suites for a in ("-k", s)]
+            return subprocess.run(
+                [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests"),
+                 *keys], cwd=KIT, capture_output=True, text=True,
+                env=child_env(FINETOOTH_SHELL_GATE=f"{rel}={copy}"))
+
+    def test_на_целой_копии_прогон_ворот_зелёный(self):
+        """Обратная сторона: сама подмена ничего не ломает. Без этого «прогон покраснел»
+        доказывало бы не то, что отказ держит тест, а только то, что копия не работает."""
+        for rel, suites in self.GATES.items():
+            with self.subTest(ворота=rel):
+                out = self._run_suite(rel, None, suites)
+                self.assertEqual(out.returncode, 0,
+                                 f"{rel}: на копии без мутаций `{', '.join(suites)}` обязан "
+                                 f"быть зелёным:\n{out.stderr[-2000:]}")
+
+    def test_каждый_отказ_скрипта_держит_тест(self):
+        jobs = []
+        for rel, suites in self.GATES.items():
+            source = (KIT / rel).read_text(encoding="utf-8")
+            lines = source.splitlines(keepends=True)
+            refusals = _shell_gates(source)
+            with self.subTest(ворота=rel):
+                self.assertTrue(refusals, f"{rel}: не нашлось ни одного отказа")
+            for lineno in refusals:
+                jobs.append((rel, lineno, suites,
+                             "".join(lines[:lineno - 1]
+                                     + [_silence_refusal(lines[lineno - 1])]
+                                     + lines[lineno:])))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
+            codes = list(pool.map(
+                lambda j: self._run_suite(j[0], j[3], j[2]).returncode, jobs))
+        for (rel, lineno, suites, _), code in zip(jobs, codes):
+            with self.subTest(ворота=f"{rel}:{lineno}"):
+                self.assertNotEqual(
+                    code, 0,
+                    f"{rel}:{lineno}: отказ обращён в успех, а `{', '.join(suites)}` "
+                    f"зелёный — этот отказ не держит ни один тест. Напишите тест, который "
+                    f"на нём краснеет: ворота, которые нечем уронить, — не ворота")
+
+    # Обе стороны самого правила, на скриптах, которых в наборе нет: отказ узнаётся по
+    # виду, а успех и чужой `exit` в тексте — не отказ.
+    REFUSAL_SHAPES = {
+        "отказ в отдельной строке": ("if [ -z \"$x\" ]; then\n  exit 1\nfi\n", 2),
+        "отказ после точки с запятой": ("case $1 in\n*) echo no >&2; exit 2 ;;\nesac\n", 2),
+        # Формы, которых правило не видело: отказ в одну строку с `then`, отказ после
+        # `||` и ветка `case` без echo. Каждой написан не один скрипт ворот.
+        "отказ в одну строку с then": ("if [ -z \"$x\" ]; then exit 3; fi\n", 1),
+        "отказ после else": ("if ok; then :\nelse exit 4\nfi\n", 2),
+        "отказ после ||": ("check || exit 5\n", 1),
+        "отказ веткой case": ("case $1 in\n*) exit 2 ;;\nesac\n", 2),
+    }
+    INNOCENT_SHAPES = ("[ -n \"$x\" ] || exit 0\n",
+                       "# a gate exits 1 when the tree is dirty\n",
+                       "# a path that does not exist is a REFUSAL (exit 2), not a miss\n",
+                       "# if the range is empty; then exit 1 — that is the old wording\n",
+                       "awk 'END { exit(found ? 1 : 0) }' f\n",
+                       "if [ \"$RC\" -ne 0 ]; then exit \"$RC\"; fi\n")
+
+    def test_узда_видит_отказ_которого_ещё_нет(self):
+        for why, (src, lineno) in self.REFUSAL_SHAPES.items():
+            with self.subTest(отказ=why):
+                self.assertEqual(_shell_gates(src), [lineno],
+                                 "узда не увидела отказ по виду")
+                line = src.splitlines(keepends=True)[lineno - 1]
+                self.assertIn("exit 0", _silence_refusal(line),
+                              "отказ не обращён в успех — мутант ничего не проверяет")
+        for src in self.INNOCENT_SHAPES:
+            with self.subTest(невиновный=src.strip()):
+                self.assertEqual(_shell_gates(src), [],
+                                 "узда приняла за отказ то, что отказом не является")
+
+
 def _spawns(source: str) -> list[tuple[int, str]]:
     """Запуски потомков в наборе и то, чем они грешат: (строка, жалоба).
 
@@ -5441,11 +5777,172 @@ class TestSuiteRuleTest(unittest.TestCase):
                 self.assertEqual(_spawns(src), [], "узда придирается к верной записи")
 
 
+def _asks_the_tool_for_commands(fn: ast.FunctionDef) -> bool:
+    """Обход спросил список подкоманд у самого инструмента: `--help` или `_subcommands()`.
+
+    Вопрос ищется в КОДЕ, а не в тексте функции: докстрока, называющая `--help`, — это
+    рассказ об обходе, а не обход.
+    """
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Call):
+            continue
+        if isinstance(n.func, ast.Name) and n.func.id == "_subcommands":
+            return True
+        if isinstance(n.func, ast.Attribute) and n.func.attr == "_subcommands":
+            return True
+        if any(isinstance(a, ast.Constant) and a.value == "--help" for a in n.args):
+            return True
+    return False
+
+
+def _runs_a_command_it_was_given(fn: ast.FunctionDef) -> bool:
+    """Обход зовёт команду, имя которой он получил, а не написал: довод не строка-литерал.
+
+    `self.s.run(*[cmd])` — тот же обход: имя приходит из развёрнутого списка, и правило,
+    смотревшее только на голое имя первым доводом, такой обход не видело вовсе.
+    """
+    for n in ast.walk(fn):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "run" and n.args):
+            continue
+        first = n.args[0]
+        if isinstance(first, ast.Starred):
+            return True
+        if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+            return True
+    return False
+
+
+def _asserts_the_command_started(fn: ast.FunctionDef) -> bool:
+    """Обход СПРАШИВАЕТ про отказ argparse и ВЕШАЕТ НА ОТВЕТ проверку.
+
+    Оба условия измерены на выдуманных обходах: имя `argparse_refused` в докстроке,
+    мёртвое `argparse_refused = None` и вызов без проверки оставляют обход ровно таким,
+    каким он был до правила. Годится и общий помощник, и свой перебор `ARGPARSE_REFUSED`
+    — важно, что вопрос задан в коде, а ответ доведён до утверждения.
+    """
+    # `for said in ARGPARSE_REFUSED: ... assertNotIn(said, ...)` — проверка утверждает про
+    # имя, взятое ИЗ словаря; без этого свой перебор выглядел бы обходом без вопроса.
+    borrowed: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.For) and any(
+                isinstance(n, ast.Name) and n.id == "ARGPARSE_REFUSED"
+                and isinstance(n.ctx, ast.Load) for n in ast.walk(node.iter)):
+            borrowed |= {t.id for t in ast.walk(node.target) if isinstance(t, ast.Name)}
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Assert)
+                or (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr.startswith("assert"))):
+            continue
+        for n in ast.walk(node):
+            if (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                    and (n.id in ("argparse_refused", "ARGPARSE_REFUSED") or n.id in borrowed)):
+                return True
+    return False
+
+
+def _sweeps_without_body_check(source: str) -> list[str]:
+    """Обходы команд, которые не смотрят, дошла ли команда до своего тела.
+
+    Обход узнаётся ПО ВИДУ, а не по имени: он спросил список у самого инструмента
+    (`--help` или общий `_subcommands`) и зовёт команду, имя которой получил. Такой обход
+    обязан спросить общий словарь отказов argparse и повесить на ответ проверку — иначе
+    он перечисляет команды, а проверяет отказ argparse, и мимо него проходит ровно то,
+    что он заведён держать.
+    """
+    return [fn.name for fn in ast.walk(ast.parse(source))
+            if isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")
+            and _asks_the_tool_for_commands(fn) and _runs_a_command_it_was_given(fn)
+            and not _asserts_the_command_started(fn)]
+
+
+class CommandSweepRuleTest(unittest.TestCase):
+    """УЗДА КЛАССА «узда перечисляет свой предмет, не запуская его».
+
+    Два обхода подряд брали список подкоманд у самого инструмента — и звали их так, что
+    argparse отвергал часть до их кода: до `init` не доходил обход порченых определений, до
+    `set-status`, `set-finding` и `log` — обход границы записи, то есть до трёх из тех
+    команд, что пишут. Оба обхода были зелёные, и оба записаны как правила, под которые
+    новая команда попадает сама. Правило по исходнику набора держит и тот обход, которого
+    ещё нет: следующий напишут копией соседнего.
+    """
+
+    def test_каждый_обход_команд_проверяет_что_команда_началась(self):
+        self.assertEqual(
+            _sweeps_without_body_check(Path(__file__).read_text(encoding="utf-8")), [],
+            "обход берёт список команд у инструмента и не проверяет, что команда дошла до "
+            "тела: спросите argparse_refused(out.stderr) и зовите команды через BODY_ARGV")
+
+    # Обе стороны правила, на обходах, которых в наборе нет.
+    SWEEP_SHAPES = {
+        "обход через --help": (
+            "class S:\n    def test_x(self):\n"
+            "        cmds = re.findall(r'x', self.s.run('--help').stdout)\n"
+            "        for cmd in cmds:\n            self.s.run(cmd)\n"),
+        "обход через общий список": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n            self.s.run(cmd)\n"),
+        # Три способа выглядеть спросившим, не спросив: измерены на правиле, которое
+        # искало имя `argparse_refused` в тексте функции и команду — голым именем.
+        "вопрос только в докстроке": (
+            "class S:\n    def test_x(self):\n"
+            "        '''Каждая команда зовётся так, что argparse_refused пуст.'''\n"
+            "        for cmd in self._subcommands():\n            self.s.run(cmd)\n"),
+        "мёртвое присваивание вместо вопроса": (
+            "class S:\n    def test_x(self):\n"
+            "        argparse_refused = None\n"
+            "        for cmd in self._subcommands():\n            self.s.run(cmd)\n"),
+        "вопрос без проверки": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(cmd)\n"
+            "            argparse_refused(out.stderr)\n"),
+        "имя команды через развёртывание списка": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n            self.s.run(*[cmd])\n"),
+    }
+    INNOCENT_SWEEPS = {
+        "обход, который спросил про argparse": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(cmd, *BODY_ARGV[cmd])\n"
+            "            self.assertFalse(argparse_refused(out.stderr))\n"),
+        "обход со своей копией словаря отказов": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(cmd)\n"
+            "            for said in ARGPARSE_REFUSED:\n"
+            "                self.assertNotIn(said, out.stderr)\n"),
+        "перебор двух названных команд": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in ('check', 'coverage'):\n            self.s.run(cmd)\n"),
+        "развёртывание списка, но со спросом": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(*[cmd, *BODY_ARGV[cmd]])\n"
+            "            self.assertFalse(argparse_refused(out.stderr))\n"),
+        "рассказ об обходе, а не обход": (
+            "class S:\n    def test_x(self):\n"
+            "        '''Список берётся у --help, как в обходе через _subcommands().'''\n"
+            "        self.assertIn('check', self.s.run('--help').stdout)\n"),
+    }
+
+    def test_узда_видит_обход_которого_ещё_нет(self):
+        for why, src in self.SWEEP_SHAPES.items():
+            with self.subTest(обход=why):
+                self.assertEqual(_sweeps_without_body_check(src), ["test_x"],
+                                 "узда не увидела обход по виду")
+        for why, src in self.INNOCENT_SWEEPS.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(_sweeps_without_body_check(src), [],
+                                 "узда придирается к верному обходу")
+
+
 class DcoGateTest(unittest.TestCase):
     """CONTRIBUTING обещает, что каждый коммит подписан, — и до этих ворот обещание не
     держало ничто, кроме галочки в шаблоне предложения, которую автор ставит сам."""
 
-    SCRIPT = KIT / ".github" / "dco.sh"
+    SCRIPT = shell_gate(".github/dco.sh")
 
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="finetooth-dco-"))
@@ -5495,6 +5992,56 @@ class DcoGateTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertIn("signed off", out.stdout)
 
+    # Адреса, в которых есть метасимволы регулярного выражения. Это не редкий случай:
+    # `12345678+login@users.noreply.github.com` GitHub выдаёт каждому, кто закрыл свою
+    # почту, и коммитит под ним из веб-интерфейса; точка в локальной части — обычная
+    # форма корпоративного адреса.
+    METACHARACTER_ADDRESSES = ("12345678+octocat@users.noreply.github.com",
+                               "first.last@company.com", "dev+finetooth@example.com")
+
+    def test_подпись_с_адреса_с_метасимволами_проходит(self):
+        """Сторона, которая важнее: честную работу ворота не заворачивают.
+
+        Адрес автора уходил в образец `grep -E` как есть, и `+` становился квантором:
+        подписанный коммит получал отказ, а названная в отказе починка
+        (`git rebase --signoff`) заново писала ту же самую строку — выхода из отказа не
+        было вовсе.
+        """
+        for i, addr in enumerate(self.METACHARACTER_ADDRESSES):
+            who = f"Кто-То {i} <{addr}>"
+            self.commit(f"meta{i}", signoff=who, author=who)
+        out = self.check(f"HEAD~{len(self.METACHARACTER_ADDRESSES)}..HEAD")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("signed off", out.stdout)
+
+    def test_подпись_на_похожий_адрес_не_засчитывается(self):
+        """Та же поломка в другую сторону: точка в образце — это любой знак, и подпись
+        `aXb@example.com` удостоверяла коммит автора `a.b@example.com`. Адрес сверяется
+        строкой, а не образцом."""
+        self.commit("lookalike", signoff="Борис Другой <aXb@example.com>",
+                    author="Анна Автор <a.b@example.com>")
+        out = self.check("HEAD~1..HEAD")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+
+    def test_нерешаемый_диапазон_роняет_ворота_и_называет_починку(self):
+        """`git rev-list` читался через подстановку процесса и свой код возврата не
+        сообщал никому: на диапазоне, которого git не понимает — клон без `origin/dev`,
+        удалённый под другим именем, — список коммитов выходил пустым, и ворота печатали
+        «all commits are signed off» с нулём, не посмотрев ни одного коммита. Ровно тот
+        диапазон, который CONTRIBUTING велит гонять у себя."""
+        self.commit("unsigned")
+        out = self.check("origin/dev..HEAD")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertNotIn("signed off", out.stdout)
+        self.assertIn("git fetch", out.stderr, "отказ обязан называть, что делать")
+
+    def test_диапазон_без_коммитов_ворота_не_роняет(self):
+        """Обратная сторона: диапазон, который git понимает, но в котором коммитов нет,
+        — не нарушение. Проверка списка не должна превратить пустую ветку в отказ."""
+        out = self.check("HEAD..HEAD")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("signed off", out.stdout)
+
     def test_коммит_слияния_подписи_не_требует(self):
         """Слияние не несёт ничьего авторства кода, и `git merge` не подписывает его."""
         self.git("checkout", "-q", "-b", "side")
@@ -5511,6 +6058,157 @@ class DcoGateTest(unittest.TestCase):
         self.assertIn(".github/dco.sh", wf)
         self.assertIn("fetch-depth: 0", wf)
         self.assertTrue(os.access(self.SCRIPT, os.X_OK), "dco.sh не исполняемый")
+
+
+def _workflow_steps(text: str) -> list[str]:
+    """Командные строки рабочего процесса: тело каждого `run:`, по строке за раз.
+
+    Искать по всему тексту процесса нельзя, и это измерено: `python3` встречается в шаге,
+    который ставит валидатор скилла, а `tests` — в имени самого процесса (`name: tests`),
+    так что узда, требовавшая двух таких слов где угодно, оставалась зелёной и когда из CI
+    удаляли шаг с прогоном тестов, и когда удаляли весь его job. Запускает команды только
+    `run:`, и сверять надо с ним.
+    """
+    lines, steps, i = text.splitlines(), [], 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)(?:-\s+)?run:[ \t]*([|>][-+]?)?[ \t]*(.*)$", lines[i])
+        i += 1
+        if not m:
+            continue
+        indent, folded, inline = m.group(1), m.group(2), m.group(3).strip()
+        if not folded:
+            steps.append(inline)
+            continue
+        # Тело блочного значения — всё, что отбито глубже ключа.
+        while i < len(lines) and (not lines[i].strip()
+                                  or lines[i].startswith(indent + " ")):
+            if lines[i].strip():
+                steps.append(lines[i].strip())
+            i += 1
+    return steps
+
+
+# Доводы, которые шаг ВПРАВЕ добавить к объявленной команде: они делают прогон громче, а
+# не уже. Всё остальное — отказ по имени: `-k НетТакого` гоняет ноль тестов, `|| true`
+# уносит код возврата мимо CI, и оба измерены зелёными на правиле, которое считало любой
+# лишний довод безобидным. Новый довод вписывается сюда вместе с причиной, почему он не
+# сужает ворота, — молчаливое «наверное, ничего» и есть то, чем ворота отключают.
+WIDENING_ARGS = ("-v", "--verbose")
+# Выражение GitHub Actions, свёрнутое в одно слово: `${{ github.sha }}` содержит пробелы,
+# и по пробелам диапазон рассыпается на пять слов, из которых на диапазон похоже `}}..${{`.
+SUBSTITUTION = "${{}}"
+
+
+def _step_tokens(step: str) -> list[str]:
+    """Слова командной строки шага, с выражениями `${{ … }}`, свёрнутыми в одно слово."""
+    return re.sub(r"\$\{\{[^{}]*\}\}", SUBSTITUTION, step).split()
+
+
+def _runs_command(cmd: str, step: str) -> bool:
+    """Шаг гоняет ИМЕННО эту команду: та же программа, все её доводы в том же порядке, и
+    ничего сверх того, что названо расширением.
+
+    Программа сверяется по имени, а не по пути: в CI валидатор лежит в venv под
+    `$RUNNER_TEMP`, а зовётся тем же именем. Диапазон коммитов CI подставляет из события,
+    поэтому на месте объявленного диапазона принимается подстановка — но не собственный
+    диапазон шага: `.github/dco.sh HEAD~1..HEAD` проверяет один коммит вместо всех
+    коммитов предложения, и это те же отключённые ворота, только тише.
+    """
+    want, got = cmd.split(), _step_tokens(step)
+    if not want or not got:
+        return False
+    if Path(want[0].strip("\"'")).name != Path(got[0].strip("\"'")).name:
+        return False
+    rest, extra = got[1:], []
+    for arg in want[1:]:
+        if ".." in arg:
+            hit = next((i for i, g in enumerate(rest)
+                        if ".." in g and (SUBSTITUTION in g or g == arg)), None)
+        else:
+            hit = rest.index(arg) if arg in rest else None
+        if hit is None:
+            return False
+        extra += rest[:hit]
+        rest = rest[hit + 1:]
+    return all(a in WIDENING_ARGS for a in extra + rest)
+
+
+def _gates_not_run(commands: list[str], steps: list[str]) -> list[str]:
+    """Команды, которые документ велит гонять, а ни один шаг процесса не гоняет."""
+    return [cmd for cmd in commands
+            if not any(_runs_command(cmd, step) for step in steps)]
+
+
+# Начало пункта списка любого вида: маркер `-`, `*`, `+` или номер с точкой либо скобкой.
+# Нумерованный пункт правило раньше не знало вовсе, а `RELEASING.md` — нумерованная
+# процедура целиком: абзац, написанный вплотную под шагом 4, уезжал внутрь шага 4.
+LIST_OPENER = re.compile(r"^(\s*)([-*+]|\d{1,9}[.)])( +)(?=\S)")
+# Строки, которые пунктом НЕ проглатываются. Ленивое продолжение бывает только у АБЗАЦА:
+# строка, которая сама открывает блок, список обрывает и печатается там, где написана.
+# Таких четыре (ограда — пятая, её функция считает отдельно): ATX-заголовок, цитата,
+# тематический разрыв и html-блок типов 1–6. Строка таблицы и определение ссылки сюда НЕ
+# входят: ни то ни другое абзац не прерывает (CommonMark 4.7; шапку таблицы GFM собирает
+# из последней строки абзаца), и `| a | b |` или `[x]: url` сразу за пунктом остаются
+# внутри пункта — послабление здесь ослепило бы правило на настоящем склеивании.
+OWN_BLOCK = re.compile(r"^ {0,3}(?:>|#{1,6}(?:\s|$)|(?:\*\s*){3,}$|(?:-\s*){3,}$"
+                       r"|(?:_\s*){3,}$|<[A-Za-z/!?])")
+
+
+def _glued_to_list_item(text: str) -> list[str]:
+    """Абзацы, приклеенные к пункту списка: строка текста под пунктом, без пустой строки.
+
+    По правилам markdown такой абзац — ЧАСТЬ пункта (ленивое продолжение), а не свой
+    абзац. Вводный абзац блока попал внутрь записи про `NOTICE.md`, и пятнадцать пунктов
+    блока оказались под заголовком, которого в разметке нет, — а заметки о выпуске берут
+    этот раздел как есть.
+
+    Разделяет продолжение и абзац КОЛОНКА, с которой начинается текст пункта, а не факт
+    отступа: под `- пункт` текст пункта идёт с колонки 2, и строка, отбитая одним
+    пробелом, проглатывается ровно так же, как отбитая нулём. Правило, смотревшее на
+    «есть ли отступ», такую строку не видело, как не видело и абзац после законного
+    продолжения пункта.
+    """
+    glued, fence, column = [], "", None
+    for i, line in enumerate(text.splitlines(), 1):
+        edge = re.match(r"^\s*(```+|~~~+)", line)
+        if fence:
+            if edge and edge.group(1)[0] == fence[0] and len(edge.group(1)) >= len(fence):
+                fence = ""
+            continue
+        if edge or not line.strip():
+            fence, column = (edge.group(1) if edge else ""), None
+            continue
+        opener = LIST_OPENER.match(line)
+        if opener:
+            # Колонка текста пункта. Больше четырёх пробелов после маркера — это уже
+            # отступленный блок внутри пункта, и текст считается с первого пробела.
+            spaces = len(opener.group(3))
+            column = (len(opener.group(1)) + len(opener.group(2))
+                      + (1 if spaces > 4 else spaces))
+            continue
+        if column is None:
+            continue
+        if OWN_BLOCK.match(line):
+            column = None
+            continue
+        if len(line) - len(line.lstrip()) < column:
+            glued.append(f"{i}: {line.strip()[:70]}")
+    return glued
+
+
+def _glued_lines(text: str) -> list[int]:
+    """Номера строк, которые `_glued_to_list_item` называет приклеенными."""
+    return [int(g.split(":", 1)[0]) for g in _glued_to_list_item(text)]
+
+
+def scenario_count() -> int:
+    """Сколько в наборе сценариев — тем числом, которое называют документы.
+
+    Загрузчик СВОЙ, а не `defaultTestLoader`: тот несёт в себе образцы из `-k`, и под
+    фильтром замер давал единицу. Число, которое зависит от способа запуска, — не замер, и
+    сверять с ним публичное число нельзя.
+    """
+    return unittest.TestLoader().discover(str(KIT / "tests")).countTestCases()
 
 
 def _ordinal_share(value: float) -> str:
@@ -5531,10 +6229,17 @@ class RepositoryContractTest(unittest.TestCase):
     утверждение либо держится прогоном, либо разъезжается с кодом молча.
     """
 
-    def test_число_сценариев_в_документах_не_больше_настоящего(self):
+    def test_число_сценариев_в_документах_равно_настоящему(self):
         """README (обоих языков) и AGENTS.md называют число сценариев как доказательство
-        того, что набор проверен. Число брали из головы: 98 против настоящих 248."""
-        real = unittest.defaultTestLoader.discover(str(KIT / "tests")).countTestCases()
+        того, что набор проверен. Число брали из головы: 98 против настоящих 248.
+
+        Равенство, а не полоса. Полоса «не больше настоящего и не меньше девяти десятых»
+        заводилась, чтобы не краснел каждый PR с новым тестом, — и вместе с этим разрешала
+        публичному числу отставать навсегда: раунд закрылся с 270 в документах против 296 в
+        прогоне, и это ровно то состояние, из-за которого читатель не может понять, что
+        именно у него не так. Замер стоит одной правки в трёх файлах, и отказ её называет.
+        """
+        real = scenario_count()
         self.assertGreater(real, 0)
         # Русское число склоняет за собой существительное: 336 сценариЕВ, но 343
         # сценариЯ. Образец, знающий одну форму, требовал бы от документа неграмотности
@@ -5547,13 +6252,27 @@ class RepositoryContractTest(unittest.TestCase):
             with self.subTest(файл=rel):
                 self.assertTrue(found, f"{rel}: число сценариев не названо")
                 for n in found:
-                    # Не больше настоящего — документ не обещает проверки, которой нет; и не
-                    # отстаёт больше чем на десятую часть. Точное равенство ломало каждый PR,
-                    # добавивший тест (после слияния трёх веток починки: 270 против 296).
-                    self.assertLessEqual(int(n), real,
-                                         f"{rel} обещает {n} сценариев, а их {real}")
-                    self.assertGreaterEqual(int(n), real * 9 // 10,
-                                            f"{rel} называет {n} сценариев, а их уже {real} — обновите число")
+                    self.assertEqual(
+                        int(n), real,
+                        f"{rel} называет {n} сценариев, а их {real}. Число сценариев — "
+                        f"замер: прогоните `python3 -m unittest discover -s tests` и "
+                        f"впишите {real} в README.md, README.ru.md и AGENTS.md")
+
+    def test_замер_числа_сценариев_не_зависит_от_способа_запуска(self):
+        """Обратная сторона точного равенства: замер обязан быть одним и тем же, как бы ни
+        звали прогон. `defaultTestLoader` несёт образцы `-k` в себе, и под фильтром счёт
+        давал единицу — с ним точное равенство было бы невыполнимо ни при каком числе в
+        документах, а полоса молча сравнивала документ с отфильтрованным прогоном."""
+        whole = scenario_count()
+        self.assertGreater(whole, 1)
+        saved = unittest.defaultTestLoader.testNamePatterns
+        unittest.defaultTestLoader.testNamePatterns = ["*такого_теста_в_наборе_нет*"]
+        try:
+            self.assertEqual(scenario_count(), whole,
+                             "замер числа сценариев зависит от образцов `-k`: считайте "
+                             "своим загрузчиком, а не defaultTestLoader")
+        finally:
+            unittest.defaultTestLoader.testNamePatterns = saved
 
     # Порог, названный в публичном документе, обязан читаться из того же места, откуда его
     # берёт инструмент. Пары «константа → как она обязана звучать в тексте»: README описывал
@@ -5591,41 +6310,127 @@ class RepositoryContractTest(unittest.TestCase):
     # объявлено обязательным, а держит его честное слово автора предложения.
     GATE_BLOCKS = ("CONTRIBUTING.md",)
 
-    def test_каждые_объявленные_ворота_гоняет_ci(self):
-        """УЗДА КОРНЯ «правило объявлено обязательным, и не держит его ничто». Прогон
-        тестов, валидатор скилла и подпись DCO названы в CONTRIBUTING как обязательные;
-        до этой узды подпись не проверял никто."""
-        workflows = "\n".join(p.read_text(encoding="utf-8")
-                              for p in sorted((KIT / ".github" / "workflows").glob("*.yml")))
+    @classmethod
+    def _declared_gates(cls) -> list[str]:
+        """Команды из `sh`-блоков документов, которые велят их гонять."""
         commands = []
-        for rel in self.GATE_BLOCKS:
+        for rel in cls.GATE_BLOCKS:
             text = (KIT / rel).read_text(encoding="utf-8")
             for block in re.findall(r"```sh\n(.*?)```", text, re.S):
                 for line in block.splitlines():
                     line = re.sub(r"\s+#.*$", "", line).strip()
                     if line:
                         commands.append(line)
-        self.assertTrue(commands, "в CONTRIBUTING не нашлось ни одной команды ворот")
-        for cmd in commands:
-            tokens = cmd.split()
-            anchors = [Path(tokens[0]).name]
-            last = tokens[-1]
-            if ".." not in last and not last.startswith("-") and len(tokens) > 1:
-                anchors.append(last)
-            with self.subTest(команда=cmd):
-                for anchor in anchors:
-                    self.assertTrue(anchor in workflows,
-                                    f"CONTRIBUTING велит гонять `{cmd}`, а CI этого не "
-                                    f"делает: в рабочих процессах нет `{anchor}`")
-
-    READMES = ("README.md", "README.ru.md")
+        return commands
 
     @staticmethod
-    def _tracked(*args: str) -> list[str]:
-        out = subprocess.run(["git", "-C", str(KIT), "ls-files", "-z", *args],
-                             capture_output=True, text=True, check=True,
-                             env=child_env()).stdout
-        return [p for p in out.split("\0") if p]
+    def _workflow_steps_of_repository() -> list[str]:
+        return _workflow_steps("\n".join(
+            p.read_text(encoding="utf-8")
+            for p in sorted((KIT / ".github" / "workflows").glob("*.yml"))))
+
+    def test_каждые_объявленные_ворота_гоняет_ci(self):
+        """УЗДА КОРНЯ «правило объявлено обязательным, и не держит его ничто». Прогон
+        тестов, валидатор скилла и подпись DCO названы в CONTRIBUTING как обязательные;
+        до этой узды подпись не проверял никто.
+
+        Сверяется ШАГ процесса, а не текст файла: пока узда искала два слова команды где
+        угодно в процессах, `python3` находился в шаге установки валидатора, а `tests` — в
+        имени процесса, и удалить из CI и шаг с прогоном тестов, и весь его job можно было,
+        не покраснев (измерено оба раза).
+        """
+        commands = self._declared_gates()
+        self.assertTrue(commands, "в CONTRIBUTING не нашлось ни одной команды ворот")
+        steps = self._workflow_steps_of_repository()
+        self.assertTrue(steps, "в рабочих процессах не нашлось ни одного шага `run:`")
+        self.assertEqual(
+            _gates_not_run(commands, steps), [],
+            "CONTRIBUTING велит гонять эти команды, а ни один шаг рабочего процесса их не "
+            "гоняет: правило объявлено обязательным, и держит его честное слово автора")
+
+    # Обе стороны правила — на процессе, которого в репозитории нет. Соответствие по двум
+    # словам где угодно ловило ровно то, чего не бывает: пока правило было таким, оба
+    # нарушения ниже проходили зелёными.
+    INVENTED_WORKFLOW = """name: tests
+jobs:
+  unittest:
+    steps:
+      - uses: actions/checkout@abc
+      - name: Run the tests
+        run: python3 -m unittest discover -s tests -v
+  skill:
+    steps:
+      - name: Validate the skill format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/skills-ref"
+          "$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth
+  dco:
+    steps:
+      - run: .github/dco.sh ${{ github.event.pull_request.base.sha }}..${{ github.sha }}
+"""
+    INVENTED_GATES = ("python3 -m unittest discover -s tests",
+                      "skills-ref validate skills/finetooth",
+                      ".github/dco.sh origin/dev..HEAD")
+
+    def test_узда_видит_ворота_которых_ci_не_гоняет(self):
+        """Нарушение обязано ронять прогон, а честный процесс — проходить: команда
+        названа шагом по-своему (валидатор из venv, диапазон из события, лишний `-v`) и
+        всё равно засчитывается."""
+        whole = _workflow_steps(self.INVENTED_WORKFLOW)
+        self.assertEqual(_gates_not_run(list(self.INVENTED_GATES), whole), [],
+                         "узда придирается к процессу, который команды гоняет")
+        without_step = self.INVENTED_WORKFLOW.replace(
+            "        run: python3 -m unittest discover -s tests -v\n", "")
+        self.assertEqual(
+            _gates_not_run(list(self.INVENTED_GATES), _workflow_steps(without_step)),
+            [self.INVENTED_GATES[0]], "узда не увидела удалённый шаг с прогоном тестов")
+        stubbed = self.INVENTED_WORKFLOW.replace(
+            '"$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth', "true")
+        self.assertEqual(
+            _gates_not_run(list(self.INVENTED_GATES), _workflow_steps(stubbed)),
+            [self.INVENTED_GATES[1]], "узда не увидела подменённый валидатор")
+
+    # Ворота, оставшиеся на месте и обезвреженные: шаг зовёт ту же программу с теми же
+    # доводами, а красным стать уже не может. Каждая форма измерена зелёной на правиле,
+    # которое разрешало шагу быть любым, лишь бы доводы документа в нём нашлись.
+    NEUTRALISED_STEPS = {
+        "код возврата не доходит до CI":
+            ("python3 -m unittest discover -s tests", "python3 -m unittest discover -s tests || true"),
+        "прогон сужен образцом":
+            ("python3 -m unittest discover -s tests",
+             "python3 -m unittest discover -s tests -k НетТакогоТеста"),
+        "свой диапазон вместо подставленного":
+            (".github/dco.sh origin/dev..HEAD", ".github/dco.sh HEAD~1..HEAD"),
+    }
+    # Обратная сторона: шаг вправе называть команду по-своему, и это не обезвреживание.
+    HONEST_STEPS = {
+        "громче, но не уже":
+            ("python3 -m unittest discover -s tests", "python3 -m unittest discover -s tests -v"),
+        "программа из venv":
+            ("skills-ref validate skills/finetooth",
+             '"$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth'),
+        "диапазон из события":
+            (".github/dco.sh origin/dev..HEAD",
+             ".github/dco.sh ${{ github.event.pull_request.base.sha }}..${{ github.sha }}"),
+        "диапазон слово в слово":
+            (".github/dco.sh origin/dev..HEAD", ".github/dco.sh origin/dev..HEAD"),
+    }
+
+    def test_узда_видит_обезвреженные_ворота(self):
+        """Ворота, которые нельзя уронить, — не ворота, даже если шаг с ними на месте.
+        `|| true` уносит код возврата мимо CI, `-k НетТакогоТеста` гоняет ноль тестов,
+        `HEAD~1..HEAD` проверяет один коммит вместо всех коммитов предложения."""
+        for why, (cmd, step) in self.NEUTRALISED_STEPS.items():
+            with self.subTest(обезврежено=why):
+                self.assertFalse(_runs_command(cmd, step),
+                                 f"{step!r} засчитан как прогон `{cmd}`")
+        for why, (cmd, step) in self.HONEST_STEPS.items():
+            with self.subTest(честный=why):
+                self.assertTrue(_runs_command(cmd, step),
+                                f"{step!r} не засчитан как прогон `{cmd}`")
+
+    READMES = ("README.md", "README.ru.md")
+    _tracked = staticmethod(tracked)
 
     def test_опись_набора_называет_все_команды(self):
         """Раздел «Что внутри» — единственное место, где репозиторий перечисляет сам себя;
@@ -5656,36 +6461,9 @@ class RepositoryContractTest(unittest.TestCase):
                                  f"{rel}: версии без ссылки на сравнение")
 
     # Строка, идущая сразу за пунктом списка без пустой строки, в CommonMark — ленивое
-    # продолжение этого пункта, а не новый абзац: вводный абзац раздела, набранный так,
-    # уезжает внутрь чужой строки, и раздел остаётся без заголовка. Заметки к выпуску
-    # берутся из CHANGELOG дословно, и читает их не автор.
-    LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])\s")
-    FENCE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
-    # Ленивое продолжение бывает только у АБЗАЦА: строка, которая сама открывает блок,
-    # список обрывает и печатается там, где написана. Таких три (ограда — четвёртая, её
-    # правило считает отдельно): ATX-заголовок, тематический разрыв и html-блок типов 1–6.
-    # Строка таблицы сюда не входит: её шапку GFM собирает из последней строки абзаца, и
-    # `| a | b |` сразу за пунктом остаётся внутри пункта — послабление здесь ослепило бы
-    # правило на настоящем склеивании.
-    ENDS_LIST = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|(?:\*\s*){3,}$|(?:-\s*){3,}$"
-                           r"|(?:_\s*){3,}$|<[A-Za-z/!?])")
-
-    @classmethod
-    def _glued_to_list_item(cls, text: str) -> list[int]:
-        """Номера строк, которые разметка делает продолжением предыдущего пункта списка."""
-        glued, fenced, lines = [], False, text.split("\n")
-        for n, line in enumerate(lines):
-            if cls.FENCE.match(line):
-                fenced = not fenced
-                continue
-            prev = lines[n - 1] if n else ""
-            # Отступ и цитата — законное продолжение пункта, набранное намеренно.
-            if (not fenced and line.strip() and cls.LIST_ITEM.match(prev)
-                    and not cls.LIST_ITEM.match(line) and not cls.ENDS_LIST.match(line)
-                    and not line.startswith((" ", "\t", ">"))):
-                glued.append(n + 1)
-        return glued
-
+    # продолжение этого пункта, а не новый абзац. Правило одно на весь файл —
+    # `_glued_to_list_item`; оба прохода ниже (T2 и T4 нашли один и тот же дефект с двух
+    # сторон) и обе пары образцов держат ОДНУ функцию, чтобы их знание не разъехалось.
     def test_ни_один_абзац_не_приклеен_к_предыдущему_пункту_списка(self):
         # Отчёты самого ревью сюда не входят: они пишутся агентами и удаляются вместе с
         # `docs/review/`, а правило — о документах, которые репозиторий публикует.
@@ -5693,7 +6471,7 @@ class RepositoryContractTest(unittest.TestCase):
         for rel in self._tracked("*.md", ":!docs/review"):
             lines = (KIT / rel).read_text(encoding="utf-8").split("\n")
             swallowed += [f"{rel}:{n}: {lines[n - 1][:60]}"
-                          for n in self._glued_to_list_item("\n".join(lines))]
+                          for n in _glued_lines("\n".join(lines))]
         self.assertEqual(swallowed, [],
                          "абзац идёт сразу за пунктом списка, без пустой строки между ними, "
                          "и разметка делает его продолжением этого пункта — вставьте пустую "
@@ -5723,12 +6501,69 @@ class RepositoryContractTest(unittest.TestCase):
         запрет на них выгонял бы автора править верную разметку."""
         for why, text in self.GLUED.items():
             with self.subTest(склеено=why):
-                self.assertEqual(self._glued_to_list_item(text), [2],
+                self.assertEqual(_glued_lines(text), [2],
                                  "правило не увидело абзаца, приклеенного к пункту")
         for why, text in self.NOT_GLUED.items():
             with self.subTest(невиновный=why):
-                self.assertEqual(self._glued_to_list_item(text), [],
+                self.assertEqual(_glued_lines(text), [],
                                  "правило придирается к верной разметке")
+
+    def test_в_документах_нет_абзаца_приклеенного_к_пункту_списка(self):
+        """Заметки о выпуске берут раздел «Unreleased» как есть (RELEASING, ворота 4), а
+        абзац, стоящий вплотную под пунктом списка, по правилам markdown становится частью
+        пункта. Так вводный абзац блока T2 оказался внутри записи про `NOTICE.md`, и
+        пятнадцать пунктов блока пришли под заголовком, которого в разметке нет —
+        одинаково в обоих языках. Список документов берётся у git: новый документ
+        попадает под правило сам.
+
+        Не корнем единым: шаблоны ролей — нумерованные списки правил, по которым работает
+        агент, и абзац, уехавший внутрь правила 4, меняет смысл ровно так же. Вне правила
+        остаётся только `docs/review/` — аппарат ревью, который сносится вместе с ним и
+        чьи отчёты не переписываются."""
+        for rel in self._tracked("*.md", ":(exclude)docs/review/"):
+            with self.subTest(файл=rel):
+                self.assertEqual(
+                    _glued_to_list_item((KIT / rel).read_text(encoding="utf-8")), [],
+                    f"{rel}: абзац приклеен к пункту списка — отбейте его пустой строкой, "
+                    f"иначе разметка считает его продолжением пункта")
+
+    # Обе стороны правила, на разметке, которой в документах нет.
+    GLUED_SHAPES = {
+        "абзац вплотную под пунктом": "- пункт\nАбзац.\n",
+        "абзац под вложенным пунктом": "- пункт\n  - вложенный\nАбзац.\n",
+        # Нумерованный пункт правило не знало вовсе, а `RELEASING.md` — нумерованная
+        # процедура целиком; отступ меньше колонки текста пункт проглатывает так же, как
+        # его отсутствие, и абзац после законного продолжения — тоже часть пункта.
+        "абзац под нумерованным пунктом": "1. пункт\nАбзац.\n",
+        "абзац под пунктом со скобкой": "1) пункт\nАбзац.\n",
+        "отступ меньше колонки текста пункта": "- пункт\n Абзац.\n",
+        "абзац после продолжения пункта": "- пункт\n  продолжение.\nАбзац.\n",
+        # Ни определение ссылки, ни строка таблицы абзац не прерывают: под пунктом они —
+        # его продолжение, и ссылка сравнения версий перестаёт быть ссылкой.
+        "определение ссылки под пунктом": "- пункт\n[0.6.0]: https://example.com\n",
+        "строка таблицы под пунктом": "- пункт\n| а | б |\n",
+    }
+    NOT_GLUED_SHAPES = {
+        "абзац отбит пустой строкой": "- пункт\n\nАбзац.\n",
+        "продолжение с отступом": "- пункт\n  продолжение.\n",
+        "продолжение нумерованного пункта": "1. пункт\n   продолжение.\n",
+        "следующий пункт": "- пункт\n- другой пункт\n",
+        "следующий нумерованный пункт": "1. пункт\n2. другой пункт\n",
+        "заголовок": "- пункт\n## Раздел\n",
+        "горизонтальная черта": "- пункт\n---\n",
+        "пункт внутри ограды": "```\n- пункт\nтекст\n```\n",
+        "абзац после пустой строки за продолжением": "- пункт\n  продолжение.\n\nАбзац.\n",
+    }
+
+    def test_узда_видит_абзац_приклеенный_к_пункту(self):
+        for why, src in self.GLUED_SHAPES.items():
+            with self.subTest(разметка=why):
+                self.assertNotEqual(_glued_to_list_item(src), [],
+                                    "узда не увидела приклеенный абзац")
+        for why, src in self.NOT_GLUED_SHAPES.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(_glued_to_list_item(src), [],
+                                 "узда придирается к верной разметке")
 
     # Пары «оригинал — перевод»: обе половины обязаны вести друг на друга с первой строки.
     BILINGUAL = ("README", "CHANGELOG", "CODE_OF_CONDUCT")
@@ -6120,7 +6955,11 @@ def report_sections(md):
     # (1) жить в отдельной функции, а не прямо в тесте — иначе его нечем покормить, — и
     # (2) быть прогнанным на ВЫДУМАННОМ исходнике: только так видно, что оно замечает
     # форму, которой ещё никто не писал.
-    SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__")
+    # Настоящий предмет правила: исходник инструмента, исходник набора — и ФАЙЛ
+    # РЕПОЗИТОРИЯ. Правило про рабочий процесс CI сверяло команду по двум словам где угодно
+    # в его тексте и оставалось зелёным, когда из CI удаляли весь прогон тестов: та же
+    # болезнь, что у правил по исходнику, только предмет — документ, а не код.
+    SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__", "KIT /")
 
     @classmethod
     def _rules_without_samples(cls, source: str) -> tuple[list[str], list[str]]:
@@ -6171,6 +7010,9 @@ def report_sections(md):
         "правило без выдуманного образца": (
             "class R:\n    def test_x(self):\n"
             "        self.assertEqual(_new_rule(self.SOURCE), [])\n", 1),
+        "правило по файлу репозитория без выдуманного образца": (
+            "class R:\n    def test_x(self):\n"
+            "        self.assertEqual(_new_rule((KIT / 'CHANGELOG.md').read_text()), [])\n", 1),
     }
 
     def test_узда_видит_правило_которое_никто_не_кормил(self):
