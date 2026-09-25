@@ -18,18 +18,19 @@ jobs:
         # nothing running it is a claim; without the matrix the suite ran on whatever
         # python3 the runner image happened to carry, and that moves under us.
         python-version: ["3.12", "3.14"]
+    # The verdict of the suite must not depend on the machine. The test bench sets its own
+    # name, email and branch name (the global git config is disabled for its children);
+    # the locale is set here: test names and commit messages are non-ASCII, and in the C
+    # locale without UTF-8 mode the run falls apart into two hundred UnicodeEncodeErrors.
+    env:
+      PYTHONUTF8: "1"
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
-      # The tests set the kit up in temporary git repositories and drive the command line,
-      # so git must be able to commit: a clean runner has no name and no email.
-      - name: Configure git
-        run: |
-          git config --global user.email "tests@example.com"
-          git config --global user.name "finetooth tests"
-          git config --global init.defaultBranch master
       - name: Run the tests
         run: python3 -m unittest discover -s tests -v
 

@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **15** of 116 records.
+Open: **0** of 116 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **15** of 116 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (4 open / 37)
+## medium (0 open / 37)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -49,15 +49,15 @@ Open: **15** of 116 records.
 | T1-065 | T1 | fixed | `skills/finetooth/scripts/review.py:3229` | [R7-007, round 7] the R6-004 fix is untested: reverting the gate's `"quoted"` mode leaves the whole suite green |
 | T2-001 | T2 | fixed | `skills/finetooth/references/verify.md:123` | The verifier template tells the agent to put a rejection reason in `claim`, but check accepts it only when the claim starts with a rejection word or a reject_reason field is present — neither is mentioned |
 | T2-002 | T2 | fixed | `skills/finetooth/references/hunter.md:155` | The draft-findings JSON schema in every role template omits `root` and `dup_of`, so the three-instance guard gate and the duplicate gate can never be satisfied by an agent following the template |
-| T3-001 | T3 | open | `tests/test_review.py:3951` | Five cmd_check gates moved from problems to warnings leave all 248 tests green: check exits 0 on the state it refused, because GATES keys a gate by its message and those gate tests never assert the exit code |
-| T3-002 | T3 | open | `tests/test_review.py:3925` | _check_gates matches only `problems.append(x)` on a Name, so a gate written with `+=` or `extend` yields no key, needs no GATES entry and no test, and the registry stays green |
-| T3-003 | T3 | open | `tests/test_review.py:4034` | GateRegistryTest checks only that the test named beside a gate exists; nothing ties the two, so a gate registered against any existing test name satisfies the guard with zero coverage |
-| T3-004 | T3 | open | `tests/test_review.py:611` | backfill runs once in the whole suite and set-finding over several ids only on the happy path, so neither backfill's idempotence nor set-finding's all-or-nothing is held by a test |
+| T3-001 | T3 | fixed | `tests/test_review.py:3951` | Five cmd_check gates moved from problems to warnings leave all 248 tests green: check exits 0 on the state it refused, because GATES keys a gate by its message and those gate tests never assert the exit code |
+| T3-002 | T3 | fixed | `tests/test_review.py:3925` | _check_gates matches only `problems.append(x)` on a Name, so a gate written with `+=` or `extend` yields no key, needs no GATES entry and no test, and the registry stays green |
+| T3-003 | T3 | fixed | `tests/test_review.py:4034` | GateRegistryTest checks only that the test named beside a gate exists; nothing ties the two, so a gate registered against any existing test name satisfies the guard with zero coverage |
+| T3-004 | T3 | fixed | `tests/test_review.py:611` | backfill runs once in the whole suite and set-finding over several ids only on the happy path, so neither backfill's idempotence nor set-finding's all-or-nothing is held by a test |
 | T4-001 | T4 | fixed | `skills/finetooth/SKILL.md:4` | The skill's frontmatter still says the base was handed over without a license, which LICENSE and NOTICE.md retired on 24.09.2026 |
 | T4-003 | T4 | fixed | `SECURITY.md:3` | The stated security boundary ('writes to docs/review/', 'sends nothing over the network') is false for `summary` and for assets/run-role.sh |
 | T4-016 | T4 | fixed | `skills/finetooth/scripts/review.py:564` | `init` answers a Python traceback on a blocks.json without the top-level review_id, and the guard test that forbids exactly that stays green |
 
-## low (11 open / 74)
+## low (0 open / 74)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -109,17 +109,17 @@ Open: **15** of 116 records.
 | T2-013 | T2 | fixed | `examples/toy/docs/review/findings.md:3` | The toy's findings.md header holds the literal `<skill>` path while its blocks.json sets no `cli`, so the file can never equal the regenerated one and check is red in every copy of the example |
 | T2-014 | T2 | fixed | `skills/finetooth/SKILL.md:126` | `roots`, the class view the three-instance guard gate rests on, is named by no message of the tool, by no line of SKILL.md and by no line of the entry point, so a lead cannot learn it exists |
 | T2-015 | T2 | fixed | `skills/finetooth/assets/agent-banner.md:13` | Both banner assets hardcode `make review-status` with no {{CLI}} placeholder, and setup substitutes nothing in them, so a project without a Makefile pastes a dead command into every session |
-| T3-005 | T3 | open | `tests/test_review.py:3059` | The no-traceback class guard passes one fixed argv to every subcommand; argparse rejects it for 20 of the 23, so their bodies never run and the guard proves nothing about them |
-| T3-006 | T3 | open | `tests/test_review.py:2250` | Nothing compares the key sets of MSG['en'] and MSG['ru'], so deleting a translation leaves the suite green while T() raises KeyError at run time on the path that needs it |
-| T3-007 | T3 | open | `tests/test_review.py:3600` | Mechanisms outside cmd_check that no test reaches: import's claim cap, block_risk's refusal, review_lang's fallback and cmd_next — each removable with the whole suite green |
-| T3-008 | T3 | open | `tests/test_review.py:1533` | The space-path test asserts only that check does NOT print 'does not touch' and never checks its fixture reached that state, so silencing the gate for paths with a space leaves the suite green |
-| T3-009 | T3 | open | `tests/test_review.py:65` | Only Stand.run pins a UTF-8 locale; _run_role and the bare python3 calls inherit it, so the suite's verdict rests on CPython auto-enabling UTF-8 mode in the C locale |
-| T3-010 | T3 | open | `tests/test_review.py:47` | The Stand repositories set only user.name and user.email locally, so the developer's global git config — ignore file, commit.gpgsign — decides whether the suite passes |
-| T3-011 | T3 | open | `tests/test_review.py:3508` | The claude stub emits no result event, so all six run-role.sh tests exercise the NO RESULT EVENT branch and the test named 'a successful run is written as an ordinary line' accepts that as one |
-| T3-012 | T3 | open | `tests/test_review.py:4093` | The NUL-path class guard inspects only list literals holding both 'git' and a name-asking flag, so splitting the repeated git prefix out of the literal blinds it and -z can be dropped unnoticed |
-| T3-013 | T3 | open | `tests/test_review.py:2801` | No fixture path contains a bracket, so the :(literal) prefix in file_sha — there because git-pathspec reads [handle] as a character class — can be deleted with the suite green |
-| T3-014 | T3 | open | `tests/test_review.py:4253` | The threshold guard walks only module-level `NAME = <number>`, so a bare threshold written as a BinOp or as a tuple assignment carries no source and the suite stays green |
-| T3-015 | T3 | open | `tests/test_review.py:66` | The suite spawns the tool as PATH `python3` in seven places while using sys.executable in five, so running it under another interpreter does not test that interpreter |
+| T3-005 | T3 | fixed | `tests/test_review.py:3059` | The no-traceback class guard passes one fixed argv to every subcommand; argparse rejects it for 20 of the 23, so their bodies never run and the guard proves nothing about them |
+| T3-006 | T3 | fixed | `tests/test_review.py:2250` | Nothing compares the key sets of MSG['en'] and MSG['ru'], so deleting a translation leaves the suite green while T() raises KeyError at run time on the path that needs it |
+| T3-007 | T3 | fixed | `tests/test_review.py:3600` | Mechanisms outside cmd_check that no test reaches: import's claim cap, block_risk's refusal, review_lang's fallback and cmd_next — each removable with the whole suite green |
+| T3-008 | T3 | fixed | `tests/test_review.py:1533` | The space-path test asserts only that check does NOT print 'does not touch' and never checks its fixture reached that state, so silencing the gate for paths with a space leaves the suite green |
+| T3-009 | T3 | fixed | `tests/test_review.py:65` | Only Stand.run pins a UTF-8 locale; _run_role and the bare python3 calls inherit it, so the suite's verdict rests on CPython auto-enabling UTF-8 mode in the C locale |
+| T3-010 | T3 | fixed | `tests/test_review.py:47` | The Stand repositories set only user.name and user.email locally, so the developer's global git config — ignore file, commit.gpgsign — decides whether the suite passes |
+| T3-011 | T3 | fixed | `tests/test_review.py:3508` | The claude stub emits no result event, so all six run-role.sh tests exercise the NO RESULT EVENT branch and the test named 'a successful run is written as an ordinary line' accepts that as one |
+| T3-012 | T3 | fixed | `tests/test_review.py:4093` | The NUL-path class guard inspects only list literals holding both 'git' and a name-asking flag, so splitting the repeated git prefix out of the literal blinds it and -z can be dropped unnoticed |
+| T3-013 | T3 | fixed | `tests/test_review.py:2801` | No fixture path contains a bracket, so the :(literal) prefix in file_sha — there because git-pathspec reads [handle] as a character class — can be deleted with the suite green |
+| T3-014 | T3 | fixed | `tests/test_review.py:4253` | The threshold guard walks only module-level `NAME = <number>`, so a bare threshold written as a BinOp or as a tuple assignment carries no source and the suite stays green |
+| T3-015 | T3 | fixed | `tests/test_review.py:66` | The suite spawns the tool as PATH `python3` in seven places while using sys.executable in five, so running it under another interpreter does not test that interpreter |
 | T4-002 | T4 | fixed | `CHANGELOG.md:40` | NOTICE.md's unqualified promise that road-tested projects are not named is contradicted by CHANGELOG.md:40, which names the owner's own project and one of its paths |
 | T4-004 | T4 | fixed | `README.md:281` | README (en, ru) and AGENTS.md give the suite as 98 scenarios taking about a minute; measured, it is 248 tests in 201 seconds |
 | T4-005 | T4 | fixed | `README.md:457` | README (en, ru) states the coupling shared-node threshold as a fixed six blocks and the mass cutoff as the 95th percentile; the code derives both |

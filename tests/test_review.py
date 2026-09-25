@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import collections
+import concurrent.futures
 import datetime as dt
 import hashlib
 import json
@@ -29,7 +30,44 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
 SKILL = KIT / "skills" / "finetooth"
-TOOL = SKILL / "scripts" / "review.py"
+# Обычно — инструмент из скилла. Переменной окружения его подменяет мутационная узда
+# (GateMutationTest): она глушит одни ворота в копии инструмента и требует, чтобы
+# названный рядом с ними тест на этой копии покраснел.
+TOOL = Path(os.environ.get("FINETOOTH_TOOL", SKILL / "scripts" / "review.py"))
+
+
+if "utf-8" not in (sys.getfilesystemencoding() or "").lower().replace("utf8", "utf-8"):
+    # Потомкам локаль задаёт child_env, но argv кодирует РОДИТЕЛЬ: имена тестов, пути
+    # стенда и сообщения коммитов здесь не-ASCII, и в локали C без режима UTF-8 прогон
+    # рассыпается двумя сотнями UnicodeEncodeError, ни один из которых не называет
+    # причину. Лучше один отказ, который её называет.
+    raise RuntimeError(
+        f"кодировка файловой системы — {sys.getfilesystemencoding()}, а набор говорит "
+        f"по-русски: пути, имена тестов и сообщения коммитов не-ASCII. Запустите прогон "
+        f"в UTF-8-локали или с PYTHONUTF8=1: "
+        f"`PYTHONUTF8=1 python3 -m unittest discover -s tests`")
+
+
+def child_env(**extra: str) -> dict:
+    """Окружение ЛЮБОГО потомка теста: инструмента, git, оболочки.
+
+    Приговор набора не должен зависеть от машины, на которой он идёт.
+
+    Локаль. Только `Stand.run` задавал UTF-8, остальные запуски брали её у среды — и
+    держалось всё на том, что CPython сам включает режим UTF-8 в локали C. Со снятой
+    подстраховкой (`PYTHONUTF8=0 PYTHONCOERCECLOCALE=0`, локаль C) набор краснел
+    пятнадцатью падениями и 195 ошибками из 248, начиная с UnicodeEncodeError в `print`
+    промпта.
+
+    git. Глобальный конфиг разработчика решал, пройдёт ли прогон: `core.excludesFile`
+    с `vendor/` роняет тест про нетрекнутые файлы, `commit.gpgsign=true` без ключа —
+    шесть тестов. Конфиг потомка — только локальный, заведённый самим стендом; ветка по
+    умолчанию тоже перестаёт зависеть от `init.defaultBranch` разработчика.
+    """
+    return dict(os.environ,
+                LC_ALL="C.UTF-8", LANG="C.UTF-8", PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
+                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                GIT_CONFIG_NOSYSTEM="1", **extra)
 
 
 class Stand:
@@ -37,7 +75,7 @@ class Stand:
 
     block_id = "H1"
 
-    def __init__(self) -> None:
+    def __init__(self, branch: str = "master") -> None:
         self.root = Path(tempfile.mkdtemp(prefix="finetooth-test-"))
         # Инструмент НЕ копируется в проект: он лежит в скилле, а скилл сам — в чужом
         # git-репозитории (этом). Так каждый тест заодно проверяет, что корень берётся
@@ -45,13 +83,19 @@ class Stand:
         self.tool = TOOL
         for d in ("docs/review/blocks", "docs/review/reports", "src"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
-        self.git("init", "-q", ".")
-        self.git("config", "user.email", "test@example.com")
-        self.git("config", "user.name", "test")
+        # Имя ветки названо явно: глобального конфига у потомка нет, а полагаться на
+        # встроенное умолчание git значит снова зависеть от версии git на машине.
+        self.git("init", "-q", "-b", branch, ".", check=True)
+        self.git("config", "user.email", "test@example.com", check=True)
+        self.git("config", "user.name", "test", check=True)
 
-    def git(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", "-C", str(self.root), *args],
-                              capture_output=True, text=True, check=False)
+    def git(self, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+        out = subprocess.run(["git", "-C", str(self.root), *args],
+                             capture_output=True, text=True, check=False, env=child_env())
+        if check and out.returncode != 0:
+            raise AssertionError(f"git {' '.join(args)} → {out.returncode}: "
+                                 f"{(out.stderr or out.stdout).strip()}")
+        return out
 
     def write(self, rel: str, text: str) -> None:
         p = self.root / rel
@@ -59,13 +103,19 @@ class Stand:
         p.write_text(text, encoding="utf-8")
 
     def commit(self, message: str = "wip") -> None:
-        self.git("add", "-A")
-        self.git("commit", "-qm", message)
+        """Коммит стенда обязан состояться.
+
+        Пока он молчал о своём коде возврата, стенд, не дошедший до нужного состояния,
+        читался как исправный: тест, который потом ищет в выводе ОТСУТСТВИЕ жалобы,
+        зелен и тогда, когда до этого состояния дело не дошло. Глобальный
+        `commit.gpgsign=true` роняет так шесть тестов, и ни один не называет причину.
+        """
+        self.git("add", "-A", check=True)
+        self.git("commit", "-qm", message, check=True)
 
     def run(self, *args: str) -> subprocess.CompletedProcess:
-        env = dict(os.environ, LC_ALL="C.UTF-8")
-        return subprocess.run(["python3", str(self.tool), *args], cwd=self.root,
-                              capture_output=True, text=True, check=False, env=env)
+        return subprocess.run([sys.executable, str(self.tool), *args], cwd=self.root,
+                              capture_output=True, text=True, check=False, env=child_env())
 
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
                ref_paths: list[str] | None = None, readable_lines: int | None = None,
@@ -114,6 +164,33 @@ class Stand:
 
     def cleanup(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+def refused(out: subprocess.CompletedProcess) -> str:
+    """Что `check` записал в ОТКАЗЫ: раздел CHECK FAILED — и только если прогон упал.
+
+    Отказ и предупреждение печатаются одним и тем же предложением, а различает их код
+    возврата. Тест, который ищет сообщение во всём выводе, этой разницы не видит:
+    измерено мутацией — ворота, перенесённые из `problems` в `warnings`, оставляли
+    сорок семь тестов зелёными, а `check` выходил с нулём на состоянии, которое сам же
+    отказался принять.
+    """
+    if out.returncode != 1:
+        return ""
+    _, _, failed = out.stdout.partition("CHECK FAILED:")
+    return failed
+
+
+def warned(out: subprocess.CompletedProcess) -> str:
+    """Что `check` сказал вслух, НЕ уронив прогон: раздел предупреждений при коде 0.
+
+    Обратная сторона `refused`: предупреждение, ставшее отказом, — это остановленная
+    работа на состоянии, которое договор принимает.
+    """
+    if out.returncode != 0:
+        return ""
+    _, _, rest = out.stdout.partition("WARNINGS (do not fail the check):")
+    return rest
 
 
 FULL_HUNTER = """# отчёт охотника
@@ -178,7 +255,7 @@ class ReviewToolTest(unittest.TestCase):
 
         self.s.write("src/two.ts", "b\n")
         self.s.commit("новый файл после карты")
-        self.assertIn("coverage.tsv is stale", self.s.run("check").stdout)
+        self.assertIn("coverage.tsv is stale", refused(self.s.run("check")))
         self.s.run("coverage")
         self.assertNotIn("coverage.tsv is stale", self.s.run("check").stdout)
 
@@ -187,15 +264,15 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("src/real.ts", "одна\nдве\nтри\n")
         (self.s.root / "src" / "link.ts").symlink_to("real.ts")
         sub = self.s.root / "vendor"
-        subprocess.run(["git", "init", "-q", str(sub)], check=True)
+        subprocess.run(["git", "init", "-q", str(sub)], check=True, env=child_env())
         for k, v in (("user.email", "t@e"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(sub), "config", k, v], check=True)
+            subprocess.run(["git", "-C", str(sub), "config", k, v], check=True, env=child_env())
         (sub / "f.txt").write_text("x\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(sub), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(sub), "commit", "-qm", "sub"], check=True)
+        subprocess.run(["git", "-C", str(sub), "add", "-A"], check=True, env=child_env())
+        subprocess.run(["git", "-C", str(sub), "commit", "-qm", "sub"], check=True, env=child_env())
         subprocess.run(["git", "-C", str(self.s.root), "-c", "protocol.file.allow=always",
                         "submodule", "add", "-q", "./vendor", "lib"],
-                       check=False, capture_output=True)
+                       check=False, capture_output=True, env=child_env())
 
         self.s.blocks(paths=["src"])
         self.s.manifest(hypotheses=1)
@@ -318,7 +395,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "running")
         out = self.s.run("check")
-        self.assertIn("has no hypotheses", out.stdout)
+        self.assertIn("has no hypotheses", refused(out), out.stdout)
 
     def test_отчёт_без_раздела_про_непросмотренное_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -331,7 +408,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
         out = self.s.run("check")
-        self.assertIn("coverage limits", out.stdout.lower())
+        self.assertIn("coverage limits", refused(out).lower(), out.stdout)
 
     def test_пустой_раздел_ограничений_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -346,7 +423,7 @@ class ReviewToolTest(unittest.TestCase):
             self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n" + limits
                                   + "## Прочее\nтекст другого раздела\n", verify=FULL_VERIFY)
             self.assertIn("'Coverage limits' section of the hunter report is empty",
-                          self.s.run("check").stdout, limits)
+                          refused(self.s.run("check")), limits)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
                               "## Ограничения охвата\n### Не дошёл\nдо почтовых шаблонов\n",
                        verify=FULL_VERIFY)
@@ -539,7 +616,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit("правка после ревью")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("changed after the review", out.stdout)
+        self.assertIn("changed after the review", refused(out), out.stdout)
         self.assertIn("restamp", out.stdout, "отказ обязан говорить, что делать")
 
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
@@ -605,9 +682,9 @@ class ReviewToolTest(unittest.TestCase):
         f_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
                           encoding="utf-8")
 
-        out = self.s.run("check").stdout
-        self.assertIn("without a fingerprint of what was reviewed", out)
-        self.assertIn("no code fingerprint", out)
+        out = self.s.run("check")
+        self.assertIn("without a fingerprint of what was reviewed", refused(out), out.stdout)
+        self.assertIn("no code fingerprint", refused(out), out.stdout)
 
         self.assertEqual(self.s.run("backfill").returncode, 0)
         out = self.s.run("check").stdout
@@ -640,8 +717,8 @@ class ReviewToolTest(unittest.TestCase):
         m = self.s.root / "docs/review/blocks/H1-demo.md"
         m.write_text(m.read_text(encoding="utf-8").replace(
             "2. Гипотеза номер 2:", "2. Совсем другой вопрос:"), encoding="utf-8")
-        out = self.s.run("check").stdout
-        self.assertIn("manifest hypotheses changed", out)
+        out = self.s.run("check")
+        self.assertIn("manifest hypotheses changed", refused(out), out.stdout)
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
         self.assertNotIn("manifest hypotheses changed", self.s.run("check").stdout)
 
@@ -712,20 +789,21 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         self.s.run("set-status", "H1", "verified")
-        self.assertIn("is empty — there is a file, there is no verification", self.s.run("check").stdout)
+        self.assertIn("is empty — there is a file, there is no verification",
+                      refused(self.s.run("check")))
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n## Вердикты\n## Охват\n")
-        self.assertIn("is empty — there is a file, there is no verification", self.s.run("check").stdout,
-                      "одни заголовки — тоже пустой отчёт")
+        self.assertIn("is empty — there is a file, there is no verification",
+                      refused(self.s.run("check")), "одни заголовки — тоже пустой отчёт")
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\nПосмотрел, всё хорошо, охват полный.\n")
-        self.assertIn("no verdict on any finding", self.s.run("check").stdout)
+        self.assertIn("no verdict on any finding", refused(self.s.run("check")))
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n| H1-001 | confirmed | прогнал тест, падает |\n")
-        self.assertIn("no coverage verdict", self.s.run("check").stdout,
+        self.assertIn("no coverage verdict", refused(self.s.run("check")),
                       "вердикты по находкам не говорят, что осталось непросмотренным")
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
@@ -760,9 +838,9 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
-        out = self.s.run("check").stdout
-        self.assertIn("different verdicts", out)
-        self.assertIn("H1.1", out)
+        out = self.s.run("check")
+        self.assertIn("different verdicts", refused(out), out.stdout)
+        self.assertIn("H1.1", out.stdout)
 
     def test_нумерованная_таблица_приёмки_не_вердикт_гипотезы(self):
         """Живой отчёт: таблица «onConflict → ограничение» с номерами строк 4 и 5 считалась
@@ -852,9 +930,9 @@ class ReviewToolTest(unittest.TestCase):
         rows[0]["imported_at"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=10)).isoformat()
         reg.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         self.s.run("findings")
-        out = self.s.run("check").stdout
-        self.assertIn("older than 7 days", out)
-        self.assertIn("H1-001 (10d)", out)
+        out = self.s.run("check")
+        self.assertIn("older than 7 days", warned(out), out.stdout)
+        self.assertIn("H1-001 (10d)", warned(out), out.stdout)
 
     # ------------------------------------------------------------- карта стыков
 
@@ -955,6 +1033,17 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("order").stdout
         self.assertLess(out.index("H1 "), out.index("H2 "))
         self.assertIn("the declared order already matches", out)
+
+    def test_риск_вне_словаря_это_отказ_а_не_трейсбек(self):
+        """`risk` пишут руками в blocks.json. Слово мимо словаря доходило до
+        `SEVERITIES.index` и выходило к человеку как ValueError."""
+        self._churn_history(risk_first="катастрофа")
+        out = self.s.run("order")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("risk", out.stderr)
+        self.assertIn("blocks.json", out.stderr)
+        self.assertIn("critical", out.stderr, "отказ обязан назвать словарь")
 
     # ------------------------------------------------------------- итог ревью
 
@@ -1114,19 +1203,19 @@ class ReviewToolTest(unittest.TestCase):
         path = Path(self.s.root, "stream.jsonl")
         path.write_text(stream, encoding="utf-8")
         out = subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"), str(path), "--journal"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, env=child_env())
         self.assertEqual(out.returncode, 0, out.stderr)
         # два сообщения по 1001 на вход, не три
         self.assertIn("input 0.0M tokens (90% from cache", out.stdout)
         self.assertIn("re-reads 1", out.stdout)
         self.assertIn("output 0k", out.stdout)
         full = subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"), str(path)],
-                              capture_output=True, text=True).stdout
+                              capture_output=True, text=True, env=child_env()).stdout
         self.assertIn("input total          2,002", full)
 
     def test_run_role_отказывает_на_неизвестной_роли(self):
         out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "nosuch"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, env=child_env())
         self.assertEqual(out.returncode, 2)
         self.assertIn("unknown role", out.stderr)
 
@@ -1236,7 +1325,26 @@ class ReviewToolTest(unittest.TestCase):
         self.assertNotIn("H1-999", out.stdout)
         self.assertNotIn("H1-0012", out.stdout)
         self.assertNotIn("docs/review/", out.stdout.split("\n\n")[0])   # the register itself is not a reference
-        self.assertIn("reference(s) to findings in the code", self.s.run("check").stdout)
+        self.assertIn("reference(s) to findings in the code", warned(self.s.run("check")))
+
+    def test_refs_называет_не_ASCII_путь_как_он_есть(self):
+        """`git grep` экранирует такой путь по-C и разделяет поля двоеточием, которое в
+        пути законно: оператор получал `"src/\\320\\274…"` и путь, обрезанный по первому
+        двоеточию, — то есть адрес, по которому ничего не найти."""
+        self.s.write("src/модуль:раз.ts", "// см. H1-001 — причина\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/модуль:раз.ts", "claim": "дефект", "scenario": "x делает y"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        out = self.s.run("refs")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("src/модуль:раз.ts:1: H1-001", out.stdout, out.stdout)
+        self.assertNotIn("\\320", out.stdout, "путь пришёл экранированным")
 
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1265,7 +1373,7 @@ class ReviewToolTest(unittest.TestCase):
         rows[1]["dup_of"] = "H1-777"  # вписано руками мимо set-finding
         f_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
                           encoding="utf-8")
-        self.assertIn("duplicate of nonexistent H1-777", self.s.run("check").stdout)
+        self.assertIn("duplicate of nonexistent H1-777", refused(self.s.run("check")))
 
     def test_живая_находка_на_изменённом_файле_перештамповывается(self):
         """Файл меняют и соседней починкой — подтвердить живой дефект должно быть чем."""
@@ -1393,7 +1501,7 @@ class ReviewToolTest(unittest.TestCase):
         r = row()
         r.update(status="rejected", reject_reason="вписано руками", confidence="confirmed")
         f_path.write_text(json.dumps(r, ensure_ascii=False) + "\n", encoding="utf-8")
-        self.assertIn("status rejected but confidence confirmed", self.s.run("check").stdout)
+        self.assertIn("status rejected but confidence confirmed", refused(self.s.run("check")))
 
     def test_отвергнутая_находка_без_причины_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1408,7 +1516,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("reject reason is not recorded", out.stdout)
+        self.assertIn("reject reason is not recorded", refused(out), out.stdout)
 
     def test_идентификаторы_находок_не_разъезжаются_при_повторном_импорте(self):
         """Id раздаются по позиции — инструмент обязан писать их обратно в файл блока."""
@@ -1456,7 +1564,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("src/one.ts", "стало, починено\n")
         self.s.commit("починка")
         out = self.s.run("check")
-        self.assertIn("changed since import", out.stdout)
+        self.assertIn("changed since import", refused(out), out.stdout)
         self.assertIn("set-finding", out.stdout, "отказ обязан говорить, что делать")
 
     def test_повторный_импорт_не_переснимает_отпечаток_находки(self):
@@ -1501,7 +1609,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("line 900 is cited", out.stdout)
+        self.assertIn("line 900 is cited", refused(out), out.stdout)
 
     def test_коммит_починки_обязан_касаться_файла_находки(self):
         """Отметка «починено» проверяется коммитом, а не словом."""
@@ -1524,7 +1632,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", wrong)
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("does not touch src/one.ts", out.stdout)
+        self.assertIn("does not touch src/one.ts", refused(out), out.stdout)
 
         # а теперь коммит, которого в репозитории нет вовсе
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
@@ -1532,7 +1640,13 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("is not in the repository", self.s.run("check").stdout)
 
     def test_путь_с_пробелом_не_ломает_проверку_коммита(self):
+        """Обе стороны: на пути с пробелом ворота ПРОПУСКАЮТ верный коммит и ЛОВЯТ чужой.
+
+        Пока тест проверял только отсутствие жалобы, он был зелен и тогда, когда ворота
+        для таких путей выключены вовсе, — измерено мутацией.
+        """
         self.s.write("src/my file.ts", "a\n")
+        self.s.write("src/other.ts", "b\n")
         self.s.blocks(paths=["src"])
         self.s.manifest(hypotheses=1)
         self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
@@ -1541,12 +1655,29 @@ class ReviewToolTest(unittest.TestCase):
             ensure_ascii=False) + "\n")
         self.s.commit()
         self.s.run("init")
+        self.s.run("coverage")
         self.s.run("import", "H1")
+
+        # правка сделана в соседнем файле — ворота обязаны сработать и здесь
+        self.s.write("src/other.ts", "b\nправка не там\n")
+        self.s.commit("правка соседнего модуля")
+        wrong = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(
+            self.s.run("set-finding", "H1-001", "fixed", "--commit", wrong).returncode, 0)
+        self.s.run("findings")
+        self.assertIn("does not touch src/my file.ts", refused(self.s.run("check")))
+
+        # а правка самого файла принимается
         self.s.write("src/my file.ts", "a\nпочинено\n")
         self.s.commit("починка")
         sha = self.s.git("rev-parse", "HEAD").stdout.strip()
-        self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
-        self.assertNotIn("does not touch", self.s.run("check").stdout)
+        self.assertEqual(
+            self.s.run("set-finding", "H1-001", "fixed", "--commit", sha).returncode, 0)
+        self.s.run("coverage")
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("does not touch", out.stdout)
 
     def test_починка_в_общем_модуле_называется_явно(self):
         """Маршрут чинят в общем стороже — проверка не должна требовать правки не там."""
@@ -1591,7 +1722,7 @@ class ReviewToolTest(unittest.TestCase):
         # без пометки репозитория проверка честно говорит, что коммита нет
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
         self.s.run("findings")
-        self.assertIn("is not in the repository", self.s.run("check").stdout)
+        self.assertIn("is not in the repository", refused(self.s.run("check")))
 
         # с пометкой — принимается
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "ядро:0123456789abcdef")
@@ -1611,7 +1742,7 @@ class ReviewToolTest(unittest.TestCase):
         data = json.loads(st.read_text(encoding="utf-8"))
         data["blocks"]["H1"]["status"] = "почти готово"
         st.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.assertIn("is not in the vocabulary", self.s.run("check").stdout)
+        self.assertIn("is not in the vocabulary", refused(self.s.run("check")))
 
     def test_куцый_манифест_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1620,7 +1751,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         self.s.run("set-status", "H1", "running")
-        self.assertIn("is empty or nearly empty", self.s.run("check").stdout)
+        self.assertIn("is empty or nearly empty", refused(self.s.run("check")))
 
     def test_добор_не_затирает_починенное(self):
         """Штатный импорт заменяет находки блока целиком — у блока в работе это потеря."""
@@ -1673,7 +1804,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         out = self.s.run("check")
         self.assertIn("ceiling 100", out.stdout, "проектный порог должен применяться")
-        self.assertIn("cannot be read in one session", out.stdout)
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
 
     # ----------------------------------------------------------------- корни и узды
 
@@ -1698,7 +1829,7 @@ class ReviewToolTest(unittest.TestCase):
         """Класс, повторившийся трижды, закрывается правилом, а не списком правок."""
         self._three_of_one_root()
         out = self.s.run("check")
-        self.assertIn("and no guard", out.stdout)
+        self.assertIn("and no guard", refused(out), out.stdout)
         self.assertIn("рукописная копия предиката", out.stdout)
         self.assertIn("--rule", out.stdout, "отказ обязан говорить, что делать")
 
@@ -1738,7 +1869,7 @@ class ReviewToolTest(unittest.TestCase):
 
         self.s.git("rm", "-q", "tests/predicate.test.ts")
         self.s.commit("узду удалили")
-        self.assertIn("no such file", self.s.run("check").stdout,
+        self.assertIn("no such file", refused(self.s.run("check")),
                       "удалённая узда не должна держать класс закрытым")
 
     def test_два_экземпляра_узду_ещё_не_требуют(self):
@@ -1800,7 +1931,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("cannot be read in one session", out.stdout)
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
 
     def test_порог_размера_не_считает_исключённое(self):
         """Исключённый кодоген не должен требовать резать блок."""
@@ -1822,7 +1953,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         out = self.s.run("check")
-        self.assertIn("silently shrank", out.stdout)
+        self.assertIn("silently shrank", refused(out), out.stdout)
 
     def test_шаблон_по_нетрекнутым_файлам_зовёт_git_add(self):
         """`npx skills add` кладёт файлы мимо индекса — без подсказки «не матчит» читается как
@@ -1834,7 +1965,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("vendor/tool.py", "x\n")
         self.s.run("init")
         out = self.s.run("check")
-        self.assertIn("matches only untracked files (1)", out.stdout)
+        self.assertIn("matches only untracked files (1)", refused(out), out.stdout)
         self.assertIn("git add -- vendor/**", out.stdout)
         self.assertNotIn("silently shrank", out.stdout)
 
@@ -1848,7 +1979,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
 
         bare = self.s.root.parent / (self.s.root.name + "-origin.git")
-        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, bare, True)
         self.s.git("remote", "add", "origin", str(bare))
         self.s.git("push", "-q", "origin", "HEAD:refs/heads/master")
@@ -1865,7 +1996,7 @@ class ReviewToolTest(unittest.TestCase):
         # а не числом коммитов — ветка, отведённая час назад, отстаёт на десяток коммитов
         # и не устарела ничуть.
         long_ago = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14)).isoformat()
-        env = dict(os.environ, GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
+        env = child_env(GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
         subprocess.run(["git", "-C", str(self.s.root), "commit", "-q", "--amend",
                         "--no-edit", f"--date={long_ago}"], env=env, check=True,
                        capture_output=True)
@@ -1879,7 +2010,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.git("fetch", "-q", "origin")
 
         out = self.s.run("check")
-        self.assertIn("behind", out.stdout)
+        self.assertIn("behind", refused(out), out.stdout)
         self.assertIn("days", out.stdout)
         self.assertIn("fetch", out.stdout, "отказ обязан говорить, что делать")
 
@@ -1891,13 +2022,13 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
 
         bare = self.s.root.parent / (self.s.root.name + "-origin2.git")
-        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, bare, True)
         self.s.git("remote", "add", "origin", str(bare))
 
         # общий предок — двухнедельной давности
         long_ago = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14)).isoformat()
-        env = dict(os.environ, GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
+        env = child_env(GIT_COMMITTER_DATE=long_ago, GIT_AUTHOR_DATE=long_ago)
         subprocess.run(["git", "-C", str(self.s.root), "commit", "-q", "--amend", "--no-edit",
                         f"--date={long_ago}"], env=env, check=True, capture_output=True)
         self.s.git("push", "-q", "origin", "HEAD:refs/heads/master")
@@ -1934,8 +2065,8 @@ class ReviewToolTest(unittest.TestCase):
         kit_state = KIT / "docs" / "review" / "state.json"
         before = kit_state.read_bytes() if kit_state.exists() else None
         self.s.run("init")
-        out = subprocess.run(["python3", str(TOOL), "status"], cwd=self.s.root / "src",
-                             capture_output=True, text=True, check=False)
+        out = subprocess.run([sys.executable, str(TOOL), "status"], cwd=self.s.root / "src",
+                             capture_output=True, text=True, check=False, env=child_env())
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("H1", out.stdout, "из подкаталога — тот же корень")
         after = kit_state.read_bytes() if kit_state.exists() else None
@@ -1944,12 +2075,12 @@ class ReviewToolTest(unittest.TestCase):
     def test_вне_репозитория_инструмент_отказывает(self):
         plain = Path(tempfile.mkdtemp(prefix="finetooth-plain-"))
         self.addCleanup(shutil.rmtree, plain, True)
-        out = subprocess.run(["python3", str(TOOL), "status"], cwd=plain,
-                             capture_output=True, text=True, check=False)
+        out = subprocess.run([sys.executable, str(TOOL), "status"], cwd=plain,
+                             capture_output=True, text=True, check=False, env=child_env())
         self.assertEqual(out.returncode, 2)
         self.assertIn("git", out.stderr)
-        self.assertEqual(subprocess.run(["python3", str(TOOL), "version"], cwd=plain,
-                                        capture_output=True, text=True).returncode, 0,
+        self.assertEqual(subprocess.run([sys.executable, str(TOOL), "version"], cwd=plain,
+                                        capture_output=True, text=True, env=child_env()).returncode, 0,
                          "версию можно спросить откуда угодно")
 
     def test_шаблон_роли_из_скилла_и_проектная_замена(self):
@@ -2023,7 +2154,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertNotIn("is not in the repository", self.s.run("check").stdout)
         rows = self._rows(); rows[0]["status"] = "open"; rows[0].pop("code_sha", None)
         self._write_rows(rows)
-        self.assertIn("is not in the repository", self.s.run("check").stdout,
+        self.assertIn("is not in the repository", refused(self.s.run("check")),
                       "а открытая находка на пропавший файл — по-прежнему отказ")
 
     def test_отложенная_находка_требует_причину(self):
@@ -2041,7 +2172,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("findings")
         self.assertNotIn("deferred without a reason", self.s.run("check").stdout)
         rows = self._rows(); rows[0].pop("defer_reason"); self._write_rows(rows)
-        self.assertIn("deferred without a reason", self.s.run("check").stdout)
+        self.assertIn("deferred without a reason", refused(self.s.run("check")))
 
     def test_фазы_в_массиве_не_убывают(self):
         self.s.write("src/one.ts", "a\n")
@@ -2054,7 +2185,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
         self.s.commit()
         self.s.run("init")
-        self.assertIn("phase 1 comes after phase 2", self.s.run("check").stdout)
+        self.assertIn("phase 1 comes after phase 2", refused(self.s.run("check")))
 
     def test_заблокированный_блок_не_значит_закончено(self):
         self.s.write("src/one.ts", "a\n")
@@ -2063,7 +2194,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         self.s.run("set-status", "H1", "blocked")
-        self.assertIn("blocked without a note", self.s.run("check").stdout)
+        self.assertIn("blocked without a note", refused(self.s.run("check")))
         self.s.run("set-status", "H1", "blocked", "--note", "ждёт стенда")
         self.assertNotIn("blocked without a note", self.s.run("check").stdout)
         out = self.s.run("status").stdout
@@ -2137,10 +2268,10 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
-        out = self.s.run("check").stdout
-        self.assertIn("not named by full path", out)
-        self.assertIn("src/a/page.tsx", out, "базового имени мало — одноимённых файлов много")
-        self.assertNotIn("vendor.min.js", out, "исключённое называть не требуется")
+        out = self.s.run("check")
+        self.assertIn("not named by full path", refused(out), out.stdout)
+        self.assertIn("src/a/page.tsx", out.stdout, "базового имени мало — одноимённых файлов много")
+        self.assertNotIn("vendor.min.js", out.stdout, "исключённое называть не требуется")
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
                               "## Прочитано\n- src/a/page.tsx\n## Ограничения охвата\n"
                               "не дочитал src/b/page.tsx\n")
@@ -2209,7 +2340,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
         self.s.run("coverage")
         self.s.run("set-status", "H1", "closed")
-        self.assertIn("no fix reviewer report", self.s.run("check").stdout)
+        self.assertIn("no fix reviewer report", refused(self.s.run("check")))
         self.s.write("docs/review/reports/H1-demo.fixreview-1.md", "# ревью правок\nнаходок нет\n")
         self.assertNotIn("no fix reviewer report", self.s.run("check").stdout)
 
@@ -2271,6 +2402,40 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual([r["status"] for r in self._rows()], ["deferred", "deferred"])
 
+    def test_set_finding_на_нескольких_номерах_всё_или_ничего(self):
+        """Инвариант: перевод нескольких находок — целиком или никак.
+
+        Отказ на втором номере — обычное дело: опечатка в номере, `fixed` без коммита. Если
+        первую к этому моменту уже записали, команда сказала «нет», а реестр говорит «да»,
+        и расхождение видно только при чтении файла руками.
+        """
+        self._two_open()
+        for why, argv in (
+                ("номера нет в реестре", ("H1-001", "H1-999", "deferred", "--reason", "x")),
+                ("отказ на проверке поля", ("H1-001", "H1-002", "fixed"))):
+            with self.subTest(отказ=why):
+                before = self._rows()
+                out = self.s.run("set-finding", *argv)
+                self.assertNotEqual(out.returncode, 0, out.stdout + out.stderr)
+                self.assertEqual(self._rows(), before,
+                                 "часть находок уже переведена, а команда отказала")
+        # а та же команда без чужого номера переводит обе
+        out = self.s.run("set-finding", "H1-001", "H1-002", "deferred", "--reason", "ждёт H2")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertEqual([r["status"] for r in self._rows()], ["deferred", "deferred"])
+
+    def _two_open(self) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": f"дефект {i}", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n" for i in (1, 2)))
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+
 
 class LanguageTest(unittest.TestCase):
     """Язык ревью: английский по умолчанию, русский по полю `lang`; разбор отчётов
@@ -2298,6 +2463,84 @@ class LanguageTest(unittest.TestCase):
         out = self.s.run("prompt", "H1", "--role", "hunter").stdout
         self.assertIn("ревьюер-охотник", out)
         self.assertIn("Прочитай КАЖДЫЙ файл", out)
+
+    def test_обе_языковые_таблицы_держат_одни_ключи_и_подстановки(self):
+        """УЗДА КЛАССА «строка есть на одном языке и нет на другом».
+
+        `T()` берёт ключ из таблицы ВЫБРАННОГО языка и падает `KeyError` в работе, а не
+        при импорте. Удаление русского `refs_cut` оставляло весь прогон зелёным —
+        измерено: ни один тест не даёт блоку больше REF_LIST_LIMIT файлов контекста, и
+        ветка не исполняется никогда; так же не исполняются `vol_more`, `sum_seams`,
+        `f_invariant`. Проект с русским ревью и 81 файлом контекста получал бы трейсбек
+        из `prompt` — команды, которая выдаёт агенту задание.
+
+        Подстановки сверяются заодно: перевод с другим именем поля падает тем же
+        образом, только уже в `format`.
+        """
+        table = self._msg_tables(TOOL.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(table), ["en", "ru"], "языков стало больше — правило сверяет все")
+        self.assertEqual(self._msg_mismatch(table), [])
+
+    @staticmethod
+    def _msg_tables(source: str) -> dict:
+        """Таблицы сообщений инструмента, прочитанные из его исходника."""
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "MSG":
+                return ast.literal_eval(node.value)
+        raise AssertionError("в исходнике нет таблицы MSG — правило смотрит не туда")
+
+    @staticmethod
+    def _msg_mismatch(table: dict) -> list[str]:
+        """Ключи, которые есть не на всех языках, и ключи с разными подстановками."""
+        langs = sorted(table)
+        first, *rest = langs
+        out = []
+        for lang in rest:
+            out += [f"`{k}`: есть в {first}, нет в {lang}"
+                    for k in sorted(set(table[first]) - set(table[lang]))]
+            out += [f"`{k}`: есть в {lang}, нет в {first}"
+                    for k in sorted(set(table[lang]) - set(table[first]))]
+        for key in table[first]:
+            fields = {lang: frozenset(re.findall(r"\{(\w+)", table[lang].get(key, "")))
+                      for lang in langs if key in table[lang]}
+            if len(set(fields.values())) > 1:
+                out.append(f"`{key}`: подстановки расходятся по языкам: {dict(fields)}")
+        return out
+
+    def test_узда_видит_расхождение_таблиц_на_выдуманном_исходнике(self):
+        """Обе стороны правила на таблицах, которых в инструменте нет: сверенные проходят,
+        потерянный перевод и переименованная подстановка — нет."""
+        same = 'MSG = {"en": {"a": "{n} files"}, "ru": {"a": "{n} файлов"}}\n'
+        self.assertEqual(self._msg_mismatch(self._msg_tables(same)), [])
+        gone = 'MSG = {"en": {"a": "{n} files"}, "ru": {}}\n'
+        self.assertNotEqual(self._msg_mismatch(self._msg_tables(gone)), [])
+        renamed = 'MSG = {"en": {"a": "{n} files"}, "ru": {"a": "{count} файлов"}}\n'
+        self.assertNotEqual(self._msg_mismatch(self._msg_tables(renamed)), [])
+
+    def test_у_каждого_шаблона_и_образца_есть_второй_язык(self):
+        """Та же узда для файлов: шаблон роли или образец, переведённый наполовину,
+        оставляет проект одного из языков без того, что обещает `SKILL.md`."""
+        for folder in ("references", "assets"):
+            names = {p.name for p in (SKILL / folder).glob("*.md")}
+            for name in sorted(names):
+                twin = name.replace(".ru.md", ".md") if name.endswith(".ru.md") \
+                    else name[:-3] + ".ru.md"
+                with self.subTest(файл=f"{folder}/{name}"):
+                    self.assertIn(twin, names, f"{folder}/{name} без пары {twin}")
+
+    def test_язык_которого_нет_не_роняет_инструмент(self):
+        """`lang` пишут руками, и `ru-RU` — обычная описка. Ни один гейт `check` поле не
+        проверяет, так что запасной английский — единственное, что стоит между опиской и
+        трейсбеком из `prompt`."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"], lang="ru-RU")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.assertEqual(self.s.run("init").returncode, 0)
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("You are a hunter reviewer", out.stdout, "запасной язык — английский")
 
     def test_без_поля_lang_язык_английский(self):
         self.s.write("src/one.ts", "a\n")
@@ -2426,16 +2669,16 @@ class SetupTest(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="finetooth-install-"))
         self.addCleanup(shutil.rmtree, self.root, True)
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, env=child_env())
         for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True)
+            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True, env=child_env())
         (self.root / "app.ts").write_text("x\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True, env=child_env())
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True, env=child_env())
 
     def install(self, *extra: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["python3", str(TOOL), "setup", *extra], cwd=self.root,
-                              capture_output=True, text=True, check=False)
+        return subprocess.run([sys.executable, str(TOOL), "setup", *extra], cwd=self.root,
+                              capture_output=True, text=True, check=False, env=child_env())
 
     def test_после_setup_инструмент_работает_и_советует_команду_проекта(self):
         out = self.install("--cli", "npm run review --", "--project", "Демо")
@@ -2454,8 +2697,8 @@ class SetupTest(unittest.TestCase):
         ver = re.search(r'^VERSION = "([^"]+)"', TOOL.read_text(encoding="utf-8"), re.M).group(1)
         self.assertEqual(bj["kit_version"], ver)
 
-        run = lambda *a: subprocess.run(["python3", str(TOOL), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: subprocess.run([sys.executable, str(TOOL), *a], cwd=self.root,
+                                        capture_output=True, text=True, env=child_env())
         self.assertEqual(run("init").returncode, 0)
         cov = run("coverage")
         self.assertEqual(cov.returncode, 1, "непокрытый файл обязан ронять карту")
@@ -2465,11 +2708,11 @@ class SetupTest(unittest.TestCase):
         """Скилл коммитят в проект ради CI — его файлы не предмет ревью."""
         inside = self.root / ".claude" / "skills" / "finetooth"
         shutil.copytree(SKILL, inside, ignore=shutil.ignore_patterns("__pycache__"))
-        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "скилл в проекте"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True, env=child_env())
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "скилл в проекте"], check=True, env=child_env())
         tool = inside / "scripts" / "review.py"
-        run = lambda *a: subprocess.run(["python3", str(tool), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: subprocess.run([sys.executable, str(tool), *a], cwd=self.root,
+                                        capture_output=True, text=True, env=child_env())
         self.assertEqual(run("setup").returncode, 0)
         run("init")
         out = run("coverage").stdout
@@ -2833,6 +3076,25 @@ class GitTruthTest(unittest.TestCase):
         self.s = Stand()
         self.addCleanup(self.s.cleanup)
 
+    def test_главная_ветка_проекта_ничего_не_решает(self):
+        """Обратная сторона пришпиленного конфига git: стенд больше не берёт имя ветки у
+        разработчика — и обязан работать на любом. `main` — умолчание большинства живых
+        проектов, а набор целиком ходил по `master`."""
+        s = Stand(branch="main")
+        self.addCleanup(s.cleanup)
+        s.write("src/one.ts", "a\n")
+        s.blocks(paths=["src/one.ts"])
+        s.manifest(hypotheses=1)
+        s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                         "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        s.commit()
+        self.assertEqual(s.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        self.assertEqual(s.run("init").returncode, 0)
+        self.assertEqual(s.run("coverage").returncode, 0)
+        s.run("set-status", "H1", "verified")
+        out = s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
     def test_файл_из_индекса_не_выложенный_на_диск_даёт_отпечаток_и_строки(self):
         """Разреженная выкладка (и файл, удалённый без коммита): `ls-files` его перечисляет,
         а отпечаток сводился к одному имени — содержимое можно было переписать, и «файлы
@@ -2862,6 +3124,53 @@ class GitTruthTest(unittest.TestCase):
         self.s.run("coverage")
         self.assertIn("changed after the review", self.s.run("check").stdout)
 
+    def test_имя_файла_со_скобкой_это_имя_а_не_образец(self):
+        """`app/[id]/page.tsx` — обычный маршрут Next.js, а для git-pathspec `[id]` —
+        класс символов. Имя, отданное как образец, совпадает и с СОСЕДОМ: несуществующий
+        `app/[i]/page.tsx` матчится на живой `app/i/page.tsx`, и «узда есть» становится
+        правдой без всякой узды — ровно тот дефект, ради которого проверка и написана.
+
+        Обе стороны: имя, которое есть, принимается; имя, которого нет, отвергается, как
+        бы удачно его скобки ни совпадали с соседним файлом.
+        """
+        route = "app/[id]/page.tsx"
+        self.s.write(route, "было\n")
+        self.s.write("app/i/page.tsx", "сосед\n")
+        self.s.blocks(paths=["app"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": route, "claim": "дефект на маршруте", "scenario": "x делает y"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+
+        # имя, которое есть, — принимается и там, и там
+        for flag in ("--rule", "--fixed-in"):
+            with self.subTest(поле=flag, имя="живое"):
+                got = self.s.run("set-finding", "H1-001", "open", flag, route)
+                self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
+
+        # а имени, которого нет, не помогает совпадение по классу символов
+        for flag in ("--rule", "--fixed-in"):
+            with self.subTest(поле=flag, имя="которого нет"):
+                got = self.s.run("set-finding", "H1-001", "open", flag, "app/[i]/page.tsx")
+                self.assertNotEqual(got.returncode, 0, got.stdout + got.stderr)
+                self.assertIn("app/[i]/page.tsx", got.stdout + got.stderr)
+
+        # и файл под скобками живёт в отпечатке блока: его правка роняет проверку
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit("отчёты")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.s.write(route, "переписали целиком\n")
+        self.s.commit("правка после просмотра")
+        self.s.run("coverage")
+        self.assertIn("changed after the review", refused(self.s.run("check")))
+
     def test_двоичный_файл_не_считается_строками_в_пороге(self):
         """Порог читаемости мерил картинку как две тысячи строк."""
         self.s.write("src/one.ts", "a\n")
@@ -2887,6 +3196,7 @@ class GitTruthTest(unittest.TestCase):
              "file": "src/обычный файл.ts", "claim": "пробел", "scenario": "с"}]) + "\n")
         self.s.commit()
         self.s.run("init")
+        self.s.run("coverage")
         self.s.run("import", "H1")
         self.s.write("src/модуль.ts", "починено\n")
         self.s.write("src/обычный файл.ts", "починено\n")
@@ -2894,9 +3204,11 @@ class GitTruthTest(unittest.TestCase):
         sha = self.s.git("rev-parse", "HEAD").stdout.strip()
         for fid in ("H1-001", "H1-002"):
             self.assertEqual(self.s.run("set-finding", fid, "fixed", "--commit", sha).returncode, 0)
+        self.s.run("coverage")
         self.s.run("findings")
-        out = self.s.run("check").stdout
-        self.assertNotIn("does not touch", out)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("does not touch", out.stdout)
 
     def test_коммит_не_касающийся_кириллического_файла_по_прежнему_ловится(self):
         self.s.write("src/модуль.ts", "a\n")
@@ -2915,8 +3227,7 @@ class GitTruthTest(unittest.TestCase):
         sha = self.s.git("rev-parse", "HEAD").stdout.strip()
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
         self.s.run("findings")
-        out = self.s.run("check").stdout
-        self.assertIn("does not touch src/модуль.ts", out)
+        self.assertIn("does not touch src/модуль.ts", refused(self.s.run("check")))
 
     def test_переименование_не_обрывает_историю_изменений_блока(self):
         """`--name-only` печатает только новое имя: частота изменений блока обрывалась на
@@ -3066,6 +3377,10 @@ class HandWrittenInputTest(unittest.TestCase):
         self.addCleanup(self.s.cleanup)
 
     def _stand(self) -> None:
+        # Каждый вызов — свежий стенд: порча прошлой итерации не должна доставаться
+        # следующей, а пустой коммит стенд (честно) считает ошибкой.
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
@@ -3193,6 +3508,22 @@ class HandWrittenInputTest(unittest.TestCase):
         "blocks не списком": lambda d: d.update(blocks={"id": "H1"}),
     }
 
+    # Аргументы, при которых команда ДОХОДИТ ДО СВОЕГО ТЕЛА. Одного набора на всех не
+    # бывает: `review set-status H1 s.md` — это `argparse`, отказавший до начала команды,
+    # и правило ниже проверяло бы его отказ, а не поведение команды. Измерено: при общем
+    # наборе `H1 s.md` до тела доходили три команды из двадцати трёх.
+    ARGV = {
+        "init": (), "version": (), "setup": (), "status": (), "next": (),
+        "coverage": (), "prompt": ("H1",), "set-status": ("H1", "running"),
+        "import": ("H1",), "set-finding": ("H1-001", "open"), "hypotheses": ("H1",),
+        "restamp": ("H1",), "backfill": (), "inventory": (), "sizes": (),
+        "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
+        "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
+    }
+    # Отказ argparse — это не поведение команды: он печатается до её начала.
+    ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are required",
+                        "invalid choice")
+
     def _damage(self, how) -> None:
         bj = self.s.root / "docs/review/blocks.json"
         d = json.loads(bj.read_text(encoding="utf-8"))
@@ -3211,22 +3542,35 @@ class HandWrittenInputTest(unittest.TestCase):
         """Узда класса: список подкоманд берётся у самого инструмента, а порча определения —
         таблицей, так что и новая команда, и новое поле попадают под правило сами.
 
-        Команда зовётся И с лишними доводами, И без них: пока звали только с `H1 s.md`,
-        `init` до своего кода не доходил — argparse отвергал позиционные доводы раньше, —
-        и трейсбек `KeyError: 'review_id'` проходил мимо узды.
+        Каждая команда зовётся со СВОИМИ аргументами из `ARGV`, при которых она доходит до
+        тела: пока звали всех с общим `H1 s.md`, `init` до своего кода не доходил —
+        argparse отвергал позиционные доводы раньше, — и трейсбек `KeyError: 'review_id'`
+        проходил мимо узды. Отказ argparse поэтому не засчитывается как проход.
         """
         self._stand()
         commands = self._subcommands()
+        self.assertEqual(sorted(set(self.ARGV) - set(commands)), [],
+                         "в таблице есть команда, которой у инструмента больше нет")
+        for cmd in commands:
+            with self.subTest(cmd=cmd):
+                self.assertIn(cmd, self.ARGV,
+                              "новая команда: впишите сюда аргументы, при которых она "
+                              "доходит до своего тела, — иначе правило проверяет отказ "
+                              "argparse, а не её саму")
         for name, how in self.DAMAGE.items():
             with self.subTest(порча=name):
                 self._stand()
                 self._damage(how)
                 for cmd in commands:
-                    for args in ((), ("H1", "s.md")):
-                        out = self.s.run(cmd, *args)
-                        with self.subTest(cmd=cmd, args=args):
-                            self.assertNotIn("Traceback", out.stderr,
-                                             f"{name} / {cmd} {args}: {out.stderr[-400:]}")
+                    args = self.ARGV.get(cmd, ())
+                    out = self.s.run(cmd, *args)
+                    with self.subTest(cmd=cmd, args=args):
+                        self.assertNotIn("Traceback", out.stderr,
+                                         f"{name} / {cmd} {args}: {out.stderr[-400:]}")
+                        for said in self.ARGPARSE_REFUSED:
+                            self.assertNotIn(said, out.stderr,
+                                             f"{name} / {cmd}: команда не начиналась — "
+                                             "поправьте ARGV")
 
     def test_отказ_на_битом_определении_называет_поле_и_файл(self):
         """Отказ читает тот, кто видит инструмент впервые: он обязан назвать, что править."""
@@ -3331,6 +3675,87 @@ class IdempotenceTest(unittest.TestCase):
                          before)
         self.assertIn("nothing to stamp", out.stdout)
 
+    def test_restamp_на_пропавшем_файле_отказ_а_не_отпечаток_пустоты(self):
+        """Файл под находкой исчез — «пересняли отпечаток» было бы неправдой: находку в
+        таком случае двигают (`set-finding`), и отказ обязан это сказать."""
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps(
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/one.ts", "claim": "дефект", "scenario": "с"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("import", "H1")
+        self.s.git("rm", "-q", "src/one.ts", check=True)
+        self.s.commit("файл унесли")
+        before = (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8")
+        out = self.s.run("restamp", "H1-001")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("set-finding", out.stderr, "отказ обязан говорить, что делать")
+        self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8"),
+                         before, "реестр остался прежним")
+
+    def test_next_называет_следующий_незакрытый_блок(self):
+        """`next` — то, чем следующая сессия узнаёт, с чего начать; своего теста у него
+        не было вовсе."""
+        out = self.s.run("next")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "H1")
+        self.s.run("set-status", "H1", "closed")
+        out = self.s.run("next")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "", "закрытых блоков `next` не называет")
+
+    def test_повторный_backfill_на_проставленном_состоянии_ничего_не_пишет(self):
+        """`backfill` перечислен в инвариантe об идемпотентности рядом с `init` и
+        `restamp`, а теста у него не было: каждый повторный прогон переписывал бы
+        state.json и дописывал строку в дневник, и ворота CI обычного вида —
+        «перегенерируй и потребуй чистое дерево» — краснели бы на верном состоянии."""
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps(
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/one.ts", "claim": "дефект", "scenario": "с"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("import", "H1")
+        self.s.run("set-status", "H1", "verified")
+        # состояние, оставленное версией набора без отпечатков
+        st_path = self.s.root / "docs/review/state.json"
+        st = json.loads(st_path.read_text(encoding="utf-8"))
+        st["blocks"]["H1"].pop("reviewed_sha")
+        st_path.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
+        first = self.s.run("backfill")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn("H1", first.stdout, "проставить было что")
+        before = self._state_text()
+        journal = (self.s.root / "docs/review/journal.md").read_text(encoding="utf-8")
+        time.sleep(1.1)                      # чтобы отличие было видно, если оно есть
+        again = self.s.run("backfill")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("nothing to stamp", again.stdout)
+        self.assertEqual(self._state_text(), before, "повторный прогон переписал состояние")
+        self.assertEqual((self.s.root / "docs/review/journal.md").read_text(encoding="utf-8"),
+                         journal, "повторный прогон дописал строку в дневник")
+
+    def test_импорт_держит_те_же_потолки_что_и_проверка(self):
+        """`import` пропускал заголовок длиннее потолка, а `check` его потом отвергал: строка
+        оказывалась в реестре, и каждые следующие ворота краснели на записи, которую
+        инструментом уже не поправить. Обе стороны: длинный отвергается, обычный проходит."""
+        src = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        row = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+               "file": "src/one.ts", "claim": "и" * 300, "scenario": "с"}
+        src.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.s.commit()
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("claim is 300 characters", out.stdout + out.stderr)
+        reg = self.s.root / "docs/review/findings.jsonl"
+        self.assertNotIn("и" * 300, reg.read_text(encoding="utf-8") if reg.exists() else "",
+                         "отвергнутая строка не должна попасть в реестр")
+
+        row["claim"] = "и" * 200
+        src.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertEqual(self.s.run("check").returncode, 0, "и проверка его принимает")
+
     def test_импорт_не_выдаёт_занятый_номер(self):
         """Находка, вставленная ВЫШЕ пронумерованных строк, получала уже занятый номер:
         в реестре оказывались две H1-001, и `set-finding` доставал только первую."""
@@ -3408,14 +3833,14 @@ class FreshnessGateTest(unittest.TestCase):
     def _server(self, remote_name: str) -> None:
         """Соседний «сервер» с коммитом двухнедельной давности впереди нашего."""
         server = self.s.root.parent / (self.s.root.name + "-server")
-        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, server, True)
         self.s.git("remote", "add", remote_name, str(server))
         self.s.git("push", "-q", remote_name, "HEAD:refs/heads/master")
         self.s.write("src/server.ts", "серверная правка\n")
         self.s.git("add", "src/server.ts")
         future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        env = dict(os.environ, GIT_AUTHOR_DATE=future, GIT_COMMITTER_DATE=future)
+        env = child_env(GIT_AUTHOR_DATE=future, GIT_COMMITTER_DATE=future)
         subprocess.run(["git", "-C", str(self.s.root), "commit", "-qm", "серверная правка"],
                        env=env, check=False, capture_output=True)
         self.s.git("push", "-q", remote_name, "HEAD:refs/heads/master")
@@ -3440,7 +3865,7 @@ class FreshnessGateTest(unittest.TestCase):
 
     def test_удалённый_без_HEAD_называет_команду(self):
         server = self.s.root.parent / (self.s.root.name + "-bare")
-        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(server)], check=True, env=child_env())
         self.addCleanup(shutil.rmtree, server, True)
         self.s.git("remote", "add", "origin", str(server))
         out = self.s.run("check")
@@ -3503,6 +3928,35 @@ class ThresholdTest(unittest.TestCase):
         self.assertIn("95th percentile of this repository", out)
 
 
+STREAM_REPLY = "блок пройден"
+STREAM_TURNS = 42
+STREAM_COST = 3.41
+
+
+def stream_text(with_result: bool = True, subtype: str = "success") -> str:
+    """Поток `claude -p --output-format stream-json --verbose` целого прогона.
+
+    ОДНО место на весь набор: и заглушки `axes.py`, и заглушка самого `claude` для
+    `run-role.sh` собираются отсюда. Пока заглушка клиента не отдавала события `result`,
+    все шесть тестов `run-role.sh` шли по ветке «события нет», и тест, названный
+    «успешный прогон записан обычной строкой», принимал за неё строку
+    `NO RESULT EVENT … spend: ? min, ? turns … cost estimate unknown`: вида, который
+    оператор читает как «блок пройден», не производил ни один тест.
+    """
+    ev = lambda o: json.dumps(o, ensure_ascii=False)
+    usage = {"input_tokens": 1, "cache_creation_input_tokens": 100,
+             "cache_read_input_tokens": 900, "output_tokens": 5}
+    lines = [ev({"type": "assistant", "message": {
+        "id": "m1", "model": "test", "usage": usage,
+        "content": [{"type": "tool_use", "id": "t1", "name": "Read",
+                     "input": {"file_path": "/x/a.ts"}}]}})]
+    if with_result:
+        lines.append(ev({"type": "result", "subtype": subtype, "num_turns": STREAM_TURNS,
+                         "duration_ms": 600000, "total_cost_usd": STREAM_COST,
+                         "usage": {"output_tokens": 21000}, "result": STREAM_REPLY}))
+    return "\n".join(lines) + "\n"
+
+
 class SpendTest(unittest.TestCase):
     """Замер расхода — то, из чего выведены потолки ходов. Обрезанный прогон не имеет
     права выглядеть в дневнике как обычный завершённый."""
@@ -3513,18 +3967,7 @@ class SpendTest(unittest.TestCase):
 
     def _stream(self, with_result: bool = True, truncated: bool = False,
                 subtype: str = "success") -> Path:
-        ev = lambda o: json.dumps(o, ensure_ascii=False)
-        usage = {"input_tokens": 1, "cache_creation_input_tokens": 100,
-                 "cache_read_input_tokens": 900, "output_tokens": 5}
-        lines = [ev({"type": "assistant", "message": {
-            "id": "m1", "model": "test", "usage": usage,
-            "content": [{"type": "tool_use", "id": "t1", "name": "Read",
-                         "input": {"file_path": "/x/a.ts"}}]}})]
-        if with_result:
-            lines.append(ev({"type": "result", "subtype": subtype, "num_turns": 42,
-                             "duration_ms": 600000, "total_cost_usd": 3.41,
-                             "usage": {"output_tokens": 21000}, "result": "готово"}))
-        text = "\n".join(lines) + "\n"
+        text = stream_text(with_result=with_result, subtype=subtype)
         if truncated:
             text = text[:-20]
         p = self.s.root / "stream.jsonl"
@@ -3533,7 +3976,7 @@ class SpendTest(unittest.TestCase):
 
     def _axes(self, path: Path, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, str(SKILL / "scripts" / "axes.py"),
-                               str(path), *args], capture_output=True, text=True)
+                               str(path), *args], capture_output=True, text=True, env=child_env())
 
     def test_поток_без_события_result_не_выдаётся_за_измерение(self):
         """«0 min, None turns, $0.00» в формате настоящего замера записывало дорогой
@@ -3631,11 +4074,16 @@ class SpendTest(unittest.TestCase):
         self.assertIn("PARTIAL RESULT", out.stdout)
         self.assertIn("11 assistant messages", out.stdout)
 
-    def _run_role(self, exit_code: int, truncated: bool = False,
-                  log_fails: bool = False) -> tuple[subprocess.CompletedProcess, str]:
+    def _run_role(self, exit_code: int, truncated: bool = False, log_fails: bool = False,
+                  with_result: bool = True) -> tuple[subprocess.CompletedProcess, str]:
         """run-role.sh с заглушкой вместо `claude`: настоящий клиент здесь не нужен,
-        нужен его код возврата и поток, который он оставляет. `truncated` — убитый прогон
-        обрывает последнюю строку потока на середине; `log_fails` — отказывает шаг отчёта."""
+        нужен его код возврата и поток, который он оставляет.
+
+        Поток — тот же, что у целого прогона (`stream_text`): заглушка, которая мягче
+        настоящего клиента, красит зелёным то, что в жизни красное. `truncated` — убитый
+        прогон обрывает последнюю строку на середине; `with_result=False` — поток без
+        события `result` вовсе; `log_fails` — отказывает шаг отчёта.
+        """
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
@@ -3643,14 +4091,16 @@ class SpendTest(unittest.TestCase):
         self.s.run("init")
         stub_dir = self.s.root / "stub"
         stub_dir.mkdir()
+        # Поток лежит рядом с заглушкой файлом: так в нём переживают без потерь и
+        # кавычки, и кириллица ответа агента.
+        text = stream_text(with_result=with_result)
+        if truncated:
+            text = text[:-20]
+        (stub_dir / "stream.jsonl").write_text(text, encoding="utf-8")
         stub = stub_dir / "claude"
-        stub.write_text(
-            "#!/usr/bin/env bash\n"
-            'printf \'%s\\n\' \'{"type":"assistant","message":{"id":"m1","model":"test",'
-            '"usage":{"input_tokens":1,"cache_creation_input_tokens":0,'
-            '"cache_read_input_tokens":0,"output_tokens":1},"content":[]}}\'\n'
-            + ('printf \'%s\' \'{"type":"assis\'\n' if truncated else "")
-            + f"exit {exit_code}\n", encoding="utf-8")
+        stub.write_text("#!/usr/bin/env bash\n"
+                        f'cat "{stub_dir}/stream.jsonl"\n'
+                        f"exit {exit_code}\n", encoding="utf-8")
         stub.chmod(0o755)
         review = f"{sys.executable} {TOOL}"
         if log_fails:
@@ -3662,8 +4112,8 @@ class SpendTest(unittest.TestCase):
                             f'exec {review} "$@"\n', encoding="utf-8")
             wrap.chmod(0o755)
             review = str(wrap)
-        env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}",
-                   REVIEW=review, TMPDIR=str(self.s.root / "runs"))
+        env = child_env(PATH=f"{stub_dir}:{os.environ['PATH']}",
+                        REVIEW=review, TMPDIR=str(self.s.root / "runs"))
         (self.s.root / "runs").mkdir()
         out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "hunter"],
                              cwd=self.s.root, capture_output=True, text=True, env=env)
@@ -3691,21 +4141,24 @@ class SpendTest(unittest.TestCase):
         out, journal = self._run_role(exit_code=0, log_fails=True)
         self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
         self.assertIn("journal write failed", out.stderr)
-        self.assertIn("no agent reply in the stream", out.stdout)
+        self.assertIn(STREAM_REPLY, out.stdout, "ответ агента печатается и при потерянной записи")
 
     def test_ответ_агента_печатается_из_целого_потока(self):
-        """Прямая сторона: на целом потоке ответ агента по-прежнему виден оператору."""
+        """Прямая сторона: на целом потоке ответ агента доходит до оператора — через сам
+        `run-role.sh`, а не через `axes.py` на файле, написанном руками."""
         out, _ = self._run_role(exit_code=0)
-        self.assertIn("no agent reply in the stream", out.stdout, out.stdout)
-        p = self.s.root / "reply.jsonl"
-        p.write_text(json.dumps({"type": "result", "subtype": "success", "num_turns": 1,
-                                 "duration_ms": 1, "total_cost_usd": 0.1,
-                                 "usage": {"output_tokens": 1}, "result": "блок пройден"},
-                                ensure_ascii=False) + "\n", encoding="utf-8")
-        got = self._axes(p, "--reply")
-        self.assertEqual(got.returncode, 0, got.stderr)
-        self.assertIn("--- agent reply ---", got.stdout)
-        self.assertIn("блок пройден", got.stdout)
+        self.assertIn("--- agent reply ---", out.stdout, out.stdout)
+        self.assertIn(STREAM_REPLY, out.stdout, out.stdout)
+        self.assertNotIn("no agent reply in the stream", out.stdout)
+
+    def test_поток_без_события_result_виден_в_дневнике_как_несостоявшийся_замер(self):
+        """Обратная сторона: клиент, ушедший без события `result`, обязан оставить в
+        дневнике слова о том, что замера нет, — даже когда код возврата нулевой."""
+        out, journal = self._run_role(exit_code=0, with_result=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("NO RESULT EVENT", journal)
+        self.assertIn("? turns", journal)
+        self.assertIn("no agent reply in the stream", out.stdout)
 
     def test_упавший_прогон_записан_в_дневник_как_упавший(self):
         """Дневник — единственная память следующей сессии; обрезанный прогон был записан
@@ -3724,7 +4177,7 @@ class SpendTest(unittest.TestCase):
         self.s.run("init")
         runs = self.s.root / "runs"
         runs.mkdir()
-        env = dict(os.environ, REVIEW=f"{sys.executable} {TOOL}", TMPDIR=str(runs))
+        env = child_env(REVIEW=f"{sys.executable} {TOOL}", TMPDIR=str(runs))
         out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "НЕТБЛОКА", "hunter"],
                              cwd=self.s.root, capture_output=True, text=True, env=env)
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
@@ -3732,10 +4185,18 @@ class SpendTest(unittest.TestCase):
         self.assertEqual(left, [], "нулевой файл промпта остался в TMPDIR")
 
     def test_успешный_прогон_записан_обычной_строкой(self):
+        """Строка целого прогона — та, которую оператор читает как «блок пройден»: с
+        ходами, временем и ценой. Пока заглушка клиента не отдавала события `result`, под
+        этим именем проверялась строка `NO RESULT EVENT … ? turns … cost unknown`."""
         out, journal = self._run_role(exit_code=0)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("hunter — ", journal)
         self.assertNotIn("RUN FAILED", journal)
+        self.assertNotIn("NO RESULT EVENT", journal)
+        self.assertNotIn("RUN CUT OFF", journal)
+        self.assertIn(f"{STREAM_TURNS} turns", journal)
+        self.assertIn(f"cost estimate ${STREAM_COST:.2f}", journal)
+        self.assertNotIn("? turns", journal)
 
 
 class GuardGrepTest(unittest.TestCase):
@@ -3748,11 +4209,28 @@ class GuardGrepTest(unittest.TestCase):
         self.pkg = self.dir / "internal" / "billing"
         self.pkg.mkdir(parents=True)
 
-    def _run(self, *paths: str) -> subprocess.CompletedProcess:
+    def _run(self, *paths: str, extra: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["bash", str(SKILL / "assets" / "guard-grep.sh"), "--pattern", r"\.Publish\(",
-             "--marker", "outbox-allowed:", "--", *paths],
-            capture_output=True, text=True)
+             "--marker", "outbox-allowed:", *extra, "--", *paths],
+            capture_output=True, text=True, env=child_env())
+
+    def test_исключение_снимает_попадание_а_остальные_оставляет(self):
+        """`--exclude` — второй способ не быть нарушением: вызов, который И ТАК идёт
+        через разрешённую обёртку, нарушением не считается. Обе стороны: исключённый
+        вызов не назван, все прочие названы — иначе ключ, потерявший своё значение, тихо
+        делает ворота зелёными на всём подряд."""
+        (self.pkg / "a.go").write_text(
+            "package billing\noutbox.Publish(1)\nbroker.Publish(2)\n", encoding="utf-8")
+        strict = self._run(str(self.pkg))
+        self.assertEqual(strict.returncode, 1, strict.stdout)
+        self.assertIn("a.go:2", strict.stdout, "без исключения назван и обёрнутый вызов")
+        self.assertIn("a.go:3", strict.stdout)
+
+        out = self._run(str(self.pkg), extra=("--exclude", r"outbox\.Publish\("))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertNotIn("a.go:2", out.stdout, "исключённый вызов назван нарушением")
+        self.assertIn("a.go:3", out.stdout, "исключение освободило чужой вызов")
 
     def test_один_маркер_освобождает_один_вызов(self):
         """Ровно тот дефект, ради замены которого скрипт и написан: `grep -B` склеивал
@@ -3858,7 +4336,7 @@ class GateCoverageTest(unittest.TestCase):
         (self.s.root / "docs/review/blocks/H1-demo.md").unlink()
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("no manifest", out.stdout)
+        self.assertIn("no manifest", refused(out), out.stdout)
 
     def test_пройденный_блок_без_отчёта_проверяющего(self):
         self._green()
@@ -3927,14 +4405,14 @@ class GateCoverageTest(unittest.TestCase):
         self.s.run("findings")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("duplicate id", out.stdout)
+        self.assertIn("duplicate id", refused(out), out.stdout)
 
     def test_пустое_обязательное_поле_находки(self):
         self._green()
         self._register(claim="")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("field claim is empty", out.stdout)
+        self.assertIn("field claim is empty", refused(out), out.stdout)
 
     def test_находка_ссылается_на_несуществующий_блок(self):
         self._green()
@@ -3948,63 +4426,63 @@ class GateCoverageTest(unittest.TestCase):
         self._register(severity="катастрофа")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("severity=катастрофа is not in the vocabulary", out.stdout)
+        self.assertIn("severity=катастрофа is not in the vocabulary", refused(out), out.stdout)
 
     def test_confidence_вне_словаря(self):
         self._green()
         self._register(confidence="наверное")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("confidence=наверное is not in the vocabulary", out.stdout)
+        self.assertIn("confidence=наверное is not in the vocabulary", refused(out), out.stdout)
 
     def test_статус_находки_вне_словаря(self):
         self._green()
         self._register(status="почти")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("status=почти is not in the vocabulary", out.stdout)
+        self.assertIn("status=почти is not in the vocabulary", refused(out), out.stdout)
 
     def test_внешний_коммит_починки_написан_не_по_форме(self):
         self._green()
         self._register(status="fixed", fix_commit="соседний-репозиторий:")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("an external fix is written as", out.stdout)
+        self.assertIn("an external fix is written as", refused(out), out.stdout)
 
     def test_починено_без_коммита(self):
         self._green()
         self._register(status="fixed", fix_commit=None)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("marked fixed, but no fix commit", out.stdout)
+        self.assertIn("marked fixed, but no fix commit", refused(out), out.stdout)
 
     def test_дубль_без_указания_чего(self):
         self._green()
         self._register(status="duplicate", dup_of=None)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("marked duplicate, but not of what exactly", out.stdout)
+        self.assertIn("marked duplicate, but not of what exactly", refused(out), out.stdout)
 
     def test_отвергнутая_проверяющим_но_открытая(self):
         self._green()
         self._register(confidence="rejected", status="open")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("rejected by the verifier, but still open", out.stdout)
+        self.assertIn("rejected by the verifier, but still open", refused(out), out.stdout)
 
     def test_заголовок_находки_длиннее_потолка(self):
         self._green()
         self._register(claim="и" * 260)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("against a limit of 220", out.stdout)
+        self.assertIn("against a limit of 220", refused(out), out.stdout)
 
     def test_сценарий_длиннее_потолка(self):
         self._green()
         self._register(scenario="и" * 800)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("against a limit of 700", out.stdout)
+        self.assertIn("against a limit of 700", refused(out), out.stdout)
 
     def test_номер_строки_строкой_а_не_числом(self):
         """Черновик находок пишется руками, и `"line": "9999"` — обычная описка. Ворота
@@ -4014,7 +4492,7 @@ class GateCoverageTest(unittest.TestCase):
         self._register(line="9999")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("is not a number", out.stdout)
+        self.assertIn("is not a number", refused(out), out.stdout)
 
     def test_число_в_пределах_файла_по_прежнему_проходит(self):
         self._green()
@@ -4053,7 +4531,7 @@ class GateCoverageTest(unittest.TestCase):
         md.write_text(md.read_text(encoding="utf-8") + "\n| дописано руками |\n", encoding="utf-8")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("findings.md diverged", out.stdout)
+        self.assertIn("findings.md diverged", refused(out), out.stdout)
 
     def test_ничей_файл_роняет_не_только_карту_но_и_проверку(self):
         self._green()
@@ -4085,8 +4563,53 @@ class GateCoverageTest(unittest.TestCase):
         self.assertIn("is not in the vocabulary", out.stdout)
 
 
-def _check_gates(source: str | None = None) -> list[tuple[int, str, str]]:
-    """Все ворота `cmd_check`: (строка, problems|warnings, ключ ворот).
+class UnknownGateSpelling(Exception):
+    """Строка `cmd_check`, которая что-то делает со списком отказов, а реестр её не понял."""
+
+
+# Ворота: где они написаны (первая и последняя строка ЦЕЛОГО оператора — мутация вырезает
+# его целиком), в какой список пишут и под каким ключом записаны в реестре.
+Gate = collections.namedtuple("Gate", "lineno end_lineno lst key")
+
+
+def _gate_messages(stmt) -> tuple[str, list]:
+    """Сообщения, которые оператор дописывает в problems/warnings, и имя списка.
+
+    Форм записи несколько, и реестр обязан знать их все: пока он видел только
+    `problems.append(x)`, ворота, написанные `problems += [...]` или
+    `problems.extend([...])`, не давали ключа — а значит, не требовали ни записи, ни
+    теста, и снимались потом при зелёном прогоне. Разбить пятисотстрочный `cmd_check` на
+    части, собирая отказы списком, — очевидный следующий шаг, и он не должен выносить
+    ворота из-под правила. Оператор, который трогает список неизвестным способом
+    (`insert`, присваивание целиком), — не молчание, а отказ: см. UnknownGateSpelling.
+    """
+    def listed(value) -> list:
+        return list(value.elts) if isinstance(value, (ast.List, ast.Tuple)) else [value]
+
+    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+        call = stmt.value
+        if (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+                and call.func.value.id in ("problems", "warnings") and call.args):
+            if call.func.attr == "append":
+                return call.func.value.id, [call.args[0]]
+            if call.func.attr == "extend":
+                return call.func.value.id, listed(call.args[0])
+    if (isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name)
+            and stmt.target.id in ("problems", "warnings") and isinstance(stmt.op, ast.Add)):
+        return stmt.target.id, listed(stmt.value)
+    if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id in ("problems", "warnings")
+            and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, ast.Add)):
+        # problems = problems + [...]
+        side = [stmt.value.left, stmt.value.right]
+        return stmt.targets[0].id, [m for s in side if not isinstance(s, ast.Name)
+                                    for m in listed(s)]
+    return "", []
+
+
+def _check_gates(source: str | None = None) -> list[Gate]:
+    """Все ворота `cmd_check`.
 
     Ключ — это литеральные куски f-строки, склеенные и ужатые по пробелам: он переживает
     правку подставляемых значений и меняется, когда меняется сама формулировка.
@@ -4110,19 +4633,64 @@ def _check_gates(source: str | None = None) -> list[tuple[int, str, str]]:
         return ""
 
     out = []
-    for node in ast.walk(fn):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "append"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("problems", "warnings")):
-            key = re.sub(r"\s+", " ", literal(node.args[0])).strip()[:46]
+    for stmt in ast.walk(fn):
+        if not isinstance(stmt, ast.stmt):
+            continue
+        lst, messages = _gate_messages(stmt)
+        if not lst:
+            _refuse_unknown_spelling(stmt)
+            continue
+        for msg in messages:
+            key = re.sub(r"\s+", " ", literal(msg)).strip()[:46]
             if not re.search(r"[A-Za-zА-Яа-я]", key):
                 # Quotes dropped: `ast.unparse` picks the quote style by Python version
                 # (3.14 writes f"{b['id']}…", earlier versions f'{b['id']}…'), and the
                 # registry went red in CI on a key nobody had changed.
-                key = "= " + re.sub(r"\s+", " ", re.sub(r"[\"']", "", ast.unparse(node.args[0])))[:44]
-            out.append((node.lineno, node.func.value.id, key))
+                key = "= " + re.sub(r"\s+", " ", re.sub(r"[\"']", "", ast.unparse(msg)))[:44]
+            out.append(Gate(stmt.lineno, stmt.end_lineno, lst, key))
     return sorted(out)
+
+
+def _own_nodes(stmt) -> list:
+    """Узлы самого оператора, без вложенных операторов: у `for` — только его заголовок.
+
+    Иначе любой объемлющий цикл «трогал бы» список отказов теми воротами, что лежат
+    внутри него, и правило ниже ловило бы их дважды.
+    """
+    out, stack = [], [stmt]
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        stack += [c for c in ast.iter_child_nodes(node) if not isinstance(c, ast.stmt)]
+    return out
+
+
+def _refuse_unknown_spelling(stmt) -> None:
+    """Оператор, который трогает список отказов способом, которого реестр не знает.
+
+    Чтение (`if problems:`, `for p in problems`) и заведение списка — не ворота. Всё
+    остальное — ворота незнакомой формы, и молчать о них нельзя: молчание здесь значит
+    ворота без теста.
+    """
+    declares = (isinstance(stmt, (ast.Assign, ast.AnnAssign))
+                and isinstance(stmt.value, (ast.List, ast.Tuple)) and not stmt.value.elts)
+    if declares:
+        return                                        # заведение пустого списка
+    touched = []
+    for node in _own_nodes(stmt):
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id in ("problems", "warnings")):
+            touched.append(f"{node.value.id}.{node.attr}()")
+    targets = (stmt.targets if isinstance(stmt, ast.Assign)
+               else [stmt.target] if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)) else [])
+    for t in targets:
+        if isinstance(t, ast.Name) and t.id in ("problems", "warnings"):
+            touched.append(f"{t.id} = …")
+    if touched:
+        raise UnknownGateSpelling(
+            f"cmd_check, строка {stmt.lineno}: {', '.join(sorted(set(touched)))} — такой "
+            f"формы записи реестр ворот не знает и пропустил бы эти ворота без теста. "
+            f"Научите _gate_messages читать её или пишите ворота `problems.append(...)`.")
 
 
 class GateRegistryTest(unittest.TestCase):
@@ -4206,7 +4774,7 @@ class GateRegistryTest(unittest.TestCase):
         # Сравниваются не множества, а СЧЁТЫ: два разных гейта могут дать один ключ
         # (сообщение целиком из переменной), и на множествах второй такой гейт совпадал
         # бы с первым и проходил без теста — измерено мутацией.
-        in_source = collections.Counter(key for _, _, key in _check_gates())
+        in_source = collections.Counter(g.key for g in _check_gates())
         registered = collections.Counter(key for key, _ in self.GATES)
         missing = sorted((in_source - registered).elements())
         extra = sorted((registered - in_source).elements())
@@ -4251,8 +4819,7 @@ def cmd_check(args):
         добавленные в `cmd_check` ворота с `problems.append(msg)` оставляли и этот класс,
         и весь прогон зелёными.
         """
-        gates = _check_gates(self.VARIABLE_MESSAGE_GATE)
-        keys = [key for _, _, key in gates]
+        keys = [g.key for g in _check_gates(self.VARIABLE_MESSAGE_GATE)]
         self.assertEqual(len(keys), 2, "оба гейта обязаны быть видны")
         self.assertEqual(len(set(keys)), 2, f"ворота слились в один ключ: {keys}")
         registered = collections.Counter(key for key, _ in self.GATES)
@@ -4266,7 +4833,254 @@ def cmd_check(args):
         source = ('def cmd_check(args):\n'
                   '    problems = []\n'
                   '    problems.append(f"{bid}: no manifest {path}")\n')
-        self.assertEqual([key for _, _, key in _check_gates(source)], [": no manifest"])
+        self.assertEqual([g.key for g in _check_gates(source)], [": no manifest"])
+
+    # Ворота пишут не только `append`: `cmd_check` в пятьсот строк рано или поздно
+    # разберут на части, а части собирают отказы списком. Обе формы измерены — при
+    # реестре, знавшем один `append`, ворота, написанные так, не давали ключа, не требовали
+    # ни записи, ни теста, и снимались потом при зелёном прогоне.
+    LIST_FORM_GATES = {
+        "+=": 'def cmd_check(args):\n'
+              '    problems = []\n'
+              '    if bad:\n'
+              '        problems += [f"{bid}: role `__never__` is reserved"]\n',
+        "extend": 'def cmd_check(args):\n'
+                  '    problems = []\n'
+                  '    if bad:\n'
+                  '        problems.extend([f"{bid}: role `__never__` is reserved"])\n',
+        "сложение": 'def cmd_check(args):\n'
+                    '    problems = []\n'
+                    '    if bad:\n'
+                    '        problems = problems + [f"{bid}: role `__never__` is reserved"]\n',
+    }
+
+    def test_ворота_написанные_списком_видны_реестру(self):
+        for how, source in self.LIST_FORM_GATES.items():
+            with self.subTest(форма=how):
+                gates = _check_gates(source)
+                self.assertEqual([g.key for g in gates],
+                                 [": role `__never__` is reserved"],
+                                 f"ворота, написанные через {how}, реестр не увидел")
+                self.assertEqual([g.lst for g in gates], ["problems"])
+
+    def test_незнакомая_форма_записи_отказ_а_не_молчание(self):
+        """Обратная сторона: форма, которой реестр не знает, обязана ронять прогон, а не
+        проходить как «ворот здесь нет». Молчание здесь — это ворота без теста."""
+        source = ('def cmd_check(args):\n'
+                  '    problems = []\n'
+                  '    if bad:\n'
+                  '        problems.insert(0, f"{bid}: role `__never__` is reserved")\n')
+        with self.assertRaises(UnknownGateSpelling) as e:
+            _check_gates(source)
+        self.assertIn("problems.insert()", str(e.exception))
+        # а чтение списка воротами не считается
+        reading = ('def cmd_check(args):\n'
+                   '    problems = []\n'
+                   '    if problems:\n'
+                   '        for p in problems:\n'
+                   '            print(f"  · {p}")\n'
+                   '        return 1\n'
+                   '    return 0\n')
+        self.assertEqual(_check_gates(reading), [])
+
+
+@unittest.skipIf(os.environ.get("FINETOOTH_TOOL"),
+                 "прогон уже идёт на мутанте: мутировать мутанта незачем")
+class GateMutationTest(unittest.TestCase):
+    """УЗДА КЛАССА «ворота, которые нечем уронить» — измерением, а не списком.
+
+    Реестр выше называет рядом с каждыми воротами тест, но что тест держит ИМЕННО ЭТИ
+    ворота, не проверял никто: запись, переставленная на любой существующий тест, проходила
+    обе проверки реестра. Здесь каждые ворота по очереди глушатся в копии инструмента, и
+    названный тест обязан на этой копии покраснеть. Второй мутацией ворота переносятся из
+    `problems` в `warnings` и обратно: сообщение остаётся тем же, а код возврата меняется,
+    и тест, который смотрит только на текст, этого не замечает — `check` печатает ту же
+    фразу и выходит с нулём на состоянии, которое сам же отказался принять.
+
+    Мутации независимы и каждая живёт в своём процессе, поэтому идут пачкой.
+    """
+
+    # Мутации ждут не процессора, а своих подпроцессов (git, инструмент): восьми хватает,
+    # чтобы все ворота уложились в те же секунды, что один тест набора.
+    WORKERS = 8
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.lines = TOOL.read_text(encoding="utf-8").split("\n")
+        cls.gates = _check_gates()
+        cls.registered = dict(GateRegistryTest.GATES)
+
+    def _silenced(self, gate: Gate) -> str:
+        """Ворота сняты: оператор целиком заменён на `pass` — мутант обязан собираться,
+        иначе «ни одного упавшего теста» читается как «тест не зависит от ворот»."""
+        head = self.lines[gate.lineno - 1]
+        indent = head[:len(head) - len(head.lstrip())]
+        return "\n".join(self.lines[:gate.lineno - 1] + [indent + "pass"]
+                         + self.lines[gate.end_lineno:])
+
+    def _flipped(self, gate: Gate) -> str:
+        """Ворота переставлены в соседний список: отказ становится предупреждением."""
+        other = "warnings" if gate.lst == "problems" else "problems"
+        line = self.lines[gate.lineno - 1].replace(gate.lst, other, 1)
+        return "\n".join(self.lines[:gate.lineno - 1] + [line] + self.lines[gate.lineno:])
+
+    @staticmethod
+    def _run_on_copy(source: str | None, *names: str) -> subprocess.CompletedProcess:
+        """Прогоняет названные тесты на КОПИИ СКИЛЛА, где инструмент заменён на `source`.
+
+        Копируется скилл целиком, а не один файл: инструмент берёт у себя под боком
+        `references/` и `assets/`, и на копии одного файла краснели бы тесты, которым
+        нужны шаблоны, — «тест покраснел» значило бы тогда «копия неполная», а не
+        «ворота держит тест». Узда, зелёная по неверной причине, — ровно тот дефект,
+        который этот блок и ищет.
+        """
+        with tempfile.TemporaryDirectory(prefix="finetooth-mutant-") as d:
+            skill = Path(d, SKILL.name)
+            shutil.copytree(SKILL, skill, ignore=shutil.ignore_patterns("__pycache__"))
+            tool = skill / "scripts" / "review.py"
+            if source is not None:
+                tool.write_text(source, encoding="utf-8")
+            argv = [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests")]
+            for name in names:
+                argv += ["-k", name]
+            return subprocess.run(argv, cwd=KIT, capture_output=True, text=True,
+                                  env=child_env(FINETOOTH_TOOL=str(tool)))
+
+    def _goes_red(self, gate: Gate, mutant: str) -> str:
+        """Прогоняет названный рядом с воротами тест на мутанте. Возвращает пустую строку,
+        если тест покраснел (так и надо), и жалобу, если прогон остался зелёным."""
+        name = self.registered.get(gate.key)
+        if name is None:
+            return f"ворота не записаны в реестр: {gate.key}"
+        out = self._run_on_copy(mutant, name)
+        if "Ran 1 test" not in out.stderr:
+            return (f"по имени `{name}` запустился не один тест, а "
+                    f"{out.stderr.strip().splitlines()[-3:]}")
+        if out.returncode != 0:
+            return ""
+        return (f"тест `{name}` зелёный на снятых воротах — он их не держит; "
+                f"напишите тест, который краснеет, или укажите в реестре тот, который "
+                f"краснеет")
+
+    def test_на_целой_копии_все_названные_тесты_зелены(self):
+        """Обратная сторона мутационной узды: сама копия ничего не ломает.
+
+        Без этого «тест покраснел» доказывает не то, что он держит ворота, а только то,
+        что он покраснел: копия, где инструмент лежит без своих `references/`, роняет
+        каждый тест, которому нужен шаблон, — и узда считает это убийством мутанта.
+        """
+        names = sorted({name for _, name in GateRegistryTest.GATES})
+        out = self._run_on_copy(None, *names)
+        self.assertEqual(out.returncode, 0,
+                         "на копии без мутаций названные тесты обязаны быть зелёными:\n"
+                         + out.stderr[-2000:])
+        self.assertIn(f"Ran {len(names)} test", out.stderr, out.stderr[-500:])
+
+    def _all(self, mutate) -> None:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
+            verdicts = list(pool.map(lambda g: self._goes_red(g, mutate(g)), self.gates))
+        for gate, complaint in zip(self.gates, verdicts):
+            with self.subTest(gate=gate.key):
+                self.assertEqual(complaint, "", f"{TOOL.name}:{gate.lineno}: {complaint}")
+
+    def test_названный_тест_краснеет_когда_ворота_сняты(self):
+        self._all(self._silenced)
+
+    def test_названный_тест_краснеет_когда_ворота_сменили_строгость(self):
+        """Отказ, ставший предупреждением, — самый дешёвый способ провести состояние,
+        которое инструмент отказался принять: сообщение печатается прежнее, а код
+        возврата нулевой. Тест ворот обязан смотреть и на код возврата тоже."""
+        self._all(self._flipped)
+
+
+def _spawns(source: str) -> list[tuple[int, str]]:
+    """Запуски потомков в наборе и то, чем они грешат: (строка, жалоба).
+
+    Потомок запускается здесь три десятка раз, и каждый раз — это вопрос «зависит ли
+    приговор от машины». Два ответа обязаны быть одинаковыми везде: окружение задаёт
+    `child_env`, а интерпретатор — тот же, на котором идёт прогон.
+    """
+    tree = ast.parse(source)
+
+    def is_child_env(node) -> bool:
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "child_env")
+
+    # `env=env` — обычная форма, когда одно окружение нужно двум запускам: переменная
+    # годится ровно настолько, насколько годится всё, что в неё когда-либо клали.
+    assigned: dict[str, list] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    assigned.setdefault(t.id, []).append(node.value)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "subprocess"
+                and node.func.attr in ("run", "Popen", "call", "check_output", "check_call")):
+            continue
+        why = []
+        passed = next((k.value for k in node.keywords if k.arg == "env"), None)
+        if passed is None:
+            why.append("без env=child_env(): локаль и конфиг git достаются от машины")
+        elif isinstance(passed, ast.Name):
+            values = assigned.get(passed.id, [])
+            if not values or not all(is_child_env(v) for v in values):
+                why.append(f"env={passed.id}, а он собран не из child_env()")
+        elif not is_child_env(passed):
+            why.append("env= собран не из child_env()")
+        argv = node.args[0] if node.args else None
+        first = next((e.value for e in getattr(argv, "elts", [])[:1]
+                      if isinstance(e, ast.Constant) and isinstance(e.value, str)), "")
+        if re.fullmatch(r"python[\d.]*", first):
+            why.append(f"`{first}` из PATH вместо sys.executable: прогон на другом "
+                       f"интерпретаторе измерил бы не его")
+        if why:
+            offenders.append((node.lineno, "; ".join(why)))
+    return offenders
+
+
+class TestSuiteRuleTest(unittest.TestCase):
+    """УЗДА КЛАССА «приговор набора зависит от машины».
+
+    Прогон запускает потомков три десятка раз. Локаль задавал один `Stand.run`, а
+    остальные брали её у среды; интерпретатор брался из PATH там, где прогон идёт на
+    другом. Правило по исходнику держит и те запуски, которых ещё нет, — список мест не
+    держал бы: следующий запуск напишут копией соседнего.
+    """
+
+    def test_каждый_потомок_запускается_с_общим_окружением(self):
+        offenders = _spawns(Path(__file__).read_text(encoding="utf-8"))
+        self.assertEqual(
+            offenders, [],
+            "запуск потомка мимо общего окружения: env=child_env(...) и sys.executable")
+
+    # Обе стороны правила на исходниках, которых в наборе нет: узда обязана видеть
+    # нарушение по виду и не придираться к тому, что написано верно.
+    OFFENDERS = {
+        "без окружения": 'subprocess.run(["git", "status"], capture_output=True)',
+        "чужое окружение": 'subprocess.run(["git", "status"], env=dict(os.environ, X="1"))',
+        "окружение из переменной мимо child_env":
+            'e = dict(os.environ)\nsubprocess.run(["git", "status"], env=e)',
+        "интерпретатор из PATH":
+            'subprocess.run(["python3", str(TOOL)], env=child_env())',
+    }
+    INNOCENT = {
+        "прямой вызов": 'subprocess.run([sys.executable, str(TOOL)], env=child_env())',
+        "окружение с добавкой": 'subprocess.run(["bash", "x.sh"], env=child_env(TMPDIR="/t"))',
+        "окружение из переменной": 'e = child_env(X="1")\nsubprocess.run(["git"], env=e)',
+    }
+
+    def test_узда_видит_запуск_которого_ещё_нет(self):
+        for why, src in self.OFFENDERS.items():
+            with self.subTest(нарушение=why):
+                self.assertNotEqual(_spawns(src), [], "узда не увидела запуск по виду")
+        for why, src in self.INNOCENT.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(_spawns(src), [], "узда придирается к верной записи")
 
 
 class DcoGateTest(unittest.TestCase):
@@ -4285,7 +5099,7 @@ class DcoGateTest(unittest.TestCase):
 
     def git(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", *args], cwd=self.root, check=True,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=child_env())
 
     def commit(self, subject: str, *, signoff: str | None = None, author: str | None = None) -> None:
         (self.root / f"{subject}.txt").write_text(subject + "\n", encoding="utf-8")
@@ -4296,7 +5110,7 @@ class DcoGateTest(unittest.TestCase):
 
     def check(self, rng: str) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", str(self.SCRIPT), rng], cwd=self.root,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=child_env())
 
     def test_коммит_без_подписи_роняет_ворота_и_называет_починку(self):
         self.commit("second")
@@ -4448,15 +5262,16 @@ class RepositoryContractTest(unittest.TestCase):
     @staticmethod
     def _tracked(*args: str) -> list[str]:
         out = subprocess.run(["git", "-C", str(KIT), "ls-files", "-z", *args],
-                             capture_output=True, text=True, check=True).stdout
+                             capture_output=True, text=True, check=True,
+                             env=child_env()).stdout
         return [p for p in out.split("\0") if p]
 
     def test_опись_набора_называет_все_команды(self):
         """Раздел «Что внутри» — единственное место, где репозиторий перечисляет сам себя;
         по нему пишут цели make и решают, что именно ставится. Он перечислял 19 команд из
         23, и `refs` не упоминался в README ни разу — значит, его никто не запускал."""
-        helped = subprocess.run(["python3", str(TOOL), "--help"],
-                                capture_output=True, text=True).stdout
+        helped = subprocess.run([sys.executable, str(TOOL), "--help"],
+                                capture_output=True, text=True, env=child_env()).stdout
         names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
         self.assertTrue(names, helped)
         commands = names.group(1).split(",")
@@ -4581,6 +5396,55 @@ class SourceRuleTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.SOURCE = TOOL.read_text(encoding="utf-8")
 
+    # Команды и ключи git, чей вывод НЕСЁТ ПУТИ. Любой из них без `-z` — это путь,
+    # экранированный по-C (`"src/\320\274…"`), и поле, отделённое двоеточием, которое в
+    # пути законно.
+    ASKS_FOR_NAMES = ("ls-files", "--name-only", "--name-status", "--others", "grep")
+
+    @classmethod
+    def _nul_offenders(cls, source: str) -> list[tuple[int, list]]:
+        """Вызовы git, которые просят пути и не просят `-z`.
+
+        Аргументы собираются ЗА ВЫЗОВ, а не по одному литералу: список склеивают из
+        частей (`[...] + [...]`), копят в переменной (`cmd = [...]; cmd += [...]`) и
+        передают по имени. Пока правило смотрело на один литерал, вынос общей приставки
+        `["git", "-C", str(ROOT)]` в отдельный список ослеплял его целиком — измерено:
+        `-z` в `untracked_files` снимался при зелёном прогоне.
+        """
+        tree = ast.parse(source)
+
+        def strings(node) -> list[str]:
+            if isinstance(node, (ast.List, ast.Tuple)):
+                return [e.value for e in node.elts
+                        if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                return strings(node.left) + strings(node.right)
+            return []
+
+        offenders = []
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            # всё, что за жизнь функции попадало в каждую переменную-список
+            kept: dict[str, list[str]] = {}
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                    kept.setdefault(node.targets[0].id, []).extend(strings(node.value))
+                elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                    kept.setdefault(node.target.id, []).extend(strings(node.value))
+            for node in ast.walk(fn):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "subprocess" and node.args):
+                    continue
+                argv = node.args[0]
+                items = kept.get(argv.id, []) if isinstance(argv, ast.Name) else strings(argv)
+                if "git" not in items or not any(a in items for a in cls.ASKS_FOR_NAMES):
+                    continue
+                if "-z" not in items:
+                    offenders.append((node.lineno, items))
+        return offenders
+
     def test_список_путей_у_git_всегда_запрашивается_NUL_разделённым(self):
         """УЗДА КЛАССА «вывод git разобран как обычный текст».
 
@@ -4588,18 +5452,30 @@ class SourceRuleTest(unittest.TestCase):
         экранированным (`"src/\\320\\274…"`) и не совпадает ни с чем, а переименование
         печатается одним новым именем. Правило держит и те вызовы, которых ещё нет.
         """
-        asks_for_names = ("ls-files", "--name-only", "--name-status", "--others")
-        offenders = []
-        for node in ast.walk(ast.parse(self.SOURCE)):
-            if not isinstance(node, ast.List):
-                continue
-            items = [e.value for e in node.elts
-                     if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-            if "git" not in items or not any(a in items for a in asks_for_names):
-                continue
-            if "-z" not in items:
-                offenders.append((node.lineno, items))
-        self.assertEqual(offenders, [], "вызов git со списком путей без -z")
+        self.assertEqual(self._nul_offenders(self.SOURCE), [],
+                         "вызов git со списком путей без -z")
+
+    # Как argv собирают на самом деле: одним литералом, склейкой и накоплением в
+    # переменной. Все три измерены — правило, читавшее один литерал, видело только первую.
+    NUL_SHAPES = {
+        "одним литералом":
+            'def f():\n    subprocess.run(["git", "-C", R, "ls-files", "--others", "--", *s])\n',
+        "склейкой":
+            'def f():\n    subprocess.run(["git", "-C", R] + ["ls-files", "--others", "--", *s])\n',
+        "накоплением в переменной":
+            'def f():\n    cmd = ["git", "-C", R]\n    cmd += ["grep", "-n", "--full-name"]\n'
+            '    subprocess.run(cmd)\n',
+    }
+
+    def test_узда_видит_вызов_собранный_по_частям(self):
+        """Обе стороны: любая сборка argv без `-z` обязана ронять прогон, а с `-z` —
+        проходить, как бы её ни написали."""
+        for how, src in self.NUL_SHAPES.items():
+            with self.subTest(сборка=how):
+                self.assertNotEqual(self._nul_offenders(src), [],
+                                    "узда не увидела вызов, собранный по частям")
+                self.assertEqual(self._nul_offenders(src.replace('"-C"', '"-z", "-C"')), [],
+                                 "узда придирается к вызову, который `-z` просит")
 
     # Распознавание цитаты живёт здесь; всё остальное спрашивает у них.
     QUOTE_TRACKERS = ("quoted_lines", "_quoted_pass", "unquoted")
@@ -4719,16 +5595,13 @@ def report_sections(md):
                 self.assertEqual(self._quote_offenders(src)[1], [],
                                  "узда требует трекер там, где разметки нет")
 
-    def test_записи_коммитов_разбираются_одним_местом(self):
-        """УЗДА КЛАССА «поток `git log -z` разобран своими руками».
+    @classmethod
+    def _log_mark_offenders(cls, source: str) -> list[tuple[str, int]]:
+        """Кто читает маркер записей `git log` сам, мимо `log_records`.
 
-        Ловушка не видна с места вызова: git завершает строку `--format` своим переводом
-        строки, и `-z` оставляет его приклеенным к ПЕРВОМУ пути коммита. Два разборщика
-        знали об этом порознь, и тот, что не знал, считал файл под двумя именами.
-        Разбор живёт в `log_records`, и сверять токен с маркером больше негде.
+        Маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно.
         """
-        tree = ast.parse(self.SOURCE)
-        # маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно
+        tree = ast.parse(source)
         placed = {n.lineno for n in ast.walk(tree)
                   if isinstance(n, ast.JoinedStr) and "--format=" in "".join(
                       v.value for v in n.values if isinstance(v, ast.Constant))}
@@ -4739,7 +5612,182 @@ def report_sections(md):
             offenders += [(fn.name, n.lineno) for n in ast.walk(fn)
                           if isinstance(n, ast.Name) and n.id == "LOG_MARK"
                           and n.lineno not in placed]
-        self.assertEqual(offenders, [], "свой разбор записей git log — зовите log_records()")
+        return offenders
+
+    def test_записи_коммитов_разбираются_одним_местом(self):
+        """УЗДА КЛАССА «поток `git log -z` разобран своими руками».
+
+        Ловушка не видна с места вызова: git завершает строку `--format` своим переводом
+        строки, и `-z` оставляет его приклеенным к ПЕРВОМУ пути коммита. Два разборщика
+        знали об этом порознь, и тот, что не знал, считал файл под двумя именами.
+        Разбор живёт в `log_records`, и сверять токен с маркером больше негде.
+        """
+        self.assertEqual(self._log_mark_offenders(self.SOURCE), [],
+                         "свой разбор записей git log — зовите log_records()")
+
+    def test_узда_видит_свой_разбор_записей_которого_ещё_нет(self):
+        """Обе стороны на исходниках, которых в инструменте нет: свой разбор ловится,
+        а постановка маркера в `--format=` — нет."""
+        own = ("def churn(out):\n"
+               "    for rec in out.split(LOG_MARK):\n"
+               "        yield rec\n")
+        self.assertNotEqual(self._log_mark_offenders(own), [],
+                            "узда не увидела своего разбора")
+        placing = ("def log_records(cmd):\n"
+                   "    return run(cmd)\n\n"
+                   "def churn(paths):\n"
+                   '    return log_records(["git", "log", f"--format={LOG_MARK}%H"])\n')
+        self.assertEqual(self._log_mark_offenders(placing), [],
+                         "узда придирается к постановке маркера")
+
+    @staticmethod
+    def _bare_numbers(source: str) -> list[str]:
+        """Пороги без источника: имена присваиваний, в которых есть число, а над ними нет
+        ни слова о том, откуда оно взялось.
+
+        Число ищется В ЛЮБОМ выражении, а не только в готовой константе: `6 * 1000` —
+        естественная запись выведенного предела, а `A_MAX, B_MAX = 12, 34` — обычная
+        запись пары, заведённой разом. Пока правило смотрело только на
+        `ИМЯ = <константа>`, обе формы проходили мимо него — измерено.
+        """
+        lines = source.splitlines()
+        bare = []
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            names = [e.id for t in targets
+                     for e in (t.elts if isinstance(t, ast.Tuple) else [t])
+                     if isinstance(e, ast.Name)]
+            if not names or not all(n.isupper() for n in names):
+                continue
+            if node.value is None or not any(
+                    isinstance(n, ast.Constant) and isinstance(n.value, (int, float))
+                    and not isinstance(n.value, bool) for n in ast.walk(node.value)):
+                continue
+            # комментарий может стоять над группой констант, а не над каждой
+            i = node.lineno - 2
+            while i >= 0 and re.match(r"^[A-Z_][A-Z_0-9, ]*\s*[:=]", lines[i]):
+                i -= 1
+            if i < 0 or not lines[i].lstrip().startswith("#"):
+                bare += names
+        return bare
+
+    # УЗДА КЛАССА «узда, написанная под одну форму записи».
+    #
+    # Правило по исходнику видит ровно то, что уже написано, и три узды подряд пропустили
+    # правдоподобную форму, которой в инструменте нет: git-вызов, собранный из частей;
+    # порог, записанный выражением; ворота, написанные списком. Поэтому правило обязано
+    # (1) жить в отдельной функции, а не прямо в тесте — иначе его нечем покормить, — и
+    # (2) быть прогнанным на ВЫДУМАННОМ исходнике: только так видно, что оно замечает
+    # форму, которой ещё никто не писал.
+    SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__")
+
+    @classmethod
+    def _rules_without_samples(cls, source: str) -> tuple[list[str], list[str]]:
+        """(правила, написанные прямо в тесте; правила, прогнанные только на исходнике)."""
+        tree = ast.parse(source)
+        reads_tool = {fn.name for fn in ast.walk(tree)
+                      if isinstance(fn, ast.FunctionDef) and "TOOL.read_text" in ast.unparse(fn)}
+        inline, over_source, over_invented = [], set(), set()
+        for fn in ast.walk(tree):
+            if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")):
+                continue
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in ("parse", "walk") and node.args
+                        and any(m in ast.unparse(node.args[0]) for m in cls.SOURCE_MARKS)):
+                    inline.append(fn.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                    else getattr(node.func, "id", ""))
+            if not name.startswith("_"):
+                continue
+            args = " ".join(ast.unparse(a) for a in node.args)
+            if any(m in args for m in cls.SOURCE_MARKS) or (not node.args and name in reads_tool):
+                over_source.add(name)
+            elif node.args:
+                over_invented.add(name)
+        return sorted(set(inline)), sorted(over_source - over_invented)
+
+    def test_у_каждого_правила_по_исходнику_есть_выдуманный_образец(self):
+        """УЗДА КЛАССА «узда, написанная под одну форму записи»."""
+        inline, lonely = self._rules_without_samples(Path(__file__).read_text(encoding="utf-8"))
+        self.assertEqual(
+            inline, [],
+            "правило по исходнику написано прямо в тесте: вынесите его в функцию, иначе "
+            "его нечем покормить, кроме уже написанного кода")
+        self.assertEqual(
+            lonely, [],
+            "правило прогнано только на исходнике инструмента: добавьте тест, который "
+            "кормит его ВЫДУМАННЫМ исходником — обе стороны, нарушение и невиновный")
+
+    # Обе стороны самой узды, на модулях, которых в наборе нет.
+    RULE_SHAPES = {
+        "правило прямо в тесте": (
+            "class R:\n    def test_x(self):\n"
+            "        for n in ast.walk(ast.parse(self.SOURCE)):\n            pass\n", 0),
+        "правило без выдуманного образца": (
+            "class R:\n    def test_x(self):\n"
+            "        self.assertEqual(_new_rule(self.SOURCE), [])\n", 1),
+    }
+
+    def test_узда_видит_правило_которое_никто_не_кормил(self):
+        for why, (src, half) in self.RULE_SHAPES.items():
+            with self.subTest(правило=why):
+                self.assertNotEqual(self._rules_without_samples(src)[half], [],
+                                    "узда не увидела правило по виду")
+        good = (self.RULE_SHAPES["правило без выдуманного образца"][0]
+                + '    def test_y(self):\n'
+                  '        self.assertNotEqual(_new_rule("def f(): pass"), [])\n')
+        self.assertEqual(self._rules_without_samples(good), ([], []),
+                         "узда придирается к правилу, у которого образец есть")
+
+    # Спрашивающие git по pathspec. Образец приходит из blocks.json и зовётся `spec` или
+    # `pattern`; всё прочее — ИМЯ файла, и имя обязано идти под `:(literal)`.
+    PATHSPEC_CALLS = ("git_files", "index_rows", "listed", "untracked_files")
+    PATTERN_NAMES = ("spec", "specs", "pattern", "patterns", "pathspec", "pathspecs")
+
+    @classmethod
+    def _name_as_pattern(cls, source: str) -> list[tuple[int, str]]:
+        """Где ИМЯ файла отдают git как образец.
+
+        `[id]` — класс символов: несуществующий `app/[i]/page.tsx` совпадает с живым
+        соседом `app/i/page.tsx`, и «файл есть» становится правдой без файла. Три места
+        спрашивали так (`file_sha`, узда, `--fixed-in`) — класс закрывается правилом.
+        """
+        offenders = []
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in cls.PATHSPEC_CALLS and node.args
+                    and isinstance(node.args[0], ast.List)):
+                continue
+            for el in node.args[0].elts:
+                text = ast.unparse(el)
+                if ":(literal)" in text or any(p in text for p in cls.PATTERN_NAMES):
+                    continue
+                offenders.append((node.lineno, text))
+        return offenders
+
+    def test_имя_файла_не_уходит_к_git_образцом(self):
+        """УЗДА КЛАССА «имя отдано как pathspec»."""
+        self.assertEqual(self._name_as_pattern(self.SOURCE), [],
+                         "имя файла отдано git образцом: зовите named_file() "
+                         "или ставьте префикс `:(literal)`")
+
+    def test_узда_видит_имя_отданное_образцом(self):
+        """Обе стороны: имя без `:(literal)` роняет прогон, образец из blocks.json — нет."""
+        self.assertNotEqual(self._name_as_pattern("git_files([path])\n"), [])
+        self.assertNotEqual(self._name_as_pattern('index_rows([f"{rel}"])\n'), [])
+        self.assertEqual(self._name_as_pattern('git_files([f":(literal){rel}"])\n'), [])
+        self.assertEqual(self._name_as_pattern("git_files([spec])\n"), [])
+        self.assertEqual(
+            self._name_as_pattern('git_files([e["pattern"] for e in exclusions])\n'), [])
 
     def test_каждое_число_в_коде_названо_и_объяснено(self):
         """УЗДА КЛАССА «порог без источника».
@@ -4747,23 +5795,22 @@ def report_sections(md):
         Каждая константа-число обязана нести над собой комментарий о том, откуда она
         взялась: замер или ссылка. Правило ловит следующую добавленную так же, как эти.
         """
-        lines = self.SOURCE.splitlines()
-        bare = []
-        for node in ast.parse(self.SOURCE).body:
-            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
-                continue
-            if not isinstance(node.value.value, (int, float)) or isinstance(node.value.value, bool):
-                continue
-            name = node.targets[0].id if isinstance(node.targets[0], ast.Name) else ""
-            if not name.isupper():
-                continue
-            # комментарий может стоять над группой констант, а не над каждой
-            i = node.lineno - 2
-            while i >= 0 and re.match(r"^[A-Z_]+\s*=", lines[i]):
-                i -= 1
-            if i < 0 or not lines[i].lstrip().startswith("#"):
-                bare.append(name)
-        self.assertEqual(bare, [], "число без источника: припишите замер или ссылку")
+        self.assertEqual(self._bare_numbers(self.SOURCE), [],
+                         "число без источника: припишите замер или ссылку")
+
+    def test_узда_видит_порог_записанный_не_константой(self):
+        """Обе стороны правила на исходниках, которых в инструменте нет: выражение и пара
+        обязаны требовать источник так же, как готовое число, а объяснённое — проходить."""
+        for why, src in (("выражение", "FOO_LIMIT = 6 * 7\n"),
+                         ("пара", "BAR_MAX, BAZ_MAX = 12, 34\n"),
+                         ("объявление с типом", "QUX: int = 5\n")):
+            with self.subTest(форма=why):
+                self.assertNotEqual(self._bare_numbers(src), [],
+                                    "порог без источника прошёл мимо узды")
+                self.assertEqual(self._bare_numbers("# замер: столько-то\n" + src), [],
+                                 "узда не признаёт объяснённый порог")
+        self.assertEqual(self._bare_numbers('NAMES = ("critical", "high")\n'), [],
+                         "источник спрашивают у чисел, а не у словарей")
 
 
 
@@ -4975,9 +6022,9 @@ class TemplateContractTest(unittest.TestCase):
     LANGS = ("", "ru")
 
     @staticmethod
-    def _register_fields() -> set[str]:
-        """Словарь полей записи реестра — из обращений к находке в самом инструменте."""
-        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+    def _register_fields(source: str) -> set[str]:
+        """Словарь полей записи реестра — из обращений к находке в исходнике инструмента."""
+        tree = ast.parse(source)
         holders, out = {"f", "row"}, set()
         for n in ast.walk(tree):
             key = base = None
@@ -4999,7 +6046,8 @@ class TemplateContractTest(unittest.TestCase):
                 for role in self.ROLES}
 
     def test_каждое_поле_реестра_названо_в_шаблоне_или_проставлено_инструментом(self):
-        unknown = self._register_fields() - self.TOOL_FIELDS - self.AGENT_FIELDS
+        unknown = (self._register_fields(TOOL.read_text(encoding="utf-8"))
+                   - self.TOOL_FIELDS - self.AGENT_FIELDS)
         self.assertEqual(
             sorted(unknown), [],
             "у находки появилось поле, о котором правило не знает: решите, пишет его агент "
@@ -5014,6 +6062,18 @@ class TemplateContractTest(unittest.TestCase):
                         any(field in body for body in bodies.values()),
                         f"поле `{field}` не названо ни в одном шаблоне роли ({lang or 'en'}): "
                         f"агент не узнает о нём, а ворота его спрашивают")
+
+    def test_словарь_полей_читается_на_выдуманном_исходнике(self):
+        """Обе стороны правила на исходнике, которого в инструменте нет: обращение к находке
+        любой из трёх форм даёт поле, обращение к чужому словарю — нет."""
+        invented = ('def g(f, row, other):\n'
+                    '    f.get("via_get")\n'
+                    '    row.setdefault("via_setdefault", 1)\n'
+                    '    f["via_subscript"]\n'
+                    '    other.get("not_a_finding")\n'
+                    '    other["neither"]\n')
+        self.assertEqual(self._register_fields(invented),
+                         {"via_get", "via_setdefault", "via_subscript"})
 
     def test_шаблоны_ролей_есть_на_обоих_языках(self):
         for lang in self.LANGS:
@@ -5113,13 +6173,13 @@ class ShippedSampleTest(unittest.TestCase):
                         ignore=shutil.ignore_patterns("__pycache__"))
         for cmd in (["init", "-q", "."], ["config", "user.email", "t@example.com"],
                     ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "sample"]):
-            subprocess.run(["git", "-C", str(root), *cmd], capture_output=True, check=True)
+            subprocess.run(["git", "-C", str(root), *cmd], capture_output=True, check=True,
+                           env=child_env())
         return root
 
     def run_in(self, root: Path, *args: str) -> subprocess.CompletedProcess:
-        env = dict(os.environ, LC_ALL="C.UTF-8")
-        return subprocess.run(["python3", str(TOOL), *args], cwd=root,
-                              capture_output=True, text=True, env=env)
+        return subprocess.run([sys.executable, str(TOOL), *args], cwd=root,
+                              capture_output=True, text=True, env=child_env())
 
     def test_пример_toy_проходит_ворота_как_обещает_его_README(self):
         """README примера велит скопировать его в свежий репозиторий и позвать `check`."""
@@ -5146,9 +6206,10 @@ class ShippedSampleTest(unittest.TestCase):
             b["ref_paths"] = []
         (root / "docs/review/blocks.json").write_text(
             json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-        subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True, check=True,
+                       env=child_env())
         subprocess.run(["git", "-C", str(root), "commit", "-qm", "sample definition"],
-                       capture_output=True, check=True)
+                       capture_output=True, check=True, env=child_env())
         self.assertEqual(self.run_in(root, "init").returncode, 0)
         out = self.run_in(root, "check")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
@@ -5161,7 +6222,7 @@ class ShippedSampleTest(unittest.TestCase):
         d["blocks"].reverse()
         bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
         subprocess.run(["git", "-C", str(root), "commit", "-qam", "phases"],
-                       capture_output=True, check=True)
+                       capture_output=True, check=True, env=child_env())
         self.assertIn("comes after phase", self.run_in(root, "check").stdout)
 
 
@@ -5234,19 +6295,6 @@ class BilingualAssetTest(unittest.TestCase):
                     self.assertIn("{{CLI}}", text,
                                   f"{path.name} не берёт команду проекта ниоткуда")
 
-    def test_таблица_сообщений_одинакова_на_обоих_языках(self):
-        """`T()` падает KeyError во время работы, а не при импорте: строка, заведённая на
-        одном языке, роняет прогон роли у того, кто ведёт ревью на другом."""
-        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
-        msg = next(n.value for n in ast.walk(tree)
-                   if isinstance(n, ast.Assign)
-                   and any(isinstance(t, ast.Name) and t.id == "MSG" for t in n.targets))
-        keys = {lang.value: {k.value for k in table.keys}
-                for lang, table in zip(msg.keys, msg.values)}
-        self.assertEqual(sorted(keys), ["en", "ru"])
-        self.assertEqual(sorted(keys["en"] - keys["ru"]), [], "ключ есть только в en")
-        self.assertEqual(sorted(keys["ru"] - keys["en"]), [], "ключ есть только в ru")
-
     def test_образцы_целей_сборки_команду_называть_обязаны(self):
         """Обратная сторона правила: снипеты целей и есть эти команды."""
         self.assertRegex((SKILL / "assets" / "makefile-snippet.mk").read_text(encoding="utf-8"),
@@ -5261,16 +6309,19 @@ class SetupLanguageTest(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="finetooth-setup-lang-"))
         self.addCleanup(shutil.rmtree, self.root, True)
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "master", str(self.root)], check=True,
+                       env=child_env())
         for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True)
+            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True,
+                           env=child_env())
         (self.root / "app.ts").write_text("x\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True, env=child_env())
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True,
+                       env=child_env())
 
     def setup(self, *extra: str) -> str:
-        out = subprocess.run(["python3", str(TOOL), "setup", *extra], cwd=self.root,
-                             capture_output=True, text=True)
+        out = subprocess.run([sys.executable, str(TOOL), "setup", *extra], cwd=self.root,
+                             capture_output=True, text=True, env=child_env())
         self.assertEqual(out.returncode, 0, out.stderr)
         return out.stdout
 
