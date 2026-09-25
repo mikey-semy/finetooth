@@ -103,7 +103,9 @@ one of your own:
    revert check yourself after the fixer. Findings are moved with
    `review set-finding <ID…> fixed --commit <sha>` (several ids at once); a defect class with
    a third instance is closed by a guard (`--rule <path to the test or rule>`), not by a list
-   of fixes — `review roots` lists the classes, their instances and what closes each.
+   of fixes. The guard is recorded only on the findings named in the command — name the
+   instances it goes red on; `review roots` lists the classes, their instances and which
+   guard each instance carries, and flags a root whose instances disagree.
    Deferring is allowed only with a reason (`deferred --reason`), and a deferred finding
    leaves the review as an accepted risk, published in the summary with that reason.
    **The fix gate:** `review set-status <next ID> running`

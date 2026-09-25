@@ -212,7 +212,7 @@ MSG = {
   "sum_deferred": "## Accepted risks (deferred with a reason)",
   "sum_deferred_none": "Nothing deferred.",
   "sum_classes": "## What closed each class",
-  "sum_classes_rules": "Guards (a test or a rule that keeps the class closed):",
+  "sum_classes_rules": "Guards (a test or a rule — and the findings it is recorded on):",
   "sum_classes_fixes": "Fixes by commit:",
   "sum_classes_none": "No guards recorded; fixes, if any, are listed above by commit.",
   "sum_open": "## Still open at the time of the summary",
@@ -264,7 +264,7 @@ MSG = {
   "sum_deferred": "## Принятые риски (отложено с причиной)",
   "sum_deferred_none": "Отложенного нет.",
   "sum_classes": "## Чем закрыт каждый класс",
-  "sum_classes_rules": "Узды (тест или правило, которое держит класс закрытым):",
+  "sum_classes_rules": "Узды (тест или правило — и находки, на которые она записана):",
   "sum_classes_fixes": "Починки по коммитам:",
   "sum_classes_none": "Узды не записаны; починки, если есть, перечислены выше по коммитам.",
   "sum_open": "## Ещё открыто на момент итога",
@@ -2234,7 +2234,11 @@ def set_one_finding(args, rows: list[dict], fid: str) -> None:
     f = hit[0]
     if args.status not in FINDING_STATUS:
         die(f"unknown status {args.status}; known: {', '.join(FINDING_STATUS)}")
-    if args.status == "fixed" and not args.commit:
+    # A finding already fixed keeps its commit: recording a guard on it later (`--rule`) names
+    # its current status, and demanding `--commit` again would make one command overwrite the
+    # different fix commits of several findings with one.
+    already_fixed = f.get("status") == "fixed" and f.get("fix_commit")
+    if args.status == "fixed" and not (args.commit or already_fixed):
         die("`fixed` without a fix commit — nothing confirms the defect is closed (--commit)")
     if args.status == "rejected" and not (args.reason or f.get("reject_reason")):
         die("`rejected` without a reject reason — the next review will find the same thing (--reason)")
@@ -2274,10 +2278,13 @@ def set_one_finding(args, rows: list[dict], fid: str) -> None:
     if args.fixed_in:
         f["fixed_in"] = sorted(set(f.get("fixed_in", [])) | set(args.fixed_in))
     if args.rule:
-        # The guard is recorded on ALL findings of this root: the class is closed as a whole or not at all.
-        for row in rows:
-            if (row.get("root") or "") == (f.get("root") or "") and f.get("root"):
-                row["rule"] = args.rule
+        # The guard is recorded on the NAMED finding only (issue #28). It used to go onto every
+        # finding sharing the root — "the class is closed as a whole or not at all" — and one
+        # root string turned out to carry defects that need different guards: three fixers in
+        # one day rewrote the guards of other blocks' findings, fixed ones included, with tests
+        # that stay green on those findings' own defects, and none of those rows got a new
+        # `updated_at`. A guard is a claim about an instance; whoever records it names the
+        # instances it goes red on, and `roots` shows a root whose instances disagree.
         f["rule"] = args.rule
     f["updated_at"] = now()
 
@@ -2481,18 +2488,46 @@ def roots_of(rows: list[dict], block_id: str | None = None) -> dict[str, list[di
     return out
 
 
+def root_guards(items: list[dict]) -> dict[str, list[str]]:
+    """The guards a root's instances carry: guard → the ids it is recorded on, in the order
+    of the instances; the key "" collects the instances with no guard at all.
+
+    A guard is recorded per finding (issue #28), so a root has as many guards as its
+    instances say, not one: reading the first one found and calling it the root's guard is
+    how three fixers' guards came to stand for findings they stay green on.
+    """
+    out: dict[str, list[str]] = {}
+    for f in items:
+        out.setdefault((f.get("rule") or "").strip(), []).append(f.get("id", "?"))
+    return out
+
+
 def cmd_roots(args) -> int:
-    """Roots: how many instances each has and what closes the class."""
+    """Roots: how many instances each has and which guard each instance is recorded under."""
     rows = findings()
     groups = roots_of(rows, args.block)
     if not groups:
         print("no roots recorded — the `root` field of the findings is not filled in")
         return 0
     for root, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
-        rule = next((f.get("rule") for f in items if f.get("rule")), None)
-        mark = f"guard: {rule}" if rule else (
-            "NO GUARD" if len(items) >= ROOT_RULE_AT else "no guard, but few repeats")
+        guards = root_guards(items)
+        named = [g for g in guards if g]
+        if not named:
+            mark = "NO GUARD" if len(items) >= ROOT_RULE_AT else "no guard, but few repeats"
+        elif len(guards) == 1:
+            mark = f"guard: {named[0]}"
+        else:
+            # Several guards, or a guard on only part of the instances: neither is "the
+            # root's guard". Said outright, with who carries what, so that nobody reads the
+            # class as closed by a test that was recorded on one of its instances.
+            unguarded = len(guards.get("", []))
+            mark = ("GUARDS DIFFER" + (f", {unguarded} of {len(items)} instances without one"
+                                       if unguarded else "")
+                    + " — each guard holds only the findings it is recorded on:")
         print(f"  {len(items):>2} × {root}  — {mark}")
+        if len(guards) > 1:
+            for guard, ids in guards.items():
+                print(f"       {guard or 'no guard'} — {', '.join(ids)}")
         for f in items:
             where = f.get("file", "")
             if f.get("line"):
@@ -3404,11 +3439,23 @@ def cmd_check(args) -> int:
     for root, items in roots_of(rows).items():
         if len(items) < ROOT_RULE_AT:
             continue
-        rules = {(f.get("rule") or "").strip() for f in items} - {""}
+        guards = root_guards(items)
+        rules = set(guards) - {""}
         if rules:
             for r in sorted(rules):
                 if why := rule_problem(r):
                     problems.append(f"root '{root}': {why}")
+            # A guard is recorded per finding (issue #28): one guarded instance no longer
+            # stands for the rest. Instances without a guard are named, but not refused —
+            # whether the recorded guard reaches them is a claim only a run on their own
+            # defect can make, and the tool cannot make it for the fixer.
+            if bare := guards.get(""):
+                warnings.append(
+                    f"root '{root}': {len(bare)} of {len(items)} instances carry no guard "
+                    f"({', '.join(bare[:4])}) while others do — a guard holds only the findings "
+                    f"it is recorded on; if it goes red on their defect too, record it on them "
+                    f"(`{CLI} set-finding <ID>... <status> --rule <path>`), otherwise close "
+                    f"them with a guard of their own; `{CLI} roots` shows who carries what")
             continue
         ids = ", ".join(f.get("id", "?") for f in items[:4])
         problems.append(

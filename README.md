@@ -212,12 +212,14 @@ check goes red.
 - **from a class to a rule** — the variant-analysis mechanic at Trail of Bits, where a rule is
   written from a finding and run across the whole codebase. Here: a finding carries a `root`
   (the class name), and from the **third** instance the check requires a guard —
-  `set-finding <ID> <status> --rule <path>`, which is applied to the whole root at once. A
+  `set-finding <ID>... <status> --rule <path>`, recorded only on the findings named in the
+  command (a root string can carry defects that need different guards). A
   guard is a path to a file in the repository (a test, a linter config, a CI gate) or
   `repository:path` for a neighbouring one; a non-existent path is a failure. The threshold
   comes from practice: a second recurrence can still be a coincidence, a third means the
   defect is produced by the structure of the code. The `roots` command shows the classes, the
-  number of instances and what each is closed by.
+  number of instances and which guard each instance carries, and flags a class whose
+  instances disagree or where some carry none; `check` warns about the latter.
 
 **Added after checking against world practice** (see `comparison-with-practice` (in the knowledge base)):
 - **a second coverage denominator — hypotheses.** The file map answers "the file was opened";
@@ -278,7 +280,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-325 scenarios, about six minutes, no dependencies other than `git`. Each one creates a fresh temporary
+329 scenarios, about six minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -445,7 +447,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/test_review.py              tests of the tool and the skill format: 325 scenarios
+tests/test_review.py              tests of the tool and the skill format: 329 scenarios
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
                                   check), issue and PR templates, the logo

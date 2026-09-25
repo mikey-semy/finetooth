@@ -1833,20 +1833,147 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("рукописная копия предиката", out.stdout)
         self.assertIn("--rule", out.stdout, "отказ обязан говорить, что делать")
 
-    def test_узда_записывается_на_весь_корень_сразу(self):
-        """Класс закрыт целиком или не закрыт: узда проставляется всем экземплярам."""
+    def test_узда_на_все_названные_экземпляры_закрывает_корень(self):
+        """Класс закрыт, когда узда записана на каждый его экземпляр — названный в команде."""
         self._three_of_one_root()
         self.s.write("eslint.config.mjs", "export default [];\n")
         self.s.commit("узда")
-        out = self.s.run("set-finding", "H1-001", "fixed", "--commit", "abc1234",
-                         "--rule", "eslint.config.mjs")
+        out = self.s.run("set-finding", "H1-001", "H1-002", "H1-003", "fixed",
+                         "--commit", "abc1234", "--rule", "eslint.config.mjs")
         self.assertEqual(out.returncode, 0, out.stderr)
-        rows = [json.loads(l) for l in
-                (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8").splitlines()
-                if l.strip()]
+        rows = self._register()
         self.assertTrue(all(r.get("rule") for r in rows), "узда должна стоять у всех трёх")
         self.s.run("findings")
-        self.assertNotIn("and no guard", self.s.run("check").stdout)
+        out = self.s.run("check")
+        self.assertNotIn("and no guard", out.stdout)
+        self.assertNotIn("carry no guard", out.stdout)
+
+    def _register(self) -> list[dict]:
+        return [json.loads(l) for l in
+                (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8").splitlines()
+                if l.strip()]
+
+    # Отметка «давно», которую запись обязана сменить, если её тронули, — и сохранить, если нет.
+    OLD_STAMP = "2026-01-01T00:00:00Z"
+
+    def _root_across_blocks(self) -> None:
+        """Один корень на двух блоках, часть экземпляров уже починена под своей уздой, и
+        второй корень, у всех экземпляров которого узда одна. Реестр пишется напрямую:
+        проверяется `set-finding` и `roots`, а не путь импорта."""
+        for f in ("src/one.ts", "src/two.ts", "src/three.ts", "src/four.ts", "src/five.ts",
+                  "tests/old.test.ts", "tests/new.test.ts"):
+            self.s.write(f, "x\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts", "src/three.ts"], extra_blocks=[{
+            "id": "H2", "slug": "other", "phase": 1, "title": "Другой блок", "role": "demo",
+            "goal": "соседний блок", "paths": ["src/four.ts", "src/five.ts"], "ref_paths": []}])
+        self.s.commit()
+
+        def row(fid, block, file, status="open", root="общий корень", **extra):
+            return {"id": fid, "block": block, "severity": "medium", "confidence": "confirmed",
+                    "status": status, "file": file, "root": root, "claim": f"экземпляр {fid}",
+                    "scenario": "сценарий", "updated_at": self.OLD_STAMP, **extra}
+        rows = [
+            row("H1-001", "H1", "src/one.ts"),
+            row("H1-002", "H1", "src/two.ts"),
+            row("H1-003", "H1", "src/three.ts", "fixed", fix_commit="abc1234",
+                rule="tests/old.test.ts"),
+            row("H2-001", "H2", "src/four.ts"),
+            row("H2-002", "H2", "src/five.ts", "fixed", fix_commit="def5678",
+                rule="tests/old.test.ts"),
+            row("H2-003", "H2", "src/four.ts", root="согласный корень", rule="tests/new.test.ts"),
+            row("H2-004", "H2", "src/five.ts", root="согласный корень", rule="tests/new.test.ts"),
+            row("H1-004", "H1", "src/one.ts", root="согласный корень", rule="tests/new.test.ts"),
+        ]
+        (self.s.root / "docs/review/findings.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+    def test_узда_записывается_только_на_названные_находки(self):
+        """`--rule` пишет узду названным находкам и больше никому (#28).
+
+        Прежде узда уходила на все находки с тем же корнем: исполнители чужих блоков
+        переписывали узды починенных находок тестом, зелёным на их дефекте, и ни у одной
+        переписанной записи не менялся `updated_at`. Обе стороны: названная находка
+        получает узду и новую отметку; соседи по корню — в своём блоке, в чужом, уже
+        починенные — остаются как были, вместе с отметкой.
+        """
+        self._root_across_blocks()
+        out = self.s.run("set-finding", "H1-001", "H1-002", "open", "--rule", "tests/new.test.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = {r["id"]: r for r in self._register()}
+        for fid in ("H1-001", "H1-002"):
+            with self.subTest(названа=fid):
+                self.assertEqual(rows[fid].get("rule"), "tests/new.test.ts")
+                self.assertNotEqual(rows[fid].get("updated_at"), self.OLD_STAMP,
+                                    "смена узды — это правка записи: отметка обязана смениться")
+        for fid, rule in (("H1-003", "tests/old.test.ts"), ("H2-001", None),
+                          ("H2-002", "tests/old.test.ts")):
+            with self.subTest(сосед=fid):
+                self.assertEqual(rows[fid].get("rule"), rule,
+                                 f"{fid} не назван в команде, а его узду переписали")
+                self.assertEqual(rows[fid].get("updated_at"), self.OLD_STAMP)
+                self.assertEqual(rows[fid].get("status"), "open" if rule is None else "fixed")
+
+    def test_узда_на_починенную_находку_без_повторного_коммита(self):
+        """Записать узду на уже починенную находку — значит назвать её со статусом `fixed`;
+        требовать `--commit` заново значило бы одной командой затереть разные коммиты
+        починки у нескольких находок. Обратная сторона: открытая находка без коммита
+        в `fixed` по-прежнему не переходит."""
+        self._root_across_blocks()
+        out = self.s.run("set-finding", "H1-003", "H2-002", "fixed", "--rule", "tests/new.test.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = {r["id"]: r for r in self._register()}
+        self.assertEqual((rows["H1-003"]["fix_commit"], rows["H2-002"]["fix_commit"]),
+                         ("abc1234", "def5678"), "коммиты починки обязаны сохраниться свои")
+        self.assertEqual({rows[f]["rule"] for f in ("H1-003", "H2-002")}, {"tests/new.test.ts"})
+        out = self.s.run("set-finding", "H1-001", "fixed", "--rule", "tests/new.test.ts")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("without a fix commit", out.stderr)
+        self.assertNotEqual({r["id"]: r for r in self._register()}["H1-001"].get("status"), "fixed")
+
+    def test_roots_показывает_узды_каждого_экземпляра(self):
+        """`roots` больше не выдаёт первую найденную узду за узду корня (#28): корень, чьи
+        экземпляры несут разные узды или часть — никакой, помечен и расписан, кто под чем.
+        Обратная сторона: корень с одной уздой на всех читается одной строкой, как прежде."""
+        self._root_across_blocks()
+        self.assertEqual(self.s.run("set-finding", "H1-001", "open", "--rule",
+                                    "tests/new.test.ts").returncode, 0)
+        out = self.s.run("roots")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        text = out.stdout
+        head = next(l for l in text.splitlines() if "× общий корень" in l)
+        self.assertIn("GUARDS DIFFER", head)
+        self.assertIn("2 of 5 instances without one", head)
+        self.assertIn("tests/new.test.ts — H1-001\n", text)
+        self.assertIn("tests/old.test.ts — H1-003, H2-002\n", text)
+        self.assertIn("no guard — H1-002, H2-001\n", text)
+        agreed = next(l for l in text.splitlines() if "× согласный корень" in l)
+        self.assertIn("guard: tests/new.test.ts", agreed)
+        self.assertNotIn("GUARDS DIFFER", agreed)
+        # Разные узды без единого экземпляра без узды — тоже расхождение, но без счёта.
+        self.assertEqual(self.s.run("set-finding", "H1-002", "H2-001", "open", "--rule",
+                                    "tests/old.test.ts").returncode, 0)
+        head = next(l for l in self.s.run("roots").stdout.splitlines() if "× общий корень" in l)
+        self.assertIn("GUARDS DIFFER", head)
+        self.assertNotIn("without one", head)
+
+    def test_корень_с_уздой_не_на_всех_экземплярах_предупреждает(self):
+        """Узда одного экземпляра больше не держит остальные (#28): третий повтор, у части
+        которого узды нет, `check` называет — предупреждением, не отказом: дойдёт ли
+        записанная узда до них, решает прогон на их дефекте, а не инструмент."""
+        self._three_of_one_root()
+        self.s.write("eslint.config.mjs", "export default [];\n")
+        # узда — не код под ревью: без исключения файл ничей, и `check` падает не о том
+        self.s.blocks(paths=["src/one.ts", "src/two.ts", "src/three.ts"],
+                      exclusions=[{"pattern": "eslint.config.mjs", "reason": "узда"}])
+        self.s.commit("узда")
+        self.assertEqual(self.s.run("set-finding", "H1-001", "open", "--rule",
+                                    "eslint.config.mjs").returncode, 0)
+        self.s.run("findings")
+        out = self.s.run("check")
+        said = warned(out)
+        self.assertIn("2 of 3 instances carry no guard (H1-002, H1-003)", said, out.stdout)
+        self.assertIn("--rule", said, "предупреждение обязано говорить, что делать")
+        self.assertNotIn("and no guard", out.stdout, "класс с уздой — не класс без узды")
 
     def test_узда_обязана_существовать(self):
         """Опечатка в пути делала класс «закрытым» без всякого правила."""
@@ -4762,6 +4889,7 @@ class GateRegistryTest(unittest.TestCase):
         (": the 'Coverage limits' section of the hunter ", "test_пустой_раздел_ограничений_роняет_проверку"),
         ("root '':", "test_узда_обязана_существовать"),                    # rule_problem
         ("root '': instances () and no guard — a class t", "test_третий_повтор_корня_требует_узду"),
+        ("root '': of instances carry no guard () while ", "test_корень_с_уздой_не_на_всех_экземплярах_предупреждает"),
         ('the freshness gate is not running:', "test_без_удалённого_репозитория_ворота_объявляют_себя_неработающими"),
         ('the tree is behind by days — the findings of s', "test_отставшее_от_сервера_дерево_роняет_проверку"),
         (": proof '' is not in the vocabulary:", "test_род_доказательства_вне_словаря"),

@@ -95,7 +95,13 @@ will find the same thing.
 In the report, name which class is closed by which guard, and show that the guard goes red
 on the defect. In the register it is recorded as a field:
 `set-finding <ID> fixed --commit <sha> --rule <path-to-guard>`.
-The guard is set on the whole root at once — the class is closed whole or not closed.
+The guard is recorded **only on the findings named in the command**: name every instance
+you have seen it go red on (several ids in one command; a finding already fixed is named with
+its status `fixed` and keeps its commit). Do not name an instance of another block, or one
+already fixed, that you have not run the guard against: one root string often carries defects
+that need different guards, and a guard recorded on a finding it stays green on reports that
+finding closed when it is not. `roots` shows every guard a root's instances carry and flags a
+root whose instances disagree or where some carry none.
 The path is a file in the repository (a test, a linter config, a CI gate), optionally with
 `::test-name`; a guard in a neighboring repository — `repository:path/to/file`. A rule name
 without a file is not accepted.
