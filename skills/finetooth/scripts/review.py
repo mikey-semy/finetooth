@@ -179,7 +179,8 @@ MSG = {
   "refs_cut": "\n\n({n} files. The list is collapsed to patterns — expand the part you need yourself: `git ls-files -- <pattern>`.)",
   "vol_head": "Files: {n}. Lines: {lines}. Order of magnitude: ~{k}k tokens just to read, before any reasoning or tool calls.",
   "vol_fits": "This fits what can be read in one session (ceiling {limit} lines).",
-  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage section of your report. Do not pretend you read it.",
+  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage-limits section of your report. Do not pretend you read it.",
+  "vol_over_verify": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the block-coverage-status section of your report, saying outright that the coverage is incomplete. Do not pretend you read it.",
   "vol_border": "\nWhere the budget line runs (largest first, cumulative):",
   "vol_more": "  … and {n} more file(s)",
   "vol_legend": "\n▲ — beyond the line. Not a ban on opening them: it is what you must name as unread if you did not.",
@@ -231,7 +232,8 @@ MSG = {
   "refs_cut": "\n\n({n} файлов. Список сокращён до шаблонов — разверни нужную часть сам: `git ls-files -- <шаблон>`.)",
   "vol_head": "Файлов: {n}. Строк: {lines}. Порядок величины: ~{k}k токенов только на чтение, без рассуждений и вызовов инструментов.",
   "vol_fits": "Это укладывается в то, что читается за сеанс (порог {limit} строк).",
-  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта про охват. Не делайте вид, что прочитали.",
+  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта об ограничениях охвата. Не делайте вид, что прочитали.",
+  "vol_over_verify": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта о состоянии охвата блока, прямо сказав, что охват неполный. Не делайте вид, что прочитали.",
   "vol_border": "\nГде проходит граница бюджета (по убыванию размера, накопительно):",
   "vol_more": "  … и ещё {n} файл(ов)",
   "vol_legend": "\n▲ — то, что за границей. Это не запрет их открывать: это то, что вы обязаны назвать непрочитанным, если не открыли.",
@@ -1717,7 +1719,7 @@ def render_refs(pathspecs: list[str], refs: list[str]) -> str:
     )
 
 
-def volume_note(files: list[str]) -> str:
+def volume_note(files: list[str], role: str) -> str:
     """How much code the block asks to read — and what of it will certainly not be read.
 
     The budget must stand in the assignment itself, not in the lead session's head.
@@ -1726,6 +1728,12 @@ def volume_note(files: list[str]) -> str:
     did not fit in the output as a stub — path visible, contents absent. Staying silent is
     the worst: then the agent reports coverage that did not happen, and nobody can say
     where the line ran.
+
+    The way out is named by the section of the reader's OWN report that `check` reads for
+    it: the hunter's coverage-limits section (`LIMITS_HEADING`), the verifier's block
+    coverage status (`COVERAGE_VERDICT`). One wording for both roles sends one of them into
+    a section its report does not have, or into one the gate does not read — and the gate
+    then refuses a report written exactly as the warning said.
     """
     sizes = sorted(((file_lines(f) or 0, f) for f in files), reverse=True)
     total = sum(n for n, _ in sizes)
@@ -1739,7 +1747,8 @@ def volume_note(files: list[str]) -> str:
         out.append(T("vol_fits", limit=limit))
         return "\n".join(out)
 
-    out.append(T("vol_over", lines=total, limit=limit))
+    out.append(T("vol_over_verify" if role == "verify" else "vol_over",
+                 lines=total, limit=limit))
     out.append(T("vol_border"))
     shown = 0
     for n, f in sizes:
@@ -1880,7 +1889,7 @@ def cmd_prompt(args) -> int:
         "{{FIX_REPORT}}": report_path(b, "fix", args.round),
         "{{DIFF_RANGE}}": args.diff or "",
         "{{DIFF_VOLUME}}": diff_volume(diff) if diff else "",
-        "{{VOLUME}}": volume_note(files),
+        "{{VOLUME}}": volume_note(files, args.role),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
         "{{RECORDED}}": render_recorded_for(b["id"]),
