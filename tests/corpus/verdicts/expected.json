@@ -1,0 +1,600 @@
+{
+ "arch-dashboard/fix-1.md": {},
+ "arch-dashboard/fix-10.md": {},
+ "arch-dashboard/fix-11.md": {},
+ "arch-dashboard/fix-12.md": {},
+ "arch-dashboard/fix-13.md": {},
+ "arch-dashboard/fix-2.md": {},
+ "arch-dashboard/fix-3.md": {},
+ "arch-dashboard/fix-4.md": {},
+ "arch-dashboard/fix-5.md": {},
+ "arch-dashboard/fix-6.md": {},
+ "arch-dashboard/fix-7.md": {},
+ "arch-dashboard/fix-8.md": {},
+ "arch-dashboard/fix-9.md": {},
+ "arch-dashboard/fixreview-1.md": {},
+ "arch-dashboard/fixreview-2.md": {},
+ "arch-dashboard/fixreview-3.md": {},
+ "arch-dashboard/fixreview-4.md": {},
+ "arch-dashboard/hunter-1.md": {
+  "H1.1": [
+   "checked"
+  ],
+  "H1.2": [
+   "checked"
+  ],
+  "H1.3": [
+   "checked"
+  ],
+  "H1.4": [
+   "checked"
+  ],
+  "H1.6": [
+   "checked"
+  ],
+  "H1.7": [
+   "checked"
+  ],
+  "H1.8": [
+   "checked"
+  ],
+  "H1.9": [
+   "checked"
+  ]
+ },
+ "arch-dashboard/hunter-2.md": {
+  "H2.1": [
+   "checked"
+  ],
+  "H2.2": [
+   "checked"
+  ],
+  "H2.3": [
+   "checked"
+  ],
+  "H2.4": [
+   "checked"
+  ],
+  "H2.5": [
+   "checked"
+  ],
+  "H2.6": [
+   "checked"
+  ],
+  "H2.7": [
+   "checked"
+  ]
+ },
+ "arch-dashboard/hunter-3.md": {},
+ "arch-dashboard/hunter-4.md": {},
+ "arch-dashboard/hunter-5.md": {},
+ "arch-dashboard/hunter-6.md": {},
+ "arch-dashboard/hunter-7.md": {},
+ "arch-dashboard/hunter-8.md": {
+  "H8.1": [
+   "checked"
+  ],
+  "H8.10": [
+   "checked"
+  ],
+  "H8.11": [
+   "checked",
+   "checked"
+  ],
+  "H8.2": [
+   "checked"
+  ],
+  "H8.3": [
+   "checked"
+  ],
+  "H8.4": [
+   "checked"
+  ],
+  "H8.6": [
+   "checked"
+  ],
+  "H8.8": [
+   "checked"
+  ],
+  "H8.9": [
+   "checked"
+  ]
+ },
+ "arch-dashboard/verify-1.md": {
+  "H1.1": [
+   "checked"
+  ],
+  "H1.2": [
+   "checked"
+  ],
+  "H1.3": [
+   "checked"
+  ],
+  "H1.4": [
+   "checked"
+  ],
+  "H1.6": [
+   "checked"
+  ],
+  "H1.7": [
+   "checked"
+  ],
+  "H1.8": [
+   "checked"
+  ],
+  "H1.9": [
+   "checked"
+  ]
+ },
+ "arch-dashboard/verify-2.md": {},
+ "arch-dashboard/verify-3.md": {},
+ "arch-dashboard/verify-4.md": {},
+ "arch-dashboard/verify-5.md": {},
+ "arch-dashboard/verify-6.md": {},
+ "arch-dashboard/verify-7.md": {},
+ "arch-dashboard/verify-8.md": {},
+ "finetooth/T1-tool.fix-2.md": {},
+ "finetooth/T1-tool.fix-3.md": {},
+ "finetooth/T1-tool.fix-4.md": {},
+ "finetooth/T1-tool.fix-6.md": {},
+ "finetooth/T1-tool.fix-7.md": {},
+ "finetooth/T1-tool.fix.md": {},
+ "finetooth/T1-tool.fixreview-1.md": {
+  "T1.1": [
+   "checked",
+   "checked",
+   "checked",
+   "checked",
+   "checked",
+   "checked"
+  ]
+ },
+ "finetooth/T1-tool.fixreview-2.md": {
+  "T1.1": [
+   "checked",
+   "checked",
+   "checked"
+  ]
+ },
+ "finetooth/T1-tool.fixreview-3.md": {},
+ "finetooth/T1-tool.fixreview-4.md": {},
+ "finetooth/T1-tool.fixreview-5.md": {},
+ "finetooth/T1-tool.fixreview-6.md": {},
+ "finetooth/T1-tool.fixreview-7.md": {
+  "T1.1": [
+   "checked"
+  ],
+  "T1.3": [
+   "not applicable"
+  ]
+ },
+ "finetooth/T1-tool.hunter.md": {
+  "T1.1": [
+   "checked"
+  ],
+  "T1.10": [
+   "checked"
+  ],
+  "T1.11": [
+   "checked"
+  ],
+  "T1.12": [
+   "checked"
+  ],
+  "T1.13": [
+   "checked"
+  ],
+  "T1.14": [
+   "checked"
+  ],
+  "T1.15": [
+   "checked"
+  ],
+  "T1.2": [
+   "checked"
+  ],
+  "T1.3": [
+   "checked"
+  ],
+  "T1.4": [
+   "checked"
+  ],
+  "T1.5": [
+   "checked"
+  ],
+  "T1.6": [
+   "checked"
+  ],
+  "T1.7": [
+   "checked"
+  ],
+  "T1.8": [
+   "checked"
+  ],
+  "T1.9": [
+   "checked"
+  ]
+ },
+ "finetooth/T1-tool.verify.md": {
+  "T1.1": [
+   "checked",
+   "checked"
+  ],
+  "T1.10": [
+   "checked"
+  ],
+  "T1.11": [
+   "checked"
+  ],
+  "T1.12": [
+   "checked"
+  ],
+  "T1.13": [
+   "checked"
+  ],
+  "T1.14": [
+   "checked"
+  ],
+  "T1.15": [
+   "checked"
+  ],
+  "T1.2": [
+   "checked",
+   "checked",
+   "checked"
+  ],
+  "T1.3": [
+   "checked",
+   "checked"
+  ],
+  "T1.4": [
+   "checked"
+  ],
+  "T1.5": [
+   "checked"
+  ],
+  "T1.6": [
+   "checked"
+  ],
+  "T1.7": [
+   "checked"
+  ],
+  "T1.8": [
+   "checked"
+  ],
+  "T1.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/hunter-1.md": {
+  "H1.1": [
+   "checked"
+  ],
+  "H1.10": [
+   "checked",
+   "checked"
+  ],
+  "H1.11": [
+   "checked"
+  ],
+  "H1.12": [
+   "checked"
+  ],
+  "H1.13": [
+   "checked"
+  ],
+  "H1.14": [
+   "checked"
+  ],
+  "H1.2": [
+   "checked"
+  ],
+  "H1.3": [
+   "checked"
+  ],
+  "H1.4": [
+   "checked"
+  ],
+  "H1.5": [
+   "checked"
+  ],
+  "H1.6": [
+   "checked"
+  ],
+  "H1.7": [
+   "checked"
+  ],
+  "H1.8": [
+   "checked"
+  ],
+  "H1.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/hunter-2.md": {},
+ "setfork-app/hunter-3.md": {
+  "H3.1": [
+   "checked"
+  ],
+  "H3.10": [
+   "checked"
+  ],
+  "H3.11": [
+   "checked"
+  ],
+  "H3.12": [
+   "checked"
+  ],
+  "H3.13": [
+   "checked"
+  ],
+  "H3.14": [
+   "checked"
+  ],
+  "H3.2": [
+   "checked"
+  ],
+  "H3.3": [
+   "checked"
+  ],
+  "H3.4": [
+   "checked"
+  ],
+  "H3.5": [
+   "checked"
+  ],
+  "H3.6": [
+   "checked"
+  ],
+  "H3.7": [
+   "checked"
+  ],
+  "H3.8": [
+   "checked"
+  ],
+  "H3.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/hunter-4.md": {
+  "H5.1": [
+   "checked"
+  ],
+  "H5.10": [
+   "checked"
+  ],
+  "H5.11": [
+   "checked"
+  ],
+  "H5.12": [
+   "not checked"
+  ],
+  "H5.2": [
+   "checked"
+  ],
+  "H5.3": [
+   "checked"
+  ],
+  "H5.4": [
+   "checked"
+  ],
+  "H5.5": [
+   "checked"
+  ],
+  "H5.6": [
+   "checked"
+  ],
+  "H5.7": [
+   "checked"
+  ],
+  "H5.8": [
+   "checked"
+  ],
+  "H5.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/hunter-5.md": {
+  "H5.1": [
+   "checked"
+  ],
+  "H5.10": [
+   "checked"
+  ],
+  "H5.11": [
+   "checked"
+  ],
+  "H5.12": [
+   "checked"
+  ],
+  "H5.2": [
+   "checked"
+  ],
+  "H5.3": [
+   "checked"
+  ],
+  "H5.4": [
+   "checked"
+  ],
+  "H5.5": [
+   "checked"
+  ],
+  "H5.6": [
+   "not applicable"
+  ],
+  "H5.7": [
+   "checked"
+  ],
+  "H5.8": [
+   "checked"
+  ],
+  "H5.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/hunter-6.md": {
+  "H15.1": [
+   "checked"
+  ],
+  "H15.10": [
+   "checked"
+  ],
+  "H15.4": [
+   "checked"
+  ]
+ },
+ "setfork-app/hunter-7.md": {
+  "V1d.1": [
+   "checked"
+  ],
+  "V1d.10": [
+   "checked"
+  ],
+  "V1d.2": [
+   "checked"
+  ],
+  "V1d.3": [
+   "checked"
+  ],
+  "V1d.4": [
+   "checked",
+   "checked"
+  ],
+  "V1d.5": [
+   "checked"
+  ],
+  "V1d.6": [
+   "checked"
+  ],
+  "V1d.7": [
+   "checked"
+  ],
+  "V1d.8": [
+   "checked"
+  ],
+  "V1d.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/verify-1.md": {
+  "H1.10": [
+   "checked"
+  ]
+ },
+ "setfork-app/verify-2.md": {
+  "H2.1": [
+   "checked"
+  ],
+  "H2.2": [
+   "checked"
+  ],
+  "H2.3": [
+   "checked"
+  ],
+  "H2.4": [
+   "checked"
+  ],
+  "H2.5": [
+   "checked"
+  ]
+ },
+ "setfork-app/verify-3.md": {
+  "H3.1": [
+   "checked"
+  ],
+  "H3.10": [
+   "checked"
+  ],
+  "H3.11": [
+   "checked"
+  ],
+  "H3.12": [
+   "checked"
+  ],
+  "H3.13": [
+   "checked"
+  ],
+  "H3.14": [
+   "checked"
+  ],
+  "H3.2": [
+   "checked"
+  ],
+  "H3.3": [
+   "checked"
+  ],
+  "H3.4": [
+   "checked"
+  ],
+  "H3.5": [
+   "checked"
+  ],
+  "H3.6": [
+   "checked"
+  ],
+  "H3.7": [
+   "checked"
+  ],
+  "H3.8": [
+   "checked"
+  ],
+  "H3.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/verify-4.md": {},
+ "setfork-app/verify-5.md": {
+  "H15.1": [
+   "checked",
+   "checked"
+  ],
+  "H15.10": [
+   "checked"
+  ],
+  "H15.11": [
+   "checked",
+   "checked"
+  ],
+  "H15.12": [
+   "checked"
+  ],
+  "H15.2": [
+   "checked"
+  ],
+  "H15.3": [
+   "checked"
+  ],
+  "H15.4": [
+   "checked"
+  ],
+  "H15.5": [
+   "checked"
+  ],
+  "H15.6": [
+   "checked"
+  ],
+  "H15.7": [
+   "checked"
+  ],
+  "H15.8": [
+   "checked"
+  ],
+  "H15.9": [
+   "checked"
+  ]
+ },
+ "setfork-app/verify-6.md": {
+  "V1d.5": [
+   "checked"
+  ],
+  "V1d.6": [
+   "checked"
+  ],
+  "V1d.8": [
+   "checked"
+  ],
+  "V1d.9": [
+   "checked"
+  ]
+ }
+}

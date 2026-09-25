@@ -1,0 +1,246 @@
+{
+ "arch-dashboard/fix-1.md": {
+  "block": "H1",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-10.md": {
+  "block": "H4",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-11.md": {
+  "block": "H4",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-12.md": {
+  "block": "H6",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-13.md": {
+  "block": "H7",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-2.md": {
+  "block": "H1",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-3.md": {
+  "block": "H1",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-4.md": {
+  "block": "H1",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-5.md": {
+  "block": "H1",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-6.md": {
+  "block": "H1",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-7.md": {
+  "block": "H2",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-8.md": {
+  "block": "H2",
+  "kind": "fix"
+ },
+ "arch-dashboard/fix-9.md": {
+  "block": "H3",
+  "kind": "fix"
+ },
+ "arch-dashboard/fixreview-1.md": {
+  "block": "H1",
+  "kind": "fixreview"
+ },
+ "arch-dashboard/fixreview-2.md": {
+  "block": "H1",
+  "kind": "fixreview"
+ },
+ "arch-dashboard/fixreview-3.md": {
+  "block": "H1",
+  "kind": "fixreview"
+ },
+ "arch-dashboard/fixreview-4.md": {
+  "block": "H1",
+  "kind": "fixreview"
+ },
+ "arch-dashboard/hunter-1.md": {
+  "block": "H1",
+  "kind": "hunter"
+ },
+ "arch-dashboard/hunter-2.md": {
+  "block": "H2",
+  "kind": "hunter"
+ },
+ "arch-dashboard/hunter-3.md": {
+  "block": "H3",
+  "kind": "hunter"
+ },
+ "arch-dashboard/hunter-4.md": {
+  "block": "H4",
+  "kind": "hunter"
+ },
+ "arch-dashboard/hunter-5.md": {
+  "block": "H5",
+  "kind": "hunter"
+ },
+ "arch-dashboard/hunter-6.md": {
+  "block": "H6",
+  "kind": "hunter"
+ },
+ "arch-dashboard/hunter-7.md": {
+  "block": "H7",
+  "kind": "hunter"
+ },
+ "arch-dashboard/hunter-8.md": {
+  "block": "H8",
+  "kind": "hunter"
+ },
+ "arch-dashboard/verify-1.md": {
+  "block": "H1",
+  "kind": "verify"
+ },
+ "arch-dashboard/verify-2.md": {
+  "block": "H2",
+  "kind": "verify"
+ },
+ "arch-dashboard/verify-3.md": {
+  "block": "H3",
+  "kind": "verify"
+ },
+ "arch-dashboard/verify-4.md": {
+  "block": "H4",
+  "kind": "verify"
+ },
+ "arch-dashboard/verify-5.md": {
+  "block": "H5",
+  "kind": "verify"
+ },
+ "arch-dashboard/verify-6.md": {
+  "block": "H6",
+  "kind": "verify"
+ },
+ "arch-dashboard/verify-7.md": {
+  "block": "H7",
+  "kind": "verify"
+ },
+ "arch-dashboard/verify-8.md": {
+  "block": "H8",
+  "kind": "verify"
+ },
+ "finetooth/T1-tool.fix-2.md": {
+  "block": "T1",
+  "kind": "fix"
+ },
+ "finetooth/T1-tool.fix-3.md": {
+  "block": "T1",
+  "kind": "fix"
+ },
+ "finetooth/T1-tool.fix-4.md": {
+  "block": "T1",
+  "kind": "fix"
+ },
+ "finetooth/T1-tool.fix-6.md": {
+  "block": "T1",
+  "kind": "fix"
+ },
+ "finetooth/T1-tool.fix-7.md": {
+  "block": "T1",
+  "kind": "fix"
+ },
+ "finetooth/T1-tool.fix.md": {
+  "block": "T1",
+  "kind": "fix"
+ },
+ "finetooth/T1-tool.fixreview-1.md": {
+  "block": "T1",
+  "kind": "fixreview"
+ },
+ "finetooth/T1-tool.fixreview-2.md": {
+  "block": "T1",
+  "kind": "fixreview"
+ },
+ "finetooth/T1-tool.fixreview-3.md": {
+  "block": "T1",
+  "kind": "fixreview"
+ },
+ "finetooth/T1-tool.fixreview-4.md": {
+  "block": "T1",
+  "kind": "fixreview"
+ },
+ "finetooth/T1-tool.fixreview-5.md": {
+  "block": "T1",
+  "kind": "fixreview"
+ },
+ "finetooth/T1-tool.fixreview-6.md": {
+  "block": "T1",
+  "kind": "fixreview"
+ },
+ "finetooth/T1-tool.fixreview-7.md": {
+  "block": "T1",
+  "kind": "fixreview"
+ },
+ "finetooth/T1-tool.hunter.md": {
+  "block": "T1",
+  "kind": "hunter"
+ },
+ "finetooth/T1-tool.verify.md": {
+  "block": "T1",
+  "kind": "verify"
+ },
+ "setfork-app/hunter-1.md": {
+  "block": "H1",
+  "kind": "hunter"
+ },
+ "setfork-app/hunter-2.md": {
+  "block": "H2",
+  "kind": "hunter"
+ },
+ "setfork-app/hunter-3.md": {
+  "block": "H3",
+  "kind": "hunter"
+ },
+ "setfork-app/hunter-4.md": {
+  "block": "H5",
+  "kind": "hunter"
+ },
+ "setfork-app/hunter-5.md": {
+  "block": "H5",
+  "kind": "hunter"
+ },
+ "setfork-app/hunter-6.md": {
+  "block": "H15",
+  "kind": "hunter"
+ },
+ "setfork-app/hunter-7.md": {
+  "block": "V1d",
+  "kind": "hunter"
+ },
+ "setfork-app/verify-1.md": {
+  "block": "H1",
+  "kind": "verify"
+ },
+ "setfork-app/verify-2.md": {
+  "block": "H2",
+  "kind": "verify"
+ },
+ "setfork-app/verify-3.md": {
+  "block": "H3",
+  "kind": "verify"
+ },
+ "setfork-app/verify-4.md": {
+  "block": "H5",
+  "kind": "verify"
+ },
+ "setfork-app/verify-5.md": {
+  "block": "H15",
+  "kind": "verify"
+ },
+ "setfork-app/verify-6.md": {
+  "block": "V1d",
+  "kind": "verify"
+ }
+}
