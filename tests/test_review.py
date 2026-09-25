@@ -5360,8 +5360,11 @@ class RepositoryContractTest(unittest.TestCase):
         того, что набор проверен. Число брали из головы: 98 против настоящих 248."""
         real = unittest.defaultTestLoader.discover(str(KIT / "tests")).countTestCases()
         self.assertGreater(real, 0)
+        # Русское число склоняет за собой существительное: 336 сценариЕВ, но 343
+        # сценариЯ. Образец, знающий одну форму, требовал бы от документа неграмотности
+        # или замолкал бы на числе, кончающемся на 2, 3, 4.
         for rel, pattern in (("README.md", r"(\d+) scenarios"),
-                             ("README.ru.md", r"(\d+) сценариев"),
+                             ("README.ru.md", r"(\d+) сценари(?:ев|я|й)"),
                              ("AGENTS.md", r"(\d+) scenarios")):
             text = (KIT / rel).read_text(encoding="utf-8")
             found = re.findall(pattern, text)
