@@ -82,7 +82,12 @@ def git(*args: str, binary: bool = False, at_root: bool = True) -> GitRun:
     point `-C` at yet.
     """
     rest = list(args)
-    if any(a in GIT_PRINTS_PATHS for a in rest) and "-z" not in rest:
+    # The decision reads the SUBCOMMAND and the options before `--`, never the data: a file
+    # named `grep` turned `hash-object -- grep` into `hash-object -z`, git refused, and the
+    # file silently dropped out of the block fingerprint.
+    opts = rest[:rest.index("--")] if "--" in rest else rest
+    asked = rest[:1] + [a for a in opts[1:] if a.startswith("-")]
+    if any(a in GIT_PRINTS_PATHS for a in asked) and "-z" not in opts:
         # After the subcommand and before any `--`: that is where an option belongs.
         rest.insert(1, "-z")
     argv = ["git", *(["-C", str(ROOT)] if at_root else []), *rest]

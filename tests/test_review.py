@@ -3303,6 +3303,34 @@ class GitTruthTest(unittest.TestCase):
         self.s.run("coverage")
         self.assertIn("changed after the review", refused(self.s.run("check")))
 
+    def test_файл_с_именем_подкоманды_git_живёт_в_отпечатке_блока(self):
+        """`git()` решал про `-z` по ЛЮБОМУ аргументу, данные включая: файл `grep` в корне
+        (обычная обёртка-скрипт) превращал `hash-object -- grep` в `hash-object -z -- grep`,
+        git отвечал 129, отпечаток файла пропадал — и правка этого файла после просмотра
+        проходила мимо `check`. Решают подкоманда и опции до `--`, а не имена файлов.
+
+        Обе стороны: правка файла `grep` роняет проверку, как и правка соседа."""
+        for name in ("grep", "ls-files"):
+            with self.subTest(файл=name):
+                s = Stand()
+                self.addCleanup(s.cleanup)
+                s.write(name, "#!/bin/sh\nexec grep \"$@\"\n")
+                s.write("plain.txt", "a\n")
+                s.blocks(paths=[name, "plain.txt"])
+                s.manifest(hypotheses=1)
+                s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                                 "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+                s.commit()
+                s.run("init")
+                s.run("coverage")
+                s.run("set-status", "H1", "verified")
+                self.assertEqual(s.run("check").returncode, 0, s.run("check").stdout)
+
+                s.write(name, "#!/bin/sh\nexec rg \"$@\"\n")
+                s.commit("правка после просмотра")
+                s.run("coverage")
+                self.assertIn("changed after the review", refused(s.run("check")))
+
     def test_двоичный_файл_не_считается_строками_в_пороге(self):
         """Порог читаемости мерил картинку как две тысячи строк."""
         self.s.write("src/one.ts", "a\n")
