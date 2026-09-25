@@ -91,6 +91,9 @@ by violation / what was reproduced live. Honestly about what you did not do.
 **Why it is a defect:** the violated invariant, a rule above or common sense.
 **Introduced by this round or present before:** one of the two.
 **Confidence:** confirmed | plausible
+**Root:** a short name of the defect class if it is not the only one of its kind — one
+phrase, the same for every instance. It goes into the register as the `root` field of the
+finding; from the third instance the state check demands the class be closed by a guard.
 
 ## Checked and found correct
 Fixes that looked suspicious but turned out to be right — with an explanation.

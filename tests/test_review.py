@@ -4461,5 +4461,148 @@ class RecordedFindingsImportTest(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertIn("V2-001", out.stdout + out.stderr)
 
+class TemplateContractTest(unittest.TestCase):
+    """УЗДА КЛАССА «ворота спрашивают то, о чём шаблон роли молчит».
+
+    Если `check` читает у находки поле, которого нет ни в одном шаблоне, честно написанный
+    отчёт краснеет, а выхода агенту никто не назвал. Измерено дважды: причину отказа
+    шаблон проверяющего велел писать в `claim`, а ворота ждали `reject_reason`; поля `root`
+    в образце черновика не было вовсе, и ворота про третий экземпляр класса не могли
+    покраснеть ни на одном прогоне, написанном по образцу. Список полей берётся из
+    ИСХОДНИКА: поле, которого ещё не написали, тоже обязано быть классифицировано.
+    """
+
+    # Поля, которые проставляет сам инструмент: шаблону о них говорить нечего.
+    TOOL_FIELDS = {"id", "code_sha", "imported_at", "updated_at", "restamped_at",
+                   "fix_commit", "fixed_in", "rule"}
+    # Поля, которые пишет АГЕНТ, — каждое обязано быть названо в шаблоне хоть одной роли,
+    # и на каждом языке ревью отдельно.
+    AGENT_FIELDS = {"block", "severity", "confidence", "status", "file", "line", "claim",
+                    "scenario", "invariant", "root", "dup_of", "reject_reason",
+                    "defer_reason"}
+    ROLES = ("hunter", "verify", "fix", "fixreview")
+    LANGS = ("", "ru")
+
+    @staticmethod
+    def _register_fields() -> set[str]:
+        """Словарь полей записи реестра — из обращений к находке в самом инструменте."""
+        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+        holders, out = {"f", "row"}, set()
+        for n in ast.walk(tree):
+            key = base = None
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr in ("get", "setdefault")
+                    and isinstance(n.func.value, ast.Name) and n.args
+                    and isinstance(n.args[0], ast.Constant)):
+                base, key = n.func.value.id, n.args[0].value
+            elif (isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name)
+                  and isinstance(n.slice, ast.Constant)):
+                base, key = n.value.id, n.slice.value
+            if base in holders and isinstance(key, str):
+                out.add(key)
+        return out
+
+    def _templates(self, lang: str) -> dict[str, str]:
+        suffix = ".md" if not lang else f".{lang}.md"
+        return {role: (SKILL / "references" / f"{role}{suffix}").read_text(encoding="utf-8")
+                for role in self.ROLES}
+
+    def test_каждое_поле_реестра_названо_в_шаблоне_или_проставлено_инструментом(self):
+        unknown = self._register_fields() - self.TOOL_FIELDS - self.AGENT_FIELDS
+        self.assertEqual(
+            sorted(unknown), [],
+            "у находки появилось поле, о котором правило не знает: решите, пишет его агент "
+            "(тогда назовите его в шаблонах обеих языковых версий и впишите в AGENT_FIELDS) "
+            "или инструмент (TOOL_FIELDS) — иначе ворота будут спрашивать то, чего никто не "
+            "объявлял")
+        for lang in self.LANGS:
+            bodies = self._templates(lang)
+            for field in sorted(self.AGENT_FIELDS):
+                with self.subTest(lang=lang or "en", field=field):
+                    self.assertTrue(
+                        any(field in body for body in bodies.values()),
+                        f"поле `{field}` не названо ни в одном шаблоне роли ({lang or 'en'}): "
+                        f"агент не узнает о нём, а ворота его спрашивают")
+
+    def test_шаблоны_ролей_есть_на_обоих_языках(self):
+        for lang in self.LANGS:
+            for role in self.ROLES:
+                suffix = ".md" if not lang else f".{lang}.md"
+                self.assertTrue((SKILL / "references" / f"{role}{suffix}").exists(),
+                                f"{role}{suffix}")
+
+
+class DraftByTheTemplateTest(unittest.TestCase):
+    """Черновик находок, написанный ровно по шаблону, проходит `import` и `check`.
+
+    Обратная сторона узды: правило выше держит, что поле названо, а это — что запись,
+    сделанная по названному образцу, не роняет ворота.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        for i in range(4):
+            self.s.write(f"src/f{i}.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+
+    def draft(self, *rows: dict) -> None:
+        self.s.write("docs/review/reports/H1-findings.jsonl",
+                     "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+    def row(self, n: int, **extra) -> dict:
+        return {"block": "H1", "severity": "medium", "confidence": "confirmed",
+                "status": "open", "file": f"src/f{n}.ts", "line": 1,
+                "claim": f"рукописная копия предиката {n}", "scenario": "на границе",
+                **extra}
+
+    def _import(self) -> None:
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.s.run("findings")
+
+    def test_корень_из_образца_собирает_класс_и_зажигает_ворота_про_узду(self):
+        klass = "рукописная копия предиката"
+        self.draft(*(self.row(i, root=klass) for i in range(3)))
+        self._import()
+        self.assertIn("3 × " + klass, self.s.run("roots").stdout)
+        self.assertIn("and no guard", self.s.run("check").stdout,
+                      "три экземпляра одного корня обязаны потребовать узду")
+
+    def test_без_поля_root_тот_же_черновик_ворота_не_зажигает(self):
+        """Мера дефекта: ровно те же три находки без `root` не группируются никак."""
+        self.draft(*(self.row(i) for i in range(3)))
+        self._import()
+        self.assertIn("no roots recorded", self.s.run("roots").stdout)
+        self.assertNotIn("and no guard", self.s.run("check").stdout)
+
+    def test_отказ_написанный_по_образцу_не_роняет_проверку(self):
+        self.draft(self.row(0, status="rejected", confidence="rejected",
+                            reject_reason="маршрут обёрнут в RequirePermission, сценарий недостижим"),
+                   self.row(1))
+        self._import()
+        out = self.s.run("check")
+        self.assertNotIn("reject reason is not recorded", out.stdout)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_отказ_с_причиной_только_в_claim_по_прежнему_ловится(self):
+        """Вторая сторона: причина, спрятанная в заголовке, — не запись причины."""
+        self.draft(self.row(0, status="rejected", confidence="rejected",
+                            claim="дефекта нет: маршрут обёрнут в RequirePermission"))
+        self._import()
+        self.assertIn("reject reason is not recorded", self.s.run("check").stdout)
+
+    def test_дубль_написанный_по_образцу_не_роняет_проверку(self):
+        self.draft(self.row(0), self.row(1, status="duplicate", dup_of="H1-001"))
+        self._import()
+        out = self.s.run("check")
+        self.assertNotIn("marked duplicate", out.stdout)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
