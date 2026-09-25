@@ -555,6 +555,123 @@ def file_sha(rel: str) -> str | None:
     return entry[1]
 
 
+# How far the fingerprint of a finding reaches: its line and REGION_K lines above and below.
+#
+# A hash of the whole file re-flagged every deferred finding on every commit to its file —
+# in the kit's own review five pull requests in a row turned `check` red on the same 15
+# findings whose code nobody had touched (#37). A window around the line is what GitHub
+# code scanning matches on too (`primaryLocationLineHash`, the context of the line). The
+# size is measured on the kit's own history, not guessed:
+#
+#   * fixes seen — of the 148 fixed findings of the review that have a fix commit, the
+#     window at the cited line (in the version the finding was imported on) is gone after
+#     the fix commit for 67 at K=0, 95 at K=2, 98 at K=3, 103 at K=5, 111 at K=10; the
+#     whole-file hash sees 141 (the other seven fix commits did not touch the file);
+#   * edits elsewhere — over 61 commits to `review.py` and `tests/test_review.py`, the
+#     window around a line the commit left untouched breaks in 0.9% of cases at K=1, 2.4%
+#     at K=3, 3.5% at K=5, 5.7% at K=10; the whole-file hash breaks on every commit;
+#   * uniqueness — at K=0 16 of 164 cited lines occur more than once in their file (`)`,
+#     a blank line), at K=1 3, from K=2 on none.
+#
+# K=3 sits past the knee: up to 3 each step adds a handful of fixes seen, after it about
+# two per step while the collateral rate keeps rising by half a point. The price is named:
+# a fix made more than three lines from the cited line (the line is a function's head, the
+# fix is in its body) goes unseen by this gate — it is a backstop for a status nobody moved,
+# not the way fixes are recorded (`set-finding fixed --commit` is).
+REGION_K = 3
+
+
+def text_lines(rel: str) -> list[bytes] | None:
+    """The file's lines as the region fingerprint reads them, or None where there are none.
+
+    Read from the same place as `file_sha` (the working tree while the file is laid out,
+    the index when it is not), so the two fingerprints never describe different versions.
+    Trailing whitespace is dropped and every line ending counts the same: an editor that
+    trims spaces or rewrites CRLF has not changed the code. Leading whitespace is kept —
+    GitHub drops all of it, but in Python indentation IS code, and a line moved out of a
+    `with` is a different program. A symlink, a binary file (a NUL near the start, as git
+    itself decides) and a missing file have no lines: such a finding keeps the whole-file
+    fingerprint.
+    """
+    if not rel or rel.startswith("("):
+        return None
+    p = ROOT / rel
+    if p.is_symlink():
+        return None
+    if p.is_file():
+        try:
+            data = p.read_bytes()
+        except OSError:
+            return None
+    else:
+        rows = index_rows([f":(literal){rel}"])
+        entry = next((r for r in rows if r[2] == rel), None)
+        if entry is None or entry[0] in NOT_A_FILE_MODES or entry[0] == "120000":
+            return None
+        data = git("show", f":{rel}", binary=True).out
+    if b"\0" in data[:8192]:
+        return None
+    return [ln.rstrip() for ln in data.splitlines()]
+
+
+def region_hash(lines: list[bytes], start: int, count: int) -> str:
+    return hashlib.sha256(b"\n".join(lines[start:start + count])).hexdigest()[:16]
+
+
+def take_region(lines: list[bytes] | None, line) -> dict | None:
+    """The region fingerprint of `line` (1-based) in these lines: the hash and how many lines
+    above and below it the window took. The window is clipped at the file's edges, so the
+    span is recorded, not derived from K — which also lets K change without invalidating
+    the records stamped before."""
+    if (lines is None or isinstance(line, bool) or not isinstance(line, int)
+            or not 1 <= line <= len(lines)):
+        return None
+    above, below = min(REGION_K, line - 1), min(REGION_K, len(lines) - line)
+    return {"region_sha": region_hash(lines, line - 1 - above, above + below + 1),
+            "region_span": [above, below]}
+
+
+def locate_region(f: dict, lines: list[bytes]) -> int | None:
+    """Where the finding's window is in these lines — the line it now sits on, or None.
+
+    Searched by CONTENT across the whole file: an edit above the finding moves it without
+    touching it. When the same window occurs more than once, the one nearest the recorded
+    line wins — that is the one the finding was about, give or take the shift.
+    """
+    span = f.get("region_span")
+    if (not isinstance(span, list) or len(span) != 2
+            or not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in span)):
+        return None
+    above, below = span
+    count = above + below + 1
+    was = f["line"] if isinstance(f.get("line"), int) else above + 1
+    hits = [s + above + 1 for s in range(0, len(lines) - count + 1)
+            if region_hash(lines, s, count) == f.get("region_sha")]
+    return min(hits, key=lambda at: (abs(at - was), at)) if hits else None
+
+
+def code_fingerprint(rel: str, line) -> dict:
+    """The fingerprint a finding gets: its region when it cites a line the file has, the
+    whole file when it does not (a finding about a file as a whole, a binary, a symlink)."""
+    region = take_region(text_lines(rel), line)
+    if region:
+        return region
+    sha = file_sha(rel)
+    return {"code_sha": sha} if sha else {}
+
+
+# Every field a finding's code fingerprint is written in: `code_sha` (the whole file — the
+# only form before #37, and still the form of a finding without a line) or the region pair.
+CODE_FINGERPRINT_FIELDS = ("code_sha", "region_sha", "region_span")
+
+
+def put_fingerprint(f: dict, fp: dict) -> None:
+    """Replace the finding's fingerprint: the old form goes, so a record never carries two."""
+    for k in CODE_FINGERPRINT_FIELDS:
+        f.pop(k, None)
+    f.update(fp)
+
+
 def block_sha(b: dict) -> str:
     """Fingerprint of what the block gets to work on: the set of files plus their contents.
 
@@ -2439,7 +2556,8 @@ def cmd_import(args) -> int:
             if found_in:
                 f["found_in"] = dict(found_in)
             f["imported_at"] = now()
-            f["code_sha"] = file_sha(f.get("file", ""))
+            put_fingerprint(f, code_fingerprint(f.get("file", ""), f.get("line"))
+                            or {"code_sha": None})
             added.append(f)
         with FINDINGS_FILE.open("a", encoding="utf-8") as fh:
             for f in added:
@@ -2532,11 +2650,19 @@ def cmd_import(args) -> int:
         # and a stale finding would vanish from `check` without re-verification. To confirm
         # it on the new code — `restamp <ID>`. A finding that moved to another file is a
         # new claim, and the fingerprint is new.
+        #
+        # A region fingerprint is carried WITH its line: the two are one anchor, and the
+        # register's line may already be the one `restamp` moved it to while the block's
+        # file still cites where it was when the hunter wrote it.
         prev = before.get(f["id"])
-        if prev and prev.get("code_sha") and prev.get("file") == f.get("file"):
-            f["code_sha"] = prev["code_sha"]
+        if (prev and prev.get("file") == f.get("file")
+                and (prev.get("code_sha") or prev.get("region_sha"))):
+            put_fingerprint(f, {k: prev[k] for k in CODE_FINGERPRINT_FIELDS if k in prev})
+            if prev.get("region_sha") and "line" in prev:
+                f["line"] = prev["line"]
         else:
-            f["code_sha"] = file_sha(f.get("file", ""))
+            put_fingerprint(f, code_fingerprint(f.get("file", ""), f.get("line"))
+                            or {"code_sha": None})
         if f.get("confidence") == "rejected":
             f["status"] = "rejected"
     merged = kept + incoming
@@ -2987,7 +3113,10 @@ def cmd_restamp(args) -> int:
     defn, st = blocks(), state()
     idx = block_index(defn)
     if args.block not in idx:
-        return restamp_finding(args.block)
+        return restamp_finding(args.block, args.line)
+    if args.line is not None:
+        die(f"--line belongs to a finding, not to a block: {args.block} is a block — its "
+            f"fingerprint covers all its files, there is no line to anchor")
     s = st["blocks"].get(args.block, {})
     if s.get("status") not in POST_VERIFY:
         die(f"{args.block} is in status {s.get('status', 'todo')} — nothing to stamp")
@@ -3005,7 +3134,7 @@ def cmd_restamp(args) -> int:
     return 0
 
 
-def restamp_finding(fid: str) -> int:
+def restamp_finding(fid: str, line: int | None = None) -> int:
     """Confirm that an open finding is still alive on a changed file.
 
     The file under a finding changes not only by its fix: a neighbouring finding gets fixed
@@ -3013,6 +3142,14 @@ def restamp_finding(fid: str) -> int:
     false — close a live defect or edit the register by hand. The stamp is set by name, as
     for a block: "re-checked, the defect is there" is said on record rather than switching
     the check off.
+
+    WHERE the defect is decides what is stamped. A finding with a line gets the region
+    fingerprint (the lines around it, `REGION_K`); `--line` says where the defect sits now
+    when the code moved away from the cited line. Without it the window is looked for by
+    content, so a finding that only shifted keeps its code and gets its new line. A record
+    of the whole-file form is moved to the region form here, and its window is taken from
+    the version of the file its old fingerprint names, if git still has it: the line was
+    cited on THAT version, and the current file may have moved it.
     """
     rows = findings()
     hit = [f for f in rows if f.get("id") == fid]
@@ -3021,20 +3158,67 @@ def restamp_finding(fid: str) -> int:
     f = hit[0]
     if f.get("status") not in ("open", "deferred"):
         die(f"finding {fid} is in status {f.get('status')} — only open and deferred ones are stamped")
-    sha = file_sha(f.get("file", ""))
-    if not sha:
+    rel = f.get("file", "")
+    if not file_sha(rel):
         die(f"file {f.get('file')} does not exist — a finding is moved (`{CLI} set-finding`), not stamped")
-    if f.get("code_sha") == sha:
+    lines = text_lines(rel)
+    was = f.get("line")
+    if line is not None:
+        if lines is None or not 1 <= line <= len(lines):
+            die(f"{rel} has no line {line} to anchor {fid} at"
+                + ("" if lines is None else f" — it has {len(lines)}")
+                + ("; the file is not text, so its finding keeps the whole-file fingerprint "
+                   f"— drop --line" if lines is None else ""))
+        at = line
+    elif lines is not None and f.get("region_sha"):
+        at = locate_region(f, lines) or was
+    elif lines is not None and f.get("code_sha"):
+        at = cited_line_now(f, lines)
+    else:
+        at = was
+    fp = code_fingerprint(rel, at)
+    if at == was and all(f.get(k) == fp.get(k) for k in CODE_FINGERPRINT_FIELDS):
         print(f"{fid}: the fingerprint already matches {f.get('file')} — nothing to stamp")
         return 0
-    f["code_sha"] = sha
+    put_fingerprint(f, fp)
+    if "region_sha" in fp:
+        f["line"] = at
     f["restamped_at"] = now()
     with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
     print(f"{fid}: code fingerprint re-taken — the defect is confirmed on the current version of {f.get('file')}")
+    if "region_sha" in fp:
+        above, below = fp["region_span"]
+        text = lines[at - 1].decode("utf-8", "replace").strip()
+        moved = f" (was line {was})" if was != at else ""
+        # The line is printed so a wrong anchor is seen at once: a register restamped
+        # whole-file for months may cite a line the code has long left.
+        print(f"  anchored at line {at}{moved}, lines {at - above}-{at + below}: "
+              f"{text[:100]}{'…' if len(text) > 100 else ''}\n"
+              f"  not the defect's line? `{CLI} restamp {fid} --line <N>`")
     return 0
+
+
+def cited_line_now(f: dict, lines: list[bytes]) -> int:
+    """Where the line a whole-file record cites is in the current file.
+
+    The old fingerprint is the blob the finding was last stamped on, and its line was cited
+    on that version. When git still has the blob, the window around the line is taken there
+    and looked for here; not found (the code under it changed, or the blob is gone) — the
+    recorded line stands, and `restamp` prints what it reads so a human sees the anchor.
+    """
+    sha = f.get("code_sha")
+    if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+        old = git("cat-file", "blob", sha, binary=True)
+        if old.code == 0 and b"\0" not in old.out[:8192]:
+            region = take_region([ln.rstrip() for ln in old.out.splitlines()], f.get("line"))
+            if region:
+                found = locate_region({**region, "line": f.get("line")}, lines)
+                if found:
+                    return found
+    return f.get("line")
 
 
 # How many times a defect class must repeat before a list of fixes stops being the answer.
@@ -3174,10 +3358,11 @@ def cmd_backfill(args) -> int:
             s["restamped_at"] = now()
             stamped_blocks.append(bid)
     for f in rows:
-        if f.get("status") in ("open", "deferred") and not f.get("code_sha"):
-            sha = file_sha(f.get("file", ""))
-            if sha:
-                f["code_sha"] = sha
+        if (f.get("status") in ("open", "deferred")
+                and not f.get("code_sha") and not f.get("region_sha")):
+            fp = code_fingerprint(f.get("file", ""), f.get("line"))
+            if fp:
+                put_fingerprint(f, fp)
                 stamped_findings.append(f.get("id", "?"))
     if not stamped_blocks and not stamped_findings:
         print("fingerprints are in place — nothing to stamp")
@@ -3821,13 +4006,38 @@ def cmd_check(args) -> int:
         # description is stale. Both demand action, not silence: a finding that is not
         # moved makes the next pass argue with nonexistent code.
         if (f.get("status") in ("open", "deferred") and not f.get("code_sha")
-                and file_sha(f.get("file", ""))):
+                and not f.get("region_sha") and file_sha(f.get("file", ""))):
             gates.refuse(
                 "finding/no-code-fingerprint",
                 f"finding {fid}: no code fingerprint — changes in {f.get('file')} under it are not "
                 f"tracked; `{CLI} backfill`"
             )
-        if f.get("status") in ("open", "deferred") and f.get("code_sha"):
+        # The region form (#37): only the lines around the finding count, wherever they have
+        # moved. The whole-file form is read as before, so a register written by an older
+        # kit keeps its meaning until `restamp` moves each record over.
+        if (f.get("status") in ("open", "deferred") and f.get("region_sha")
+                and file_sha(f.get("file", ""))):
+            lines = text_lines(f.get("file", ""))
+            at = locate_region(f, lines) if lines is not None else None
+            if at is None:
+                gates.refuse(
+                    "finding/region-changed",
+                    f"finding {fid}: the code around {f.get('file')}:{f.get('line')} changed since "
+                    f"it was stamped — re-check: either it is already closed (`{CLI} set-finding "
+                    f"{fid} fixed --commit <sha>`), or the description is stale, or the defect is "
+                    f"still there (`{CLI} restamp {fid}`, with `--line <N>` if it now sits elsewhere)"
+                )
+            elif at != f.get("line"):
+                # A warning, not a refusal: the code under the finding is exactly what was
+                # stamped, only lines above it came or went. `check` writes nothing, and the
+                # register's line is what findings.md and the SARIF export point at — so the
+                # shift is said, and one command records it.
+                gates.warn(
+                    "finding/line-moved",
+                    f"finding {fid}: its code is unchanged but now sits at {f.get('file')}:{at}, "
+                    f"not {f.get('line')} — `{CLI} restamp {fid}` records the new line"
+                )
+        elif f.get("status") in ("open", "deferred") and f.get("code_sha"):
             fresh = file_sha(f.get("file", ""))
             if fresh and fresh != f["code_sha"]:
                 gates.refuse(
@@ -3835,7 +4045,10 @@ def cmd_check(args) -> int:
                     f"finding {fid}: code in {f.get('file')} changed since import — "
                     f"re-check: either it is already closed (`{CLI} set-finding {fid} fixed "
                     f"--commit <sha>`), or the description is stale, or the defect is still there "
-                    f"(`{CLI} restamp {fid}`)"
+                    f"(`{CLI} restamp {fid}`"
+                    + (" — for a finding with a line it also moves the record to a fingerprint "
+                       "of the lines around it, which edits elsewhere in the file leave alone)"
+                       if f.get("line") is not None else ")")
                 )
         # A line number the file does not have is the cheapest sign of fabrication — for a
         # finding that is still open. A fixed one cites the file as it was before the fix;
@@ -4441,8 +4654,10 @@ def main() -> int:
     c = sub.add_parser("hypotheses", help="the block's hypotheses and their verdicts")
     c.add_argument("block")
 
-    c = sub.add_parser("restamp", help="confirm the edits were reviewed: of a block or of the file under a finding")
+    c = sub.add_parser("restamp", help="confirm the edits were reviewed: of a block or of the code under a finding")
     c.add_argument("block", help="block (H1) or finding (H1-003)")
+    c.add_argument("--line", type=int,
+                   help="a finding only: the line the defect sits on now, when the code moved away from the cited one")
 
     sub.add_parser("backfill", help="stamp fingerprints on old blocks and findings (with a journal entry)")
 

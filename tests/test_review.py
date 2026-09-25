@@ -5457,6 +5457,8 @@ class GateRegistryTest(unittest.TestCase):
         ("finding/rejected-without-confidence", "test_отказ_меняет_и_уверенность"),
         ("finding/no-code-fingerprint",         "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
         ("finding/code-changed",                "test_изменившийся_код_под_открытой_находкой_роняет_проверку"),
+        ("finding/region-changed",              "test_правка_внутри_окна_роняет_проверку_за_его_краем_нет"),
+        ("finding/line-moved",                  "test_правка_выше_находки_сдвигает_строку_но_не_роняет_проверку"),
         ("finding/line-not-a-number",           "test_номер_строки_строкой_а_не_числом"),
         ("finding/line-past-end",               "test_несуществующая_строка_в_находке_роняет_проверку"),
         ("finding/rejected-without-reason",     "test_отвергнутая_находка_без_причины_роняет_проверку"),
@@ -8735,7 +8737,7 @@ class TemplateContractTest(unittest.TestCase):
     """
 
     # Поля, которые проставляет сам инструмент: шаблону о них говорить нечего.
-    TOOL_FIELDS = {"id", "code_sha", "imported_at", "updated_at", "restamped_at",
+    TOOL_FIELDS = {"id", "code_sha", "region_sha", "region_span", "imported_at", "updated_at", "restamped_at",
                    "fix_commit", "fixed_in", "rule", "found_in"}
     # Поля черновика: агент пишет их строкой JSON. Шаблон обязан назвать каждое КЛЮЧОМ
     # схемы (`"поле":`) и внутри кода — в огороженном блоке или в обратных кавычках.
@@ -10599,6 +10601,257 @@ class SarifExportTest(unittest.TestCase):
         written = (self.s.root / "build/finetooth.sarif").read_text(encoding="utf-8")
         self.assertEqual(written, printed.stdout, "--out пишет то же, что печатается в поток")
         self.assertNotIn('"version"', out.stdout)
+
+
+class RegionFingerprintTest(unittest.TestCase):
+    """Отпечаток находки — строки вокруг неё, а не весь файл (see #37).
+
+    Хеш всего файла краснил `check` на каждой правке активного файла: в ревью самого
+    набора пять PR подряд роняли одни и те же 15 отложенных находок, код под которыми
+    никто не трогал, и каждый кончался массовым `restamp`. Сигнал, который горит на любую
+    правку, перестают читать. Теперь находка со строкой хранит отпечаток окна вокруг неё
+    (строка ± 3), окно ищется по содержимому, и красным становится только правка в нём.
+    """
+
+    LINES = 40
+    AT = 20
+    K = 3                       # REGION_K инструмента; тесты границы стоят на нём
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _text(self, lines: list[str]) -> str:
+        return "".join(l + "\n" for l in lines)
+
+    def _stand(self, *, line: int | None = AT, status: str = "deferred",
+               lines: list[str] | None = None) -> list[str]:
+        """Стенд с зелёным `check` и одной находкой на `src/one.ts`; блок в работе, чтобы
+        правки файла не роняли отпечаток блока — здесь проверяется отпечаток находки."""
+        body = lines or [f"строка {i}" for i in range(1, self.LINES + 1)]
+        self.s.write("src/one.ts", self._text(body))
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        row = {"block": "H1", "severity": "medium", "confidence": "confirmed", "status": "open",
+               "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"}
+        if line is not None:
+            row["line"] = line
+        self.s.write("docs/review/reports/H1-findings.jsonl",
+                     json.dumps(row, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        if status == "deferred":
+            self.assertEqual(self.s.run("set-finding", "H1-001", "deferred",
+                                        "--reason", "ждёт блок H2").returncode, 0)
+        self.s.run("findings")
+        self.s.commit("реестр")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        return body
+
+    def _row(self) -> dict:
+        rows = [json.loads(x) for x in (self.s.root / "docs/review/findings.jsonl")
+                .read_text(encoding="utf-8").splitlines() if x]
+        return rows[0]
+
+    def _edit(self, body: list[str], message: str = "правка") -> None:
+        self.s.write("src/one.ts", self._text(body))
+        self.s.commit(message)
+
+    def test_импорт_снимает_отпечаток_окна_а_не_файла(self):
+        self._stand()
+        row = self._row()
+        self.assertIn("region_sha", row)
+        self.assertEqual(row["region_span"], [self.K, self.K])
+        self.assertNotIn("code_sha", row, "у записи один отпечаток, не два")
+
+    def test_правка_выше_находки_сдвигает_строку_но_не_роняет_проверку(self):
+        """Главный случай #37: правка в другом месте того же файла, строки уехали."""
+        body = self._stand()
+        self._edit(["новая 1", "новая 2", "новая 3"] + body[:5] + ["правка"] + body[6:])
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("changed since", out.stdout)
+        self.assertIn("now sits at src/one.ts:23, not 20", out.stdout,
+                      "сдвиг строки обязан быть сказан: на неё смотрят findings.md и SARIF")
+        self.assertIn("restamp H1-001", out.stdout, "предупреждение обязано говорить, что делать")
+
+        moved = self.s.run("restamp", "H1-001")
+        self.assertEqual(moved.returncode, 0, moved.stderr)
+        self.assertIn("anchored at line 23 (was line 20)", moved.stdout)
+        self.assertIn("строка 20", moved.stdout, "restamp показывает, к чему привязал")
+        self.assertEqual(self._row()["line"], 23)
+        self.s.run("findings")
+        self.s.commit("перештамповка")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("now sits at", out.stdout)
+
+        # Повторный ввоз не возвращает строку из черновика блока: отпечаток и строка —
+        # один якорь, и черновик охотника помнит строку, какой она была до сдвига.
+        self.assertEqual(self.s.run("import", "H1", "--force").returncode, 0)
+        self.assertEqual(self._row()["line"], 23)
+        self.assertNotIn("now sits at", self.s.run("check").stdout)
+
+    def test_правка_внутри_окна_роняет_проверку_за_его_краем_нет(self):
+        body = self._stand()
+        outside = list(body)
+        outside[self.AT - 1 + self.K + 1] = "правка за краем окна"
+        self._edit(outside)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+        inside = list(outside)
+        inside[self.AT - 1 + self.K] = "правка на краю окна"
+        self._edit(inside)
+        out = self.s.run("check")
+        self.assertIn("finding H1-001: the code around src/one.ts:20 changed", refused(out),
+                      out.stdout)
+        self.assertIn("set-finding H1-001 fixed", out.stdout, "отказ обязан говорить, что делать")
+        self.assertIn("--line", out.stdout)
+
+    def test_пробелы_в_концах_строк_и_crlf_не_правка(self):
+        body = self._stand()
+        (self.s.root / "src/one.ts").write_bytes(
+            "".join(l + "  \r\n" for l in body).encode("utf-8"))
+        self.s.commit("редактор поменял концы строк")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        # Отступ в начале строки — уже код: в Python он решает, чьё это тело.
+        body[self.AT - 1] = "    " + body[self.AT - 1]
+        self._edit(body)
+        self.assertIn("changed since it was stamped", refused(self.s.run("check")))
+
+    def test_одинаковое_окно_ищется_ближайшее_к_записанной_строке(self):
+        block = [f"повтор {i}" for i in range(1, 8)]
+        body = ([f"верх {i}" for i in range(1, 6)] + block + [f"середина {i}" for i in range(1, 21)]
+                + block + [f"низ {i}" for i in range(1, 6)])
+        at = 5 + 7 + 20 + 4                         # середина второго повтора
+        self._stand(line=at, lines=body)
+        self._edit(["вставка"] + body)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn(f"now sits at src/one.ts:{at + 1}, not {at}", out.stdout,
+                      "находка — во втором повторе, а не в первом попавшемся")
+
+    def test_окно_у_краёв_файла_обрезается_и_находится(self):
+        body = self._stand(line=1)
+        self.assertEqual(self._row()["region_span"], [0, self.K])
+        body[self.LINES // 2] = "правка в середине"
+        self._edit(body)
+        self.assertEqual(self.s.run("check").returncode, 0)
+
+    def test_находка_на_последней_строке(self):
+        body = self._stand(line=self.LINES)
+        self.assertEqual(self._row()["region_span"], [self.K, 0])
+        body[0] = "правка в начале"
+        self._edit(body)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_находка_без_строки_держит_отпечаток_всего_файла(self):
+        body = self._stand(line=None)
+        row = self._row()
+        self.assertEqual(row["code_sha"], self.s.git("hash-object", "src/one.ts").stdout.strip())
+        self.assertNotIn("region_sha", row)
+        body[0] = "правка где угодно"
+        self._edit(body)
+        out = self.s.run("check")
+        self.assertIn("code in src/one.ts changed since import", refused(out), out.stdout)
+        self.assertEqual(self.s.run("restamp", "H1-001").returncode, 0)
+        self.assertEqual(self._row()["code_sha"],
+                         self.s.git("hash-object", "src/one.ts").stdout.strip())
+        self.assertNotIn("region_sha", self._row())
+
+    def _legacy(self) -> None:
+        """Запись, какой её оставила прежняя версия набора: отпечаток всего файла."""
+        f_path = self.s.root / "docs/review/findings.jsonl"
+        row = self._row()
+        for k in ("region_sha", "region_span"):
+            row.pop(k)
+        row["code_sha"] = self.s.git("hash-object", "src/one.ts").stdout.strip()
+        f_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.s.run("findings")
+        self.s.commit("старый реестр")
+
+    def test_старая_запись_проверяется_по_старому_а_restamp_переводит_её_на_окно(self):
+        body = self._stand()
+        self._legacy()
+        self.assertEqual(self.s.run("check").returncode, 0)
+        self._edit(["новая 1", "новая 2"] + body)
+        out = self.s.run("check")
+        self.assertIn("code in src/one.ts changed since import", refused(out), out.stdout)
+        self.assertIn("moves the record to a fingerprint of the lines around it", out.stdout)
+
+        moved = self.s.run("restamp", "H1-001")
+        self.assertEqual(moved.returncode, 0, moved.stderr)
+        row = self._row()
+        self.assertNotIn("code_sha", row)
+        self.assertEqual(row["region_span"], [self.K, self.K])
+        self.assertEqual(row["line"], 22,
+                         "строку ищут в версии, на которой её назвали, а не берут как есть")
+        self.s.run("findings")
+        self.s.commit("перевод на окно")
+        body = ["новая 1", "новая 2"] + body
+        body[1] = "ещё одна правка в другом месте"
+        self._edit(body)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertEqual(self.s.run("restamp", "H1-001").stdout.count("nothing to stamp"), 1)
+
+    def test_restamp_line_переносит_якорь_туда_где_дефект_теперь(self):
+        body = self._stand()
+        body[self.AT - 1] = "дефект переписан, но жив"
+        body = body[:30] + ["строка 20"] + body[30:]
+        self._edit(body)
+        self.assertIn("changed since it was stamped", refused(self.s.run("check")))
+        self.assertEqual(self.s.run("restamp", "H1-001", "--line", "999").returncode, 2)
+        self.assertEqual(self.s.run("restamp", "H1", "--line", "5").returncode, 2,
+                         "у блока нет строки")
+        out = self.s.run("restamp", "H1-001", "--line", "31")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self._row()["line"], 31)
+        self.s.run("findings")
+        self.s.commit("перештамповка")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("now sits at", out.stdout)
+
+    def test_файл_из_индекса_не_выложенный_на_диск_находится(self):
+        self._stand()
+        (self.s.root / "src/one.ts").unlink()          # удалён без коммита: в индексе жив
+        out = self.s.run("check")
+        self.assertNotIn("changed since it was stamped", out.stdout)
+
+    def test_двоичный_файл_остаётся_на_отпечатке_файла(self):
+        self.s.write("src/one.ts", "a\n")
+        (self.s.root / "src/one.bin").write_bytes(b"\0\1\2\nline two\n")
+        self.s.blocks(paths=["src/one.ts", "src/one.bin"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps(
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/one.bin", "line": 1, "claim": "дефект", "scenario": "с"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        row = self._row()
+        self.assertIn("code_sha", row)
+        self.assertNotIn("region_sha", row)
+
+    def test_backfill_ставит_окно_находке_со_строкой(self):
+        self._stand()
+        f_path = self.s.root / "docs/review/findings.jsonl"
+        row = self._row()
+        for k in ("region_sha", "region_span"):
+            row.pop(k)
+        f_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertIn("no code fingerprint", refused(self.s.run("check")))
+        self.assertEqual(self.s.run("backfill").returncode, 0)
+        self.assertEqual(self._row()["region_span"], [self.K, self.K])
+
 
 if __name__ == "__main__":
     unittest.main()

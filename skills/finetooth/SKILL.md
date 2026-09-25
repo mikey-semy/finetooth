@@ -160,7 +160,9 @@ an open finding older than a week (a warning);
 a block in `blocked` without a note; phases out of order; a block closed with fixes but
 without a fix review; a block and a finding closed on a different version of the code
 (fingerprints — `review restamp` if the changes are unrelated, `review backfill` for records
-older than the fingerprints); a finding without a rejection reason, a fix commit that does not
+older than the fingerprints; a finding's fingerprint is the lines around its line, so only an
+edit there fails, and an edit above it that only moved it is a warning with the new line —
+`review restamp <ID>` records it, `--line <N>` re-anchors a defect that now sits elsewhere); a finding without a rejection reason, a fix commit that does not
 touch the file, a duplicate of a nonexistent finding, a guard at a nonexistent path; a tree
 more than a week behind the server; the loop signal without a recorded decision (a warning).
 
