@@ -41,11 +41,16 @@ if "utf-8" not in (sys.getfilesystemencoding() or "").lower().replace("utf8", "u
     # стенда и сообщения коммитов здесь не-ASCII, и в локали C без режима UTF-8 прогон
     # рассыпается двумя сотнями UnicodeEncodeError, ни один из которых не называет
     # причину. Лучше один отказ, который её называет.
+    #
+    # Отказ написан по-английски и только из ASCII — единственный такой текст в наборе.
+    # Он печатается ровно там, где кириллица печататься не может: stderr в этой локали
+    # переходит на backslashreplace, и объяснение приходит вереницей `\xd0\xba`. Причина,
+    # которую нельзя прочесть, — это отсутствие причины.
     raise RuntimeError(
-        f"кодировка файловой системы — {sys.getfilesystemencoding()}, а набор говорит "
-        f"по-русски: пути, имена тестов и сообщения коммитов не-ASCII. Запустите прогон "
-        f"в UTF-8-локали или с PYTHONUTF8=1: "
-        f"`PYTHONUTF8=1 python3 -m unittest discover -s tests`")
+        f"filesystem encoding is {sys.getfilesystemencoding()}, and this suite speaks "
+        f"Russian: test names, stand paths and commit messages are non-ASCII, and argv "
+        f"is encoded by the PARENT process. Run it in a UTF-8 locale or with "
+        f"PYTHONUTF8=1: `PYTHONUTF8=1 python3 -m unittest discover -s tests`")
 
 
 def child_env(**extra: str) -> dict:
@@ -5081,6 +5086,47 @@ class TestSuiteRuleTest(unittest.TestCase):
         for why, src in self.INNOCENT.items():
             with self.subTest(невиновный=why):
                 self.assertEqual(_spawns(src), [], "узда придирается к верной записи")
+
+    # Локаль, в которой набор отказывается идти: та самая, ради которой отказ и написан.
+    HOSTILE = dict(LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+
+    def _import_suite(self, hostile: bool = False) -> subprocess.CompletedProcess:
+        env = child_env()
+        if hostile:
+            # Единственное место, где общее окружение снимают НАМЕРЕННО: проверяется
+            # то самое, от чего оно защищает.
+            env.update(self.HOSTILE)
+            env.pop("PYTHONIOENCODING", None)   # иначе поток кодируется мимо локали
+        return subprocess.run([sys.executable, "-c", "import test_review"],
+                              cwd=str(KIT / "tests"), capture_output=True, text=True, env=env)
+
+    def test_отказ_набора_читается_в_той_локали_ради_которой_написан(self):
+        """Отказ печатается там, где не-ASCII печататься не может.
+
+        В локали C stderr переходит на backslashreplace: русский текст приходит
+        вереницей `\\xd0\\xba`, и причина, которую нельзя прочесть, — это отсутствие
+        причины. Проверяется не форма строки в исходнике, а то, что доехало до потока.
+        """
+        out = self._import_suite(hostile=True)
+        if out.returncode == 0:
+            self.skipTest("интерпретатор включает режим UTF-8 сам: отказу не на чем сработать")
+        self.assertIn("filesystem encoding is", out.stderr,
+                      "отказ не назвал причину:\n" + out.stderr[-800:])
+        self.assertIn("PYTHONUTF8=1 python3 -m unittest discover -s tests", out.stderr,
+                      "отказ не назвал команду, которая его снимает")
+        self.assertEqual(
+            re.findall(r"\\x[0-9a-f]{2}|\\u[0-9a-f]{4}", out.stderr), [],
+            "в отказе есть символы, которые эта локаль печатать не умеет — "
+            "он обязан быть из одного ASCII:\n" + out.stderr[-800:])
+
+    def test_в_UTF_8_локали_набор_импортируется_молча(self):
+        """Обратная сторона: отказ не срабатывает там, где всё в порядке, — иначе
+        «набор не идёт» стало бы нормой прогона."""
+        out = self._import_suite()
+        self.assertEqual(out.returncode, 0, out.stderr[-800:])
+        self.assertEqual(out.stderr.strip(), "", "молчаливый импорт обязан быть молчаливым")
+
+
 
 
 class DcoGateTest(unittest.TestCase):
