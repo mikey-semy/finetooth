@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-25T02:22:21Z",
+  "updated_at": "2026-09-25T04:04:38Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -14,8 +14,8 @@
       "restamped_at": "2026-09-25T02:22:09Z"
     },
     "T2": {
-      "status": "todo",
-      "started": null,
+      "status": "running",
+      "started": "2026-09-25T04:04:38Z",
       "finished": null,
       "reports": [],
       "note": ""
