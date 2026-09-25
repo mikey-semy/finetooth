@@ -4317,6 +4317,15 @@ class DcoGateTest(unittest.TestCase):
         self.assertTrue(os.access(self.SCRIPT, os.X_OK), "dco.sh не исполняемый")
 
 
+def _ordinal_share(value: float) -> str:
+    """0.10 → "tenth": доля, как её называют словом в английском тексте."""
+    return {2: "half", 3: "third", 4: "quarter", 5: "fifth", 10: "tenth"}[round(1 / value)]
+
+
+def _ordinal_share_ru(value: float) -> str:
+    return {2: "половине", 3: "трети", 4: "четверти", 5: "пятой", 10: "десятой"}[round(1 / value)]
+
+
 class RepositoryContractTest(unittest.TestCase):
     """УЗДЫ КЛАССА «документ обещает то, чего в репозитории нет».
 
@@ -4341,6 +4350,69 @@ class RepositoryContractTest(unittest.TestCase):
                 for n in found:
                     self.assertEqual(int(n), real,
                                      f"{rel} обещает {n} сценариев, а их {real}")
+
+    # Порог, названный в публичном документе, обязан читаться из того же места, откуда его
+    # берёт инструмент. Пары «константа → как она обязана звучать в тексте»: README описывал
+    # порог общего узла твёрдой шестёркой, когда в коде давно доля с полом.
+    CHANGELOGS = ("CHANGELOG.md", "CHANGELOG.ru.md")
+    QUOTED_CONSTANTS = (
+        ("COUPLING_MIN_TOGETHER", CHANGELOGS, lambda v: [f"≥ {int(v)}"]),
+        ("COUPLING_MIN_SHARE", CHANGELOGS, lambda v: [f"{int(v * 100)}%", f"{int(v * 100)} %"]),
+        ("COUPLING_MASS_PERCENTILE", ("README.md", "README.ru.md") + CHANGELOGS,
+         lambda v: [f"{int(v)}th percentile", f"{int(v)}-го процентиля"]),
+        ("COUPLING_HUB_FLOOR", ("README.md", "README.ru.md") + CHANGELOGS,
+         lambda v: ["three", "трёх", "тремя"]),
+        ("COUPLING_HUB_SHARE", ("README.md", "README.ru.md") + CHANGELOGS,
+         lambda v: [f"a {_ordinal_share(v)}", f"{_ordinal_share_ru(v)} част"]),
+    )
+
+    def test_пороги_из_документов_читаются_из_кода(self):
+        """УЗДА КОРНЯ «число в публичном документе не сверено с источником». Документы
+        описывают отсечки `coupling` словами; если константа в коде изменится, а текст —
+        нет, прогон краснеет. Каждый порог спрашивается у тех файлов, которые его
+        называют: README говорит про отбор, CHANGELOG — про все пороги команды."""
+        source = TOOL.read_text(encoding="utf-8")
+        for name, files, wording in self.QUOTED_CONSTANTS:
+            m = re.search(rf"^{name} = ([0-9.]+)$", source, re.M)
+            self.assertTrue(m, f"{name} не найдена в инструменте")
+            forms = wording(float(m.group(1)))
+            for rel in files:
+                text = (KIT / rel).read_text(encoding="utf-8")
+                with self.subTest(константа=name, файл=rel):
+                    self.assertTrue(any(f in text for f in forms),
+                                    f"{rel} не описывает {name} = {m.group(1)} "
+                                    f"(ожидалось одно из {forms})")
+
+    # Команда, которую документ велит гонять, обязана гоняться в CI: иначе правило
+    # объявлено обязательным, а держит его честное слово автора предложения.
+    GATE_BLOCKS = ("CONTRIBUTING.md",)
+
+    def test_каждые_объявленные_ворота_гоняет_ci(self):
+        """УЗДА КОРНЯ «правило объявлено обязательным, и не держит его ничто». Прогон
+        тестов, валидатор скилла и подпись DCO названы в CONTRIBUTING как обязательные;
+        до этой узды подпись не проверял никто."""
+        workflows = "\n".join(p.read_text(encoding="utf-8")
+                              for p in sorted((KIT / ".github" / "workflows").glob("*.yml")))
+        commands = []
+        for rel in self.GATE_BLOCKS:
+            text = (KIT / rel).read_text(encoding="utf-8")
+            for block in re.findall(r"```sh\n(.*?)```", text, re.S):
+                for line in block.splitlines():
+                    line = re.sub(r"\s+#.*$", "", line).strip()
+                    if line:
+                        commands.append(line)
+        self.assertTrue(commands, "в CONTRIBUTING не нашлось ни одной команды ворот")
+        for cmd in commands:
+            tokens = cmd.split()
+            anchors = [Path(tokens[0]).name]
+            last = tokens[-1]
+            if ".." not in last and not last.startswith("-") and len(tokens) > 1:
+                anchors.append(last)
+            with self.subTest(команда=cmd):
+                for anchor in anchors:
+                    self.assertTrue(anchor in workflows,
+                                    f"CONTRIBUTING велит гонять `{cmd}`, а CI этого не "
+                                    f"делает: в рабочих процессах нет `{anchor}`")
 
     READMES = ("README.md", "README.ru.md")
 
