@@ -36,6 +36,14 @@ SKILL = KIT / "skills" / "finetooth"
 TOOL = Path(os.environ.get("FINETOOTH_TOOL", SKILL / "scripts" / "review.py"))
 
 
+def tracked(*args: str) -> list[str]:
+    """Файлы набора — у git, по пути от корня. Список, разделённый NUL: имя файла может
+    содержать что угодно, кроме NUL, и разбор по строкам на первом же таком имени лжёт."""
+    out = subprocess.run(["git", "-C", str(KIT), "ls-files", "-z", *args],
+                         capture_output=True, text=True, check=True, env=child_env()).stdout
+    return [p for p in out.split("\0") if p]
+
+
 def shell_gate(rel: str) -> Path:
     """Ворота, написанные на оболочке (`dco.sh`, `guard-grep.sh`) — по пути от корня.
 
@@ -1226,8 +1234,11 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("input total          2,002", full)
 
     def test_run_role_отказывает_на_неизвестной_роли(self):
-        out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "nosuch"],
-                             capture_output=True, text=True, env=child_env())
+        """Скрипт берётся через `shell_gate`: этот отказ — предмет мутационной узды ворот
+        на оболочке, а она подменяет скрипт копией через окружение."""
+        out = subprocess.run(
+            ["bash", str(shell_gate("skills/finetooth/assets/run-role.sh")), "H1", "nosuch"],
+            capture_output=True, text=True, env=child_env())
         self.assertEqual(out.returncode, 2)
         self.assertIn("unknown role", out.stderr)
 
@@ -4239,8 +4250,11 @@ class SpendTest(unittest.TestCase):
         env = child_env(PATH=f"{stub_dir}:{os.environ['PATH']}",
                         REVIEW=review, TMPDIR=str(self.s.root / "runs"))
         (self.s.root / "runs").mkdir()
-        out = subprocess.run(["bash", str(SKILL / "assets" / "run-role.sh"), "H1", "hunter"],
-                             cwd=self.s.root, capture_output=True, text=True, env=env)
+        # Через `shell_gate`: отказы этого скрипта — предмет мутационной узды ворот на
+        # оболочке, а она подменяет скрипт копией через окружение.
+        out = subprocess.run(
+            ["bash", str(shell_gate("skills/finetooth/assets/run-role.sh")), "H1", "hunter"],
+            cwd=self.s.root, capture_output=True, text=True, env=env)
         journal = (self.s.root / "docs/review/journal.md")
         return out, journal.read_text(encoding="utf-8") if journal.exists() else ""
 
@@ -5142,17 +5156,26 @@ class GateMutationTest(unittest.TestCase):
         self._all(self._flipped)
 
 
-# Отказ ворот, написанных на оболочке: `exit` с ненулевым кодом — сам по себе или после
-# точки с запятой (`*) echo …; exit 2 ;;`). Ищется ПО ВИДУ, а не списком строк: отказ,
-# дописанный завтра, попадает под правило сам. Отказ вида `${1:?…}` сюда не входит — его
-# печатает сама оболочка, и заглушить его нечем.
-SHELL_REFUSAL = re.compile(r"(?:^|;)(\s*exit\s+)[1-9][0-9]*\b")
+# Отказ ворот, написанных на оболочке: `exit` с ненулевым кодом ТАМ, ГДЕ ОБОЛОЧКА НАЧИНАЕТ
+# КОМАНДУ, — начало строки, `;`, `&&`, `||`, ветка `case` или ключевое слово `then`, `else`,
+# `do`. Ищется ПО ВИДУ, а не списком строк: отказ, дописанный завтра, попадает под правило
+# сам. Пока предшественником считались только начало строки и `;`, `if … ; then exit 3; fi`
+# — обычнейшая форма отказа, и ею написан отказ `run-role.sh` о потерянной записи в
+# дневник — правилом не считался вовсе. Отказ вида `${1:?…}` сюда не входит: его печатает
+# сама оболочка, и заглушить его нечем.
+SHELL_REFUSAL = re.compile(
+    r"(?:^|[;)]|\|\||&&|\b(?:then|else|do))(\s*exit\s+)[1-9][0-9]*\b")
 
 
 def _shell_gates(source: str) -> list[int]:
-    """Номера строк, на которых скрипт-ворота отказывает."""
+    """Номера строк, на которых скрипт-ворота отказывает.
+
+    Строка-комментарий отказом не считается: оба скрипта объясняют свои коды возврата
+    прозой рядом с ними («a path that does not exist is a REFUSAL (exit 2)»), и мутанту
+    из комментария нечего заглушать.
+    """
     return [i for i, line in enumerate(source.splitlines(), 1)
-            if SHELL_REFUSAL.search(line)]
+            if not line.lstrip().startswith("#") and SHELL_REFUSAL.search(line)]
 
 
 def _silence_refusal(line: str) -> str:
@@ -5176,68 +5199,113 @@ class ShellGateMutationTest(unittest.TestCase):
     становится `exit 0`, и названный рядом прогон обязан на такой копии покраснеть.
     """
 
-    # Скрипт-ворота → прогон, который обязан его держать.
-    GATES = {".github/dco.sh": "DcoGateTest",
-             "skills/finetooth/assets/guard-grep.sh": "GuardGrepTest"}
+    # Скрипт-ворота → прогоны, которые обязаны его держать (образцы `-k`, годится и имя
+    # класса, и имя теста). Список не «те скрипты, о которых вспомнили»: он сверяется с
+    # `git ls-files` тестом ниже, и скрипт с отказом, которого здесь нет, роняет прогон,
+    # называя себя. Пока список был написан от руки, `run-role.sh` лежал вне правила, а
+    # четвёртые ворота попали бы туда же молча.
+    GATES = {".github/dco.sh": ("DcoGateTest",),
+             "skills/finetooth/assets/guard-grep.sh": ("GuardGrepTest",),
+             "skills/finetooth/assets/run-role.sh": (
+                 "test_run_role_отказывает_на_неизвестной_роли",
+                 "test_потерянная_запись_в_журнал_не_выдаёт_себя_за_чистый_прогон")}
     # Мутанты ждут не процессора, а своих подпроцессов (git, bash, awk).
     WORKERS = 8
 
-    @staticmethod
-    def _run_suite(rel: str, source: str | None, suite: str) -> subprocess.CompletedProcess:
-        """Прогоняет названный набор на КОПИИ скрипта, подменённой через окружение."""
+    def test_каждые_ворота_на_оболочке_под_правилом(self):
+        """Предмет правила берётся у git, а не из памяти автора. Скрипт без отказов уздой
+        не проверяется — глушить в нём нечего; скрипт с отказом обязан назвать прогон,
+        который эти отказы держит."""
+        with_refusals = [rel for rel in tracked("*.sh")
+                         if _shell_gates((KIT / rel).read_text(encoding="utf-8"))]
+        self.assertTrue(with_refusals, "в наборе не нашлось ни одного скрипта с отказом")
+        self.assertEqual(
+            sorted(set(with_refusals) - set(self.GATES)), [],
+            "скрипт с отказом вне правила: впишите его в GATES вместе с прогоном, который "
+            "его отказы держит, — иначе ворота можно обратить в успех, и прогон зелёный")
+        self.assertEqual(
+            sorted(set(self.GATES) - set(with_refusals)), [],
+            "в GATES назван скрипт, у которого отказов нет: глушить в нём нечего, и "
+            "правило о нём молчит — уберите строку или напишите отказ")
+
+    # Соседи, без которых копия скрипта не работает: `run-role.sh` зовёт `axes.py` путём от
+    # самого себя, и копия в голом временном каталоге падала бы не от мутации, а оттого, что
+    # соседа рядом нет — «прогон покраснел» перестало бы что-либо доказывать. Названо
+    # явно: угадывать, что именно скрипту нужно рядом, значит угадывать молча.
+    NEIGHBOURHOOD = {"skills/finetooth/assets/run-role.sh": "skills/finetooth"}
+
+    @classmethod
+    def _run_suite(cls, rel: str, source: str | None,
+                   suites: tuple[str, ...]) -> subprocess.CompletedProcess:
+        """Прогоняет названные наборы на КОПИИ скрипта, подменённой через окружение."""
         with tempfile.TemporaryDirectory(prefix="finetooth-shell-") as d:
-            copy = Path(d, Path(rel).name)
+            if rel in cls.NEIGHBOURHOOD:
+                near = cls.NEIGHBOURHOOD[rel]
+                shutil.copytree(KIT / near, Path(d, near))
+                copy = Path(d, rel)
+            else:
+                copy = Path(d, Path(rel).name)
             copy.write_text((KIT / rel).read_text(encoding="utf-8")
                             if source is None else source, encoding="utf-8")
             copy.chmod(0o755)  # бит исполнения смотрит тест «скрипт без вызова — не ворота»
+            keys = [a for s in suites for a in ("-k", s)]
             return subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests"),
-                 "-k", suite], cwd=KIT, capture_output=True, text=True,
+                 *keys], cwd=KIT, capture_output=True, text=True,
                 env=child_env(FINETOOTH_SHELL_GATE=f"{rel}={copy}"))
 
     def test_на_целой_копии_прогон_ворот_зелёный(self):
         """Обратная сторона: сама подмена ничего не ломает. Без этого «прогон покраснел»
         доказывало бы не то, что отказ держит тест, а только то, что копия не работает."""
-        for rel, suite in self.GATES.items():
+        for rel, suites in self.GATES.items():
             with self.subTest(ворота=rel):
-                out = self._run_suite(rel, None, suite)
+                out = self._run_suite(rel, None, suites)
                 self.assertEqual(out.returncode, 0,
-                                 f"{rel}: на копии без мутаций `{suite}` обязан быть "
-                                 f"зелёным:\n{out.stderr[-2000:]}")
+                                 f"{rel}: на копии без мутаций `{', '.join(suites)}` обязан "
+                                 f"быть зелёным:\n{out.stderr[-2000:]}")
 
     def test_каждый_отказ_скрипта_держит_тест(self):
         jobs = []
-        for rel, suite in self.GATES.items():
+        for rel, suites in self.GATES.items():
             source = (KIT / rel).read_text(encoding="utf-8")
             lines = source.splitlines(keepends=True)
             refusals = _shell_gates(source)
             with self.subTest(ворота=rel):
                 self.assertTrue(refusals, f"{rel}: не нашлось ни одного отказа")
             for lineno in refusals:
-                jobs.append((rel, lineno, suite,
+                jobs.append((rel, lineno, suites,
                              "".join(lines[:lineno - 1]
                                      + [_silence_refusal(lines[lineno - 1])]
                                      + lines[lineno:])))
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
             codes = list(pool.map(
                 lambda j: self._run_suite(j[0], j[3], j[2]).returncode, jobs))
-        for (rel, lineno, suite, _), code in zip(jobs, codes):
+        for (rel, lineno, suites, _), code in zip(jobs, codes):
             with self.subTest(ворота=f"{rel}:{lineno}"):
                 self.assertNotEqual(
                     code, 0,
-                    f"{rel}:{lineno}: отказ обращён в успех, а `{suite}` зелёный — этот "
-                    f"отказ не держит ни один тест. Напишите тест, который на нём "
-                    f"краснеет: ворота, которые нечем уронить, — не ворота")
+                    f"{rel}:{lineno}: отказ обращён в успех, а `{', '.join(suites)}` "
+                    f"зелёный — этот отказ не держит ни один тест. Напишите тест, который "
+                    f"на нём краснеет: ворота, которые нечем уронить, — не ворота")
 
     # Обе стороны самого правила, на скриптах, которых в наборе нет: отказ узнаётся по
     # виду, а успех и чужой `exit` в тексте — не отказ.
     REFUSAL_SHAPES = {
         "отказ в отдельной строке": ("if [ -z \"$x\" ]; then\n  exit 1\nfi\n", 2),
         "отказ после точки с запятой": ("case $1 in\n*) echo no >&2; exit 2 ;;\nesac\n", 2),
+        # Формы, которых правило не видело: отказ в одну строку с `then`, отказ после
+        # `||` и ветка `case` без echo. Каждой написан не один скрипт ворот.
+        "отказ в одну строку с then": ("if [ -z \"$x\" ]; then exit 3; fi\n", 1),
+        "отказ после else": ("if ok; then :\nelse exit 4\nfi\n", 2),
+        "отказ после ||": ("check || exit 5\n", 1),
+        "отказ веткой case": ("case $1 in\n*) exit 2 ;;\nesac\n", 2),
     }
     INNOCENT_SHAPES = ("[ -n \"$x\" ] || exit 0\n",
                        "# a gate exits 1 when the tree is dirty\n",
-                       "awk 'END { exit(found ? 1 : 0) }' f\n")
+                       "# a path that does not exist is a REFUSAL (exit 2), not a miss\n",
+                       "# if the range is empty; then exit 1 — that is the old wording\n",
+                       "awk 'END { exit(found ? 1 : 0) }' f\n",
+                       "if [ \"$RC\" -ne 0 ]; then exit \"$RC\"; fi\n")
 
     def test_узда_видит_отказ_которого_ещё_нет(self):
         for why, (src, lineno) in self.REFUSAL_SHAPES.items():
@@ -5982,13 +6050,7 @@ jobs:
                                 f"{step!r} не засчитан как прогон `{cmd}`")
 
     READMES = ("README.md", "README.ru.md")
-
-    @staticmethod
-    def _tracked(*args: str) -> list[str]:
-        out = subprocess.run(["git", "-C", str(KIT), "ls-files", "-z", *args],
-                             capture_output=True, text=True, check=True,
-                             env=child_env()).stdout
-        return [p for p in out.split("\0") if p]
+    _tracked = staticmethod(tracked)
 
     def test_опись_набора_называет_все_команды(self):
         """Раздел «Что внутри» — единственное место, где репозиторий перечисляет сам себя;
