@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **6** of 140 records.
+Open: **6** of 146 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **6** of 140 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (2 open / 45)
+## medium (2 open / 47)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -64,8 +64,10 @@ Open: **6** of 140 records.
 | T4-026 | T4 | fixed | `.github/dco.sh:31` | dco.sh feeds git rev-list through process substitution, so an unresolvable range examines no commits and the script prints 'all commits are signed off' with exit 0 (fix review round 1, R1-008) |
 | T4-027 | T4 | deferred | `docs/review/findings.jsonl:7` | The round rewrote the rule field of 16 earlier findings; 10 now name a guard green on the finding's own defect, 3 replacing a correct value (fix review round 2, R2-001) |
 | T4-028 | T4 | fixed | `tests/test_review.py:3309` | BODY_ARGV gives set-finding an id absent from the stand, so it refuses before writing and the write-boundary sweep never reaches its register write (fix review round 2, R2-002) |
+| T4-036 | T4 | deferred | `tests/test_review.py:3462` | The write-boundary sweep drives import, set-finding and restamp from a hand-written REGISTER_WRITERS; backfill and init also write the register and are not reached (fix review round 3, R3-001) |
+| T4-037 | T4 | deferred | `tests/test_review.py:5749` | _runs_command judges one run line at a time, so continue-on-error: true, if: false, set +e or exit 0 on a later line keep the step counted as running a gate it cannot fail (fix review round 3, R3-002) |
 
-## low (4 open / 90)
+## low (4 open / 94)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -159,4 +161,8 @@ Open: **6** of 140 records.
 | T4-033 | T4 | fixed | `docs/review/findings.jsonl:121` | T2-020 is the same glued-paragraph defect this round fixed as T4-022, yet stays open and review check is red on it (fix review round 2, R2-007) |
 | T4-034 | T4 | fixed | `tests/test_review.py:5102` | ShellGateMutationTest.GATES is a hand-written two-script dict, not read from git ls-files; a new shell gate falls outside the rule with nothing failing (fix review round 2, R2-008) |
 | T4-035 | T4 | fixed | `tests/test_review.py:5268` | _sweeps_without_body_check is satisfied by the text argparse_refused anywhere in the function and sees a sweep only when .run's first argument is a bare Name (fix review round 2, R2-009) |
+| T4-038 | T4 | deferred | `tests/test_review.py:5790` | OWN_BLOCK takes any line opening with [ as its own block, so a paragraph opening with a link is missed; LIST_OPENER needs spaces, so a tab after the marker is not a list item (fix review round 3, R3-003) |
+| T4-039 | T4 | deferred | `tests/test_review.py:5458` | The command-sweep rule passes a dead argparse_refused plus an assertion on it, and does not see a sweep over BODY_ARGV or a helper as a sweep at all (fix review round 3, R3-004) |
+| T4-040 | T4 | fixed | `docs/review/journal.md:44` | The journal line of fix round 3 is labelled fixreview round 3 while it records 8 findings closed and cites the fix-3 report (fix review round 3, R3-005) |
+| T4-041 | T4 | fixed | `CHANGELOG.md:113` | Both CHANGELOGs say the second T4 fix review had eight findings, all closed; the register holds nine, T4-027 deferred to #28 (fix review round 3, R3-006) |
 
