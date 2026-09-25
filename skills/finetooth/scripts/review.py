@@ -18,6 +18,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -118,6 +119,12 @@ FIX_AGE_DAYS = 7
 # report, which is prose and has room for them. Without a cap the field drifts
 # into a paragraph — the verifier of the first block pasted its whole
 # verification into it — and the table it feeds stops being a table.
+#
+# The two numbers are the measured ceiling of honest findings, not round figures: over the
+# 24 findings of this kit's own first block the claim runs 82…202 characters (median 178,
+# 90th percentile 194) and the scenario 452…690 (median 586, 90th percentile 665). Both
+# caps sit just above the longest real one — they cut a field that has turned into a
+# report, not a field that is thorough.
 CLAIM_MAX = 220
 SCENARIO_MAX = 700
 ROLES = ["hunter", "verify", "fix", "fixreview"]
@@ -292,20 +299,37 @@ def save_json(path: Path, data) -> None:
 NOT_A_FILE_MODES = ("160000",)
 
 
-def listed(pathspecs: list[str] | None) -> set[str]:
-    """Tracked files — real files, without submodules and symlinks."""
+def index_rows(pathspecs: list[str] | None) -> list[tuple[str, str, str]]:
+    """Index entries matching the pathspecs: (mode, blob sha, path).
+
+    The patterns come from `blocks.json`, which is edited by hand, and git refuses to
+    parse some of them (a typo in the pathspec magic the kit itself invites projects to
+    use for exclusions). A refusal from git used to reach the user as a traceback with
+    exit 1 — which reads as "the state is red", not as "your pattern is malformed".
+    """
     cmd = ["git", "-C", str(ROOT), "ls-files", "--stage", "-z"]
     if pathspecs is not None:
         cmd += ["--"] + pathspecs
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    files = set()
-    for row in out.split("\0"):
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if out.returncode != 0:
+        where = ", ".join(f"`{p}`" for p in pathspecs or []) or "(no patterns)"
+        die(f"git refuses the pattern(s) {where}: {out.stderr.strip() or 'unknown error'}\n"
+            f"The patterns are the `paths`, `ref_paths` and `exclusions` fields of "
+            f"docs/review/blocks.json — fix the one git names and re-run. "
+            f"They are git pathspecs: `src/**/*.ts`, `:(exclude)src/generated/**`.")
+    rows = []
+    for row in out.stdout.split("\0"):
         if not row:
             continue
         head, _, path = row.partition("\t")
-        if head.split(" ", 1)[0] not in NOT_A_FILE_MODES:
-            files.add(path)
-    return files
+        mode, _, rest = head.partition(" ")
+        rows.append((mode, rest.split(" ", 1)[0], path))
+    return rows
+
+
+def listed(pathspecs: list[str] | None) -> set[str]:
+    """Tracked files — real files, without submodules (a symlink is a file here, see above)."""
+    return {path for mode, _, path in index_rows(pathspecs) if mode not in NOT_A_FILE_MODES}
 
 
 def untracked_files(specs: list[str]) -> list[str]:
@@ -334,7 +358,15 @@ def all_files() -> set[str]:
 
 
 def file_sha(rel: str) -> str | None:
-    """Fingerprint of a file's contents — the same one git computes, without extra dependencies."""
+    """Fingerprint of a file's contents — the same one git computes, without extra dependencies.
+
+    Taken from the working tree while the file is laid out there (that is the text a human
+    and an agent actually read), and FROM THE INDEX when it is not. The index branch is not
+    an exotic case: a sparse checkout does not lay out part of the tree at all, and a file
+    deleted without committing is still listed by `ls-files`. Without it such a file
+    contributed only its NAME to the block fingerprint — its contents could be rewritten
+    and `check` would never say "block files changed after the review".
+    """
     if not rel or rel.startswith("("):
         return None
     p = ROOT / rel
@@ -342,11 +374,24 @@ def file_sha(rel: str) -> str | None:
         # `hash-object` would follow the link and hash the target: re-pointing to a file
         # with the same contents would go unnoticed. What is hashed is what the symlink is.
         return "link:" + hashlib.sha1(os.readlink(p).encode("utf-8")).hexdigest()
-    if not p.is_file():
+    if p.is_file():
+        out = subprocess.run(["git", "-C", str(ROOT), "hash-object", "--", rel],
+                             capture_output=True, text=True)
+        return out.stdout.strip() or None
+    # `:(literal)` — the path is a name, not a pattern: a `[handle]` in it is a directory,
+    # not a character class.
+    rows = index_rows([f":(literal){rel}"])
+    entry = next((r for r in rows if r[2] == rel), None)
+    if entry is None or entry[0] in NOT_A_FILE_MODES:
         return None
-    out = subprocess.run(["git", "-C", str(ROOT), "hash-object", "--", rel],
-                         capture_output=True, text=True)
-    return out.stdout.strip() or None
+    if entry[0] == "120000":
+        # A symlink not laid out on disk: the index holds its target as the blob. Hashed
+        # the same way as the laid-out branch, so the fingerprint does not jump when a
+        # sparse checkout lays the link out.
+        blob = subprocess.run(["git", "-C", str(ROOT), "show", f":{rel}"],
+                              capture_output=True, check=False).stdout
+        return "link:" + hashlib.sha1(blob).hexdigest()
+    return entry[1]
 
 
 def block_sha(b: dict) -> str:
@@ -433,8 +478,54 @@ def file_lines(rel: str) -> int | None:
     return out.stdout.count(b"\n") + (0 if out.stdout.endswith(b"\n") or not out.stdout else 1)
 
 
+# What a block definition must carry for the tool to be able to do anything with it. The
+# file is written BY HAND — `setup` leaves `"blocks": []` for a human to fill in — and a
+# missing field used to surface as `KeyError: 'phase'` with exit 1, which reads as "the
+# state is red" rather than "your definition is malformed". Each field is used somewhere
+# with no default: `slug` names the manifest and the reports, `phase` orders the array,
+# `role` and `goal` are pasted into every prompt.
+BLOCK_FIELDS = ("id", "slug", "phase", "title", "role", "goal")
+
+
+def check_definition(defn: dict) -> None:
+    if not isinstance(defn.get("blocks"), list):
+        die(f"docs/review/blocks.json: the `blocks` field must be an array — "
+            f"the example is {SKILL_DIR / 'assets' / 'blocks.example.json'}")
+    seen: set[str] = set()
+    for i, b in enumerate(defn["blocks"], 1):
+        where = f"block {b['id']}" if isinstance(b, dict) and b.get("id") else f"block #{i}"
+        if not isinstance(b, dict):
+            die(f"docs/review/blocks.json: {where} is not an object")
+        for field in BLOCK_FIELDS:
+            value = b.get(field)
+            if field == "phase":
+                if not isinstance(value, int) or isinstance(value, bool):
+                    die(f"docs/review/blocks.json: {where} has no whole-number `phase` — "
+                        f"the phase orders the array (1 cross-cutting, 2 vertical slices, "
+                        f"3 live-system); the example is "
+                        f"{SKILL_DIR / 'assets' / 'blocks.example.json'}")
+                continue
+            if not isinstance(value, str) or not value.strip():
+                die(f"docs/review/blocks.json: {where} has no `{field}` — every block needs "
+                    f"{', '.join(BLOCK_FIELDS)}; the example is "
+                    f"{SKILL_DIR / 'assets' / 'blocks.example.json'}")
+        # `id` and `slug` become file names (docs/review/blocks/<id>-<slug>.md and the
+        # reports): a separator in them would write the manifest outside docs/review/.
+        for field in ("id", "slug"):
+            if "/" in b[field] or "\\" in b[field] or b[field] in (".", ".."):
+                die(f"docs/review/blocks.json: {where} has `{field}` = `{b[field]}` — "
+                    f"it becomes part of a file name under docs/review/, so it cannot "
+                    f"contain a path separator")
+        if b["id"] in seen:
+            die(f"docs/review/blocks.json: two blocks share the id `{b['id']}` — the id is "
+                f"the block's name in the state, in the findings and in the reports")
+        seen.add(b["id"])
+
+
 def blocks() -> dict:
-    return load_json(BLOCKS_FILE)
+    defn = load_json(BLOCKS_FILE)
+    check_definition(defn)
+    return defn
 
 
 def block_index(defn: dict) -> dict[str, dict]:
@@ -465,6 +556,7 @@ def findings() -> list[dict]:
 
 def cmd_init(args) -> int:
     defn = blocks()
+    before = STATE_FILE.read_text(encoding="utf-8") if STATE_FILE.exists() else None
     st = {"review_id": defn["review_id"], "updated_at": now(), "blocks": {}}
     if STATE_FILE.exists() and not args.force:
         st = state()
@@ -477,11 +569,32 @@ def cmd_init(args) -> int:
     known = {b["id"] for b in defn["blocks"]}
     for stale in [k for k in st["blocks"] if k not in known]:
         del st["blocks"][stale]
+    FINDINGS_FILE.touch()
+    # A re-run on an unchanged definition must leave the file alone, to the byte. While
+    # `updated_at` was rewritten unconditionally, a CI gate of the usual shape — regenerate,
+    # then require a clean working tree — went red on a correct state, and the only way to
+    # keep it green was to stop running `init` in CI, which is what the gate existed for.
+    if before is not None and state_text(st, keep=before) == before:
+        print(f"state already matches the definition: {len(st['blocks'])} blocks")
+        return 0
     st["updated_at"] = now()
     save_json(STATE_FILE, st)
-    FINDINGS_FILE.touch()
     print(f"state initialised: {len(st['blocks'])} blocks")
     return 0
+
+
+def state_text(st: dict, keep: str) -> str:
+    """The state as it would be written, with `updated_at` taken from `keep`.
+
+    The stamp says when the state last CHANGED; comparing it against itself would mean
+    nothing, so it is the one field excluded from the comparison.
+    """
+    same = dict(st)
+    try:
+        same["updated_at"] = json.loads(keep).get("updated_at")
+    except (ValueError, AttributeError):
+        return ""
+    return json.dumps(same, ensure_ascii=False, indent=2) + "\n"
 
 
 def cmd_version(args) -> int:
@@ -657,16 +770,54 @@ def coverage_map() -> tuple[dict[str, list[str]], set[str], set[str]]:
 STALE_TREE_DAYS = 7
 
 
+def mainline_ref() -> str | None:
+    """The remote's main line to measure freshness against, or None if git knows of none.
+
+    `refs/remotes/origin/HEAD` is written by `clone` and by `fetch`, but a repository whose
+    remote is not called `origin` has no such ref at all — and neither has a copy with no
+    remote, which is exactly the vendored copy of a neighbouring service the freshness
+    threshold was written for. Every remote is asked, not just `origin`.
+    """
+    remotes = subprocess.run(["git", "-C", str(ROOT), "remote"],
+                             capture_output=True, text=True, check=False).stdout.split()
+    for name in (["origin"] if "origin" in remotes else []) + [r for r in remotes if r != "origin"]:
+        ref = subprocess.run(
+            ["git", "-C", str(ROOT), "symbolic-ref", "--short", f"refs/remotes/{name}/HEAD"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        if ref:
+            return ref
+    return None
+
+
+def freshness_inert() -> str | None:
+    """Why the freshness gate cannot run here — or None when it can.
+
+    A gate whose mechanism is silently inert is not a gate: with no `origin/HEAD` the check
+    used to return None and say nothing, so a tree twelve days behind passed in silence,
+    indistinguishable from a fresh one.
+    """
+    if mainline_ref():
+        return None
+    remotes = subprocess.run(["git", "-C", str(ROOT), "remote"],
+                             capture_output=True, text=True, check=False).stdout.split()
+    if not remotes:
+        return ("no remote in this repository, so the freshness of the tree cannot be "
+                "checked at all — findings from a stale copy describe what is already "
+                "fixed; if this is a copy of somebody else's repository, add it "
+                "(`git remote add origin <url> && git fetch`) before filing findings")
+    return (f"remote(s) {', '.join(remotes)} have no HEAD ref, so the freshness of the tree "
+            f"is not checked — `git remote set-head {remotes[0]} -a` writes it once and the "
+            f"gate starts working")
+
+
 def stale_tree() -> tuple[float, str] | None:
     """How much fresher the server's tip is than ours — in days, if the gap is large.
 
     The network is not touched (`fetch` is the human's business); we look at what git
     already knows.
     """
-    ref = subprocess.run(
-        ["git", "-C", str(ROOT), "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-        capture_output=True, text=True,
-    ).stdout.strip()
+    ref = mainline_ref()
     if not ref:
         return None
 
@@ -796,44 +947,150 @@ def cmd_sizes(args) -> int:
 #   COUPLING_MIN_TOGETHER — a pair counts from this many joint commits (support);
 #   COUPLING_MIN_SHARE    — and when the joint commits are at least this share of the
 #                           commits of one of the two files (confidence, the stronger side);
-#   COUPLING_HUB_BLOCKS   — a file coupled with this many blocks is a shared node (schema,
+#   hub_blocks()          — a file coupled with that many blocks is a shared node (schema,
 #                           dictionary), printed apart: it explains most cross-block pairs
 #                           and says nothing about a specific seam.
 # The mass-commit cutoff is not a constant: it is the 95th percentile of files per commit
 # IN THIS repository, so a codemod or a formatting sweep does not manufacture pairs.
 COUPLING_MIN_TOGETHER = 3
 COUPLING_MIN_SHARE = 0.5
-COUPLING_HUB_BLOCKS = 6
 COUPLING_MASS_PERCENTILE = 95
+# Fewer commits than this and the percentile cannot separate anything at all: its rank,
+# ceil(0.95·n), equals n for every n up to 20. See `mass_cutoff`.
+COUPLING_MIN_SAMPLE = 20
+# The hub threshold is a SHARE of the review, not a fixed count, and both halves are
+# derived rather than chosen. A seam runs between two blocks; a file that reaches a third
+# is no longer describing one seam, which is the floor. The share reproduces the number the
+# kit has run with since the command appeared — 6 on the 59-block review it was measured on
+# (59 × 10% = 5.9) — so a big review keeps the behaviour it was tuned to, while on a review
+# of four blocks a "hub coupled with six of four blocks" cannot exist and the filter would
+# be dead code.
+COUPLING_HUB_SHARE = 0.10
+COUPLING_HUB_FLOOR = 3
+
+
+def hub_blocks(n_blocks: int) -> int:
+    """How many blocks a file must be coupled with to count as a shared node."""
+    return max(COUPLING_HUB_FLOOR, math.ceil(n_blocks * COUPLING_HUB_SHARE))
 COUPLING_FILE = REVIEW / "coupling.tsv"
 
 
+# `\x01` marks the start of a commit record: with `-z` every field is NUL-terminated, so
+# the commit line cannot be told from a path by the separator alone.
+LOG_MARK = "\x01"
+
+
+def log_records(cmd: list[str]) -> list[tuple[str, list[str]]]:
+    """Commit records of a `git log --format=%x01%H … -z` run: (sha, the tokens after it).
+
+    ONE reader for the whole tool, because the trap is not visible from the call site: git
+    terminates the `--format` line with a newline of its own, and `-z` leaves that newline
+    GLUED to the first token of the commit — the stream is `…<sha>\\0` + `\\nsrc/a.ts\\0`.
+    Read without stripping it, a file that comes first in one commit and not in another is
+    counted under two names, and `summary --aged` over-reported the drift of every real
+    history for exactly that reason.
+    """
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    records: list[tuple[str, list[str]]] = []
+    for token in (t for t in out.split("\0") if t):
+        if token.startswith(LOG_MARK):
+            records.append((token[1:], []))
+        elif records:
+            body = records[-1][1]
+            body.append(token[1:] if not body and token.startswith("\n") else token)
+    return records
+
+
 def commit_file_sets(since: str | None = None) -> list[set[str]]:
-    """The set of files touched by every commit on the current history (first parent only:
-    a merge lists everything the branch brought, and that is not a joint change)."""
-    cmd = ["git", "-C", str(ROOT), "log", "--first-parent", "--no-merges", "--name-only",
-           "--format=%x00"]
+    """The set of files touched by every commit on the current history, UNDER TODAY'S NAMES
+    (first parent only: a merge lists everything the branch brought, and that is not a joint
+    change).
+
+    Two things `--name-only` alone gets wrong, both measured on this repository's own
+    history. A rename is printed as the new path only, so a file's churn is cut at every
+    move — `review.py` has 42 first-parent commits and 10 under its current path, and the
+    block that owns it was ranked on a quarter of its real change frequency. And a non-ASCII
+    path comes out C-quoted (`"src/\\320\\274…"`), so it never matches what `ls-files -z`
+    reports and is invisible to `coupling` altogether.
+
+    `--name-status -z -M` answers both: `-z` gives raw NUL-separated paths, and the rename
+    records let the old name be translated into the current one. The log is walked
+    newest-first, so a rename `old → new` seen at a commit renames everything OLDER than it.
+    """
+    cmd = ["git", "-C", str(ROOT), "log", "--first-parent", "--no-merges", "--name-status",
+           "-z", "-M", f"--format={LOG_MARK}%H"]
     if since:
         cmd.append(f"--since={since}")
-    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
     sets: list[set[str]] = []
-    for chunk in out.split("\0"):
-        files = {ln.strip() for ln in chunk.splitlines() if ln.strip()}
-        if files:
-            sets.append(files)
+    # old path -> the name that path bears today
+    alias: dict[str, str] = {}
+    for _sha, tokens in log_records(cmd):
+        current: set[str] = set()
+        renames: list[tuple[str, str]] = []   # (old, new) of the commit being read
+        i = 0
+        while i < len(tokens):
+            status, paths = tokens[i], []
+            take = 2 if status[:1] in ("R", "C") else 1
+            for j in range(1, take + 1):
+                if i + j < len(tokens):
+                    paths.append(tokens[i + j])
+            i += 1 + len(paths)
+            if not paths:
+                continue
+            if take == 2 and len(paths) == 2:
+                old, new = paths
+                renames.append((old, new))
+                current.add(alias.get(new, new))
+            else:
+                p = paths[-1]
+                current.add(alias.get(p, p))
+        if current:
+            sets.append(current)
+        for old, new in renames:
+            alias[old] = alias.get(new, new)
     return sets
 
 
+def quantile(sorted_sizes: list[int], q: float) -> int:
+    """Nearest-rank quantile: the smallest value at or below which at least `q` of the
+    sample lies. Rank ceil(q·n), 1-based — the textbook definition, and the one that
+    actually leaves the top of the distribution outside the cutoff."""
+    return sorted_sizes[max(0, math.ceil(q * len(sorted_sizes)) - 1)]
+
+
 def mass_cutoff(sets: list[set[str]], percentile: int = COUPLING_MASS_PERCENTILE) -> int:
+    """How many files a commit may touch before it stops being a joint change.
+
+    A 95th percentile needs a sample: its rank is ceil(0.95·n), which for n ≤ 20 equals n
+    itself — the cutoff came out EQUAL to the largest commit and not a single one was ever
+    skipped. A young repository is exactly where `coupling` is run first, and its initial
+    commit holds the whole tree: it paired every file with every other, and three formatting
+    sweeps were enough to push those pairs over the threshold.
+
+    Below the sample floor the outlier is found instead by Tukey's fence — Q3 + 1.5·IQR
+    (Tukey, Exploratory Data Analysis, 1977), the standard outlier rule, which asks for no
+    large sample and leaves a history without outliers untouched.
+    """
     sizes = sorted(len(s) for s in sets)
     if not sizes:
         return 0
-    idx = min(len(sizes) - 1, (len(sizes) * percentile) // 100)
-    return max(sizes[idx], 2)
+    if len(sizes) >= COUPLING_MIN_SAMPLE:
+        return max(quantile(sizes, percentile / 100), 2)
+    q1, q3 = quantile(sizes, 0.25), quantile(sizes, 0.75)
+    return max(int(q3 + 1.5 * (q3 - q1)), 2)
+
+
+def mass_basis(sets: list[set[str]]) -> str:
+    """What the cutoff rests on — printed, because a threshold nobody can trace is a guess."""
+    if len(sets) >= COUPLING_MIN_SAMPLE:
+        return f"the {COUPLING_MASS_PERCENTILE}th percentile of this repository"
+    return (f"Tukey's fence over {len(sets)} commits — fewer than {COUPLING_MIN_SAMPLE}, "
+            f"too few for a percentile")
 
 
 def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
-                   min_together: int, min_share: float) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
+                   min_together: int, min_share: float,
+                   hub_at: int) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
     """Cross-block pairs above the thresholds, the hub files, and the number of mass commits skipped."""
     changes: dict[str, int] = {}
     together: dict[tuple[str, str], int] = {}
@@ -858,7 +1115,7 @@ def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: in
         if n >= min_together:
             partners.setdefault(a, set()).update(owned[b])
             partners.setdefault(b, set()).update(owned[a])
-    hubs = {f for f, bl in partners.items() if len(bl) >= COUPLING_HUB_BLOCKS}
+    hubs = {f for f, bl in partners.items() if len(bl) >= hub_at}
     pairs = []
     for (a, b), n in together.items():
         if n < min_together or a in hubs or b in hubs:
@@ -881,11 +1138,13 @@ def cmd_coupling(args) -> int:
         print("no commits in the history — nothing to couple")
         return 0
     cutoff = mass_cutoff(sets)
-    pairs, hubs, skipped = coupling_pairs(owned, sets, cutoff, args.min_together, args.min_share)
-    print(f"commits: {len(sets)}; mass commits skipped (> {cutoff} files, the "
-          f"{COUPLING_MASS_PERCENTILE}th percentile of this repository): {skipped}")
+    hub_at = hub_blocks(len(blocks()["blocks"]))
+    pairs, hubs, skipped = coupling_pairs(owned, sets, cutoff, args.min_together,
+                                          args.min_share, hub_at)
+    print(f"commits: {len(sets)}; mass commits skipped (> {cutoff} files, "
+          f"{mass_basis(sets)}): {skipped}")
     print(f"thresholds: together ≥ {args.min_together}, share ≥ {args.min_share:.0%}, "
-          f"hub = coupled with ≥ {COUPLING_HUB_BLOCKS} blocks\n")
+          f"hub = coupled with ≥ {hub_at} blocks\n")
     if hubs:
         print(f"shared nodes ({len(hubs)}) — coupled with many blocks, excluded from the pairs; "
               f"they belong in ref_paths of everyone who touches them:")
@@ -1016,7 +1275,9 @@ def acceptance_of(b: dict) -> str:
     body = section_body(m.read_text(encoding="utf-8"), ACCEPTANCE_HEADING)
     if not body:
         return "—"
-    text = " ".join(ln.strip() for ln in body if ln.strip())
+    # What the criterion SAYS: a fenced example of a table inside it is not part of the
+    # sentence, and pasted into a one-line cell it is a run of backticks and column bars.
+    text = " ".join(ln.strip() for ln in unquoted(body, "text") if ln.strip())
     text = text.replace("|", "\\|")
     return text if len(text) <= 300 else text[:297] + "…"
 
@@ -1112,7 +1373,20 @@ def cmd_summary(args) -> int:
         i = text.find(SUMMARY_MARK)
         if i < 0:
             die(f"{path.name} carries no machine block — was it written by `summary`?")
-        machine = json.loads(text[i + len(SUMMARY_MARK):text.index(" -->", i)])
+        # The machine block is one line: `<!-- finetooth-summary {…} -->`. Cut at the LAST
+        # `-->` of that line, not at the first ` -->` in the file: a block whose title holds
+        # the marker (`Import --> export pipeline`) is written into the block verbatim, and
+        # cutting at the first one left half a JSON object and a traceback in the user's
+        # face — on the one file that is meant to outlive docs/review/.
+        raw = text[i + len(SUMMARY_MARK):].split("\n", 1)[0].rstrip()
+        if not raw.endswith("-->"):
+            die(f"{path.name}: the machine block is not closed with `-->` — "
+                f"it is generated, not written by hand; regenerate it with `{CLI} summary`")
+        try:
+            machine = json.loads(raw[:-3].strip())
+        except json.JSONDecodeError as exc:
+            die(f"{path.name}: the machine block is not valid JSON ({exc}) — "
+                f"it is generated, not written by hand; regenerate it with `{CLI} summary`")
         base = machine["base"]
         n = subprocess.run(["git", "-C", str(ROOT), "rev-list", "--count", f"{base}..HEAD"],
                            capture_output=True, text=True, check=False).stdout.strip() or "0"
@@ -1121,13 +1395,13 @@ def cmd_summary(args) -> int:
         for bid, info in machine["blocks"].items():
             if not info.get("paths"):
                 continue
-            log = subprocess.run(["git", "-C", str(ROOT), "log", "--format=%H", "--name-only",
-                                  f"{base}..HEAD", "--", *info["paths"]],
-                                 capture_output=True, text=True, check=False).stdout
-            commits = {ln for ln in log.splitlines() if re.fullmatch(r"[0-9a-f]{40}", ln)}
-            files = {ln for ln in log.splitlines() if ln and not re.fullmatch(r"[0-9a-f]{40}", ln)}
-            if commits:
-                drift.append((len(commits), len(files), bid, info.get("title", "")))
+            # `-z` and the commit marker: without them a non-ASCII path comes out C-quoted
+            # and the same file is counted under two names.
+            records = log_records(["git", "-C", str(ROOT), "log", f"--format={LOG_MARK}%H",
+                                   "--name-only", "-z", f"{base}..HEAD", "--", *info["paths"]])
+            files = {p for _sha, paths in records for p in paths}
+            if records:
+                drift.append((len(records), len(files), bid, info.get("title", "")))
         if not drift:
             print(T("aged_none"))
             return 0
@@ -1147,6 +1421,137 @@ def cmd_summary(args) -> int:
 
 # ------------------------------------------------------------------------- prompt
 
+# A fence opens with three or more backticks OR three or more tildes and closes with at
+# least as many marks of the SAME character and nothing after them. Both forms are ordinary
+# markdown, and a report writes `~~~` exactly when its example itself contains backticks —
+# which an example of this kit's own report always does.
+# ONE tracker for the whole tool: while every parser had its own, `demote` pushed a heading
+# inside a tilde fence down a level, and `section_body` cut the manifest's hypotheses short
+# at a `# comment` inside one — two of four hypotheses silently vanished from the count and
+# from the fingerprint.
+FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})(.*)$")
+# A fence is one of FOUR ways markdown quotes an example, and a report uses all four: the
+# fence was closed first, and a hypothesis verdict restated as an indented example or
+# quoted from the template with `>` still closed a hypothesis nobody had answered.
+# A blockquote at any indentation — inside a list item a quote is indented with it.
+BLOCKQUOTE = re.compile(r"^\s*>")
+# A list marker, so that a nested item is not read as indented code: inside a list item
+# the code column moves to the item's own content column, four spaces further in
+# (CommonMark 4.4 and 5.2). Without this, every sub-item of a hypothesis became an example.
+LIST_OPEN = re.compile(r"^(\s*)([-*+]|\d+[.)])(\s+)")
+# Four spaces past the enclosing content column — the CommonMark indented code block.
+CODE_INDENT = 4
+# A fence OPENS at any indentation and CLOSES only within three spaces of the column it
+# opened at. Measured from the list's content column, an opening fence four spaces in was
+# not seen and its closing fence opened a new one that swallowed a manifest (round 3);
+# closing at any indentation let an indented example INSIDE a fence close it and leak its
+# verdicts as the report's own (round 4). Anchoring the close to the opener closes both.
+FENCE_SLACK = CODE_INDENT - 1
+COMMENT_OPEN, COMMENT_CLOSE = "<!--", "-->"
+
+
+def quoted_lines(lines: list[str], unclosed: str = "text") -> list[bool]:
+    """For every line: is it QUOTED rather than said — an example, not the report's answer.
+
+    Four forms, all of them ordinary markdown and all of them written by real reports: a
+    fenced block, an indented code block, a blockquote, an HTML comment. ONE tracker for
+    the whole tool: while every parser had its own idea of what a code block is, `demote`
+    pushed a heading inside a tilde fence down a level and `section_body` cut the manifest's
+    hypotheses short at a `# comment` inside one.
+
+    `unclosed` says how to read a fence that never closes: "text" for what DEFINES the work
+    (manifests — more hypotheses, more to answer), "quoted" for what REPORTS it (reports —
+    fewer verdicts, more to answer). Both directions make the gate stricter, never looser.
+
+    A fence opens at any indentation and closes near the column it opened at (see FENCE). An indented code block cannot
+    interrupt a paragraph (a blank line must come first) and it measures its indent from the
+    content column of the list item it sits in — otherwise a hypothesis's own
+    sub-items, which is how a report writes its proof, would all be read as examples and
+    the gate would refuse an honest report.
+    """
+    if unclosed not in ("text", "quoted"):
+        raise ValueError(f"unclosed must be 'text' or 'quoted', not {unclosed!r}")
+    return _quoted_pass(lines, frozenset(), unclosed)
+
+
+def _quoted_pass(lines: list[str], not_fences: frozenset, unclosed: str) -> list[bool]:
+    out: list[bool] = []
+    in_comment = False
+    content_col = 0      # where the innermost open list item's content begins
+    prev_blank = True    # an indented code block may only start after a blank line
+    char, width, open_col, open_at = "", 0, 0, -1   # the open fence
+    for at, ln in enumerate(lines):
+        m = FENCE.match(ln) if at not in not_fences else None
+        indent = len(m.group(1)) if m else len(ln) - len(ln.lstrip())
+        if char:
+            out.append(True)
+            prev_blank = False
+            # The closing fence carries no info string; `~~~` does not close ``` and back.
+            if (m and m.group(2)[0] == char and len(m.group(2)) >= width
+                    and not m.group(3).strip() and indent <= open_col + FENCE_SLACK):
+                char, width = "", 0
+            continue
+        if m:
+            char, width, open_col, open_at = m.group(2)[0], len(m.group(2)), indent, at
+            out.append(True)
+            prev_blank = False
+            if indent == 0:
+                content_col = 0     # a fence at the margin closes every open list
+            continue
+        rest = ln
+        if in_comment:
+            _, sep, after = ln.partition(COMMENT_CLOSE)
+            in_comment = not sep
+            rest = after if sep else ""
+        while not in_comment and COMMENT_OPEN in rest:
+            before, _, tail = rest.partition(COMMENT_OPEN)
+            _, sep, after = tail.partition(COMMENT_CLOSE)
+            in_comment = not sep
+            rest = before + after if sep else before
+        # What is left of the line outside the comments decides: a line that is nothing but
+        # a comment is a quotation, a sentence with a note after it is still a sentence.
+        if rest != ln and not rest.strip():
+            out.append(True)
+            prev_blank = False
+            continue
+        if not ln.strip():
+            out.append(False)
+            prev_blank = True
+            continue
+        if BLOCKQUOTE.match(ln):
+            out.append(True)
+            prev_blank = False
+            continue
+        if prev_blank and indent >= content_col + CODE_INDENT:
+            out.append(True)    # indented code: the list context it sits in is untouched
+            continue
+        out.append(False)
+        prev_blank = False
+        mark = LIST_OPEN.match(ln)
+        if mark:
+            content_col = len(mark.group(0))
+        elif indent == 0:
+            content_col = 0     # a paragraph at the margin closes every open list
+    if char and unclosed == "text":
+        # A fence that never closes: what it means depends on WHAT is read, and the rule
+        # is the same for both — in doubt, the gate goes red. In a MANIFEST it is read as
+        # text: swallowed, the remaining hypotheses vanished and `check` went green on one
+        # of four (fix review round 4). In a REPORT it stays a quotation: read as text, the
+        # template's skeleton inside it closed every hypothesis (fix review round 5).
+        return _quoted_pass(lines, not_fences | {open_at}, unclosed)
+    return out
+
+
+def unquoted(lines: list[str], unclosed: str = "quoted") -> list[str]:
+    """The lines a text SAYS — its quotations dropped.
+
+    A gate that reads a report's SUBSTANCE must read the report's own words. A verifier
+    report whose whole body was the template's example inside a ```markdown fence — nothing
+    verified, nothing stated — satisfied every substance gate, and the block stayed
+    `verified` with `check` printing "review state is consistent".
+    """
+    return [ln for ln, quote in zip(lines, quoted_lines(lines, unclosed)) if not quote]
+
 
 def demote(md: str) -> str:
     """Push an embedded document one heading level down.
@@ -1156,16 +1561,21 @@ def demote(md: str) -> str:
     a document with two top levels. Fenced code is left untouched so a `#`
     comment inside an example stays a comment.
     """
-    out, fenced = [], False
-    for line in md.split("\n"):
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced and line.startswith("#"):
+    lines = md.split("\n")
+    out = []
+    for line, inside in zip(lines, quoted_lines(lines)):
+        if not inside and line.startswith("#"):
             line = "#" + line
         out.append(line)
     return "\n".join(out)
 
 
+# Where a list of context files stops being a list and becomes a wall. Measured, not
+# guessed: a path in a real tree is about 31 characters on average (this repository; the
+# 90th percentile is 45), so 80 of them are ~2.5 thousand characters, about 600 tokens —
+# the last size that still reads as an enumeration next to the manifest and the invariants
+# on one screen. Above it the patterns say the same thing in four lines, and the agent
+# expands the part it needs with `git ls-files`.
 REF_LIST_LIMIT = 80
 
 
@@ -1339,12 +1749,17 @@ def cmd_prompt(args) -> int:
         "{{GATES}}": "\n".join(f"- `{g}`" for g in defn.get("gates", []))
         or T("gates_missing"),
     }
-    for k, v in subs.items():
-        body = body.replace(k, v)
     # An unfilled substitution would reach the agent as the text "{{SOMETHING}}" — and it
-    # would read it as an assignment. Checked BEFORE the diff is pasted: curly braces are
-    # legal in someone else's code.
-    left = sorted(set(PLACEHOLDER.findall(body)) - {"{{DIFF}}"})
+    # would read it as an assignment. Checked on the TEMPLATE, not on the assembled text:
+    # substituted content (a finding about a template, a manifest quoting one) legally
+    # carries "{{FILES}}" as a quotation, and the assembled check refused the fix prompt
+    # of the kit's own review for exactly that.
+    left = sorted(set(PLACEHOLDER.findall(body)) - set(subs) - {"{{DIFF}}"})
+    # ONE pass over the template, not one pass per substitution: a manifest that writes
+    # about the placeholders ("the template uses {{FILES}}") had its own prose rewritten
+    # with the file list, because MANIFEST was substituted before FILES. What the template
+    # asks for is substituted; what the substituted text contains is quotation.
+    body = PLACEHOLDER.sub(lambda m: subs.get(m.group(0), m.group(0)), body)
     if left:
         die(f"template {template.name} has substitutions left without a value: {', '.join(left)}")
     if args.role == "fixreview":
@@ -1394,9 +1809,17 @@ def cmd_import(args) -> int:
         if not line or line.startswith("#"):
             continue
         try:
-            incoming.append(json.loads(line))
+            row = json.loads(line)
         except json.JSONDecodeError as exc:
             die(f"{src.name} line {n}: not JSON — {exc}")
+        # The limits `check` holds are held here too: a draft that `import` accepted and
+        # `check` then refused made every later gate red on a row nobody could fix through
+        # the tool (the kit's own review hit it three times).
+        for field, limit in (("claim", CLAIM_MAX), ("scenario", SCENARIO_MAX)):
+            if isinstance(row, dict) and len(str(row.get(field) or "")) > limit:
+                die(f"{src.name} line {n}: {field} is {len(str(row[field]))} characters against a "
+                    f"limit of {limit} — shorten it in the draft; the evidence belongs in the report")
+        incoming.append(row)
 
     existing = findings()
     if args.append:
@@ -1459,10 +1882,31 @@ def cmd_import(args) -> int:
 
     kept = [f for f in existing if f.get("block") != args.block]
     before = {f["id"]: f for f in mine if f.get("id")}
+    # Ids used to be handed out by POSITION in the file, so a finding inserted ABOVE the
+    # numbered rows took an id that already existed: the register then held two H1-001,
+    # `check` said "duplicate id" and named no way out, and `set-finding` reached only the
+    # first of them. A number is taken from the free ones — never from the count of rows,
+    # and never one that a record of this block already carries, even a retired one: that
+    # id is quoted in the journal, in a commit message and in another block's report.
+    taken = {f["id"] for f in incoming if f.get("id")} | set(before)
+    seen_here: set[str] = set()
+    for f in incoming:
+        fid = f.get("id")
+        if fid and fid in seen_here:
+            die(f"{src.name}: two rows carry the id {fid} — an id is unique within a block; "
+                f"delete the id field of the row that is new and the import will hand out a "
+                f"free number")
+        if fid:
+            seen_here.add(fid)
+    numbered = [int(m.group(1)) for fid in taken
+                if (m := re.fullmatch(rf"{re.escape(args.block)}-(\d+)", fid))]
+    next_n = max(numbered, default=0) + 1
     width = 3
-    for i, f in enumerate(incoming, 1):
+    for f in incoming:
         f.setdefault("block", args.block)
-        f["id"] = f.get("id") or f"{args.block}-{i:0{width}d}"
+        if not f.get("id"):
+            f["id"] = f"{args.block}-{next_n:0{width}d}"
+            next_n += 1
         f.setdefault("status", "open")
         f.setdefault("confidence", "plausible")
         f.setdefault("fix_commit", None)
@@ -1707,6 +2151,14 @@ def cmd_findings(args) -> int:
 # to catch what is plainly impossible.
 READABLE_LINES = 6000  # default; overridden by the `readable_lines` field in blocks.json
 
+# Below this a manifest holds nothing but its own headings. Measured on the scaffold the
+# kit itself hands out: the six headings of `assets/manifest.example.md`, with the title,
+# come to 171 characters, and a manifest copied and not filled in is exactly that file with
+# the text deleted. 200 is the first round number above it, so the gate catches the empty
+# copy and not a terse real one — the shortest real manifest measured here is 4 743
+# characters, more than twenty times the bound.
+MANIFEST_MIN_CHARS = 200
+
 
 def readable_lines() -> int:
     """How many lines a block can honestly hand an agent in one session.
@@ -1731,18 +2183,16 @@ def block_lines(pathspecs: list[str]) -> tuple[int, int]:
     lines, of which 19 181 belonged to `package-lock.json`, excluded back when the blocks
     were set up. The number came out three times the real one and demanded cutting what
     nobody reads anyway. What must be counted is exactly the set the block gets to work on.
+
+    ⚠️ COUNTED BY `file_lines`, not by a second counter of its own. Its own `open()` read
+    the disk — so a file living in the index but not laid out (sparse checkout, deleted
+    without committing) dropped out of the count, and a binary file was counted as lines,
+    which is exactly what `file_lines` was taught not to do.
     """
     defn = blocks()
     excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
     files = git_files(pathspecs) - excluded
-    total = 0
-    for f in files:
-        try:
-            with open(ROOT / f, encoding="utf-8", errors="ignore") as fh:
-                total += sum(1 for _ in fh)
-        except OSError:
-            pass
-    return len(files), total
+    return len(files), sum(file_lines(f) or 0 for f in files)
 
 
 def cmd_restamp(args) -> int:
@@ -1759,7 +2209,13 @@ def cmd_restamp(args) -> int:
     s = st["blocks"].get(args.block, {})
     if s.get("status") not in POST_VERIFY:
         die(f"{args.block} is in status {s.get('status', 'todo')} — nothing to stamp")
+    was = {k: s.get(k) for k in ("reviewed_sha", "refs_sha", "hypotheses_sha")}
     stamp(idx[args.block], s)
+    # Nothing moved — nothing to record. A stamp re-taken over the same fingerprints would
+    # dirty state.json on a correct state, the same way `init` used to.
+    if all(was[k] == s.get(k) for k in was) and all(was.values()):
+        print(f"{args.block}: fingerprints already match the current files — nothing to stamp")
+        return 0
     s["restamped_at"] = now()
     st["updated_at"] = now()
     save_json(STATE_FILE, st)
@@ -1786,6 +2242,9 @@ def restamp_finding(fid: str) -> int:
     sha = file_sha(f.get("file", ""))
     if not sha:
         die(f"file {f.get('file')} does not exist — a finding is moved (`{CLI} set-finding`), not stamped")
+    if f.get("code_sha") == sha:
+        print(f"{fid}: the fingerprint already matches {f.get('file')} — nothing to stamp")
+        return 0
     f["code_sha"] = sha
     f["restamped_at"] = now()
     with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
@@ -1982,7 +2441,16 @@ VERDICT_WORDS = (
 FINDING_VERDICT = re.compile(
     r"\b(confirmed|plausible|rejected|duplicate)\b|подтвержд|отверг|опроверг|дубл",
     re.IGNORECASE)
-COVERAGE_VERDICT = re.compile(r"охват|полн(ый|ое|ая)\b|неполн|coverage|complete|incomplete", re.IGNORECASE)
+# A verdict on COVERAGE, not on the work: "complete" and "полный" say how much of the block
+# was reviewed, while "I completed the check" and "проверка завершена" say only that the
+# agent stopped. The `\b` after `complete` is the whole difference between the two — without
+# it a report whose entire body was "I completed the check of every finding; nothing was
+# confirmed" satisfied the gate that exists to demand a statement about what was left
+# unreviewed. The Russian side takes every form of `полн-` (полный, полностью, полнота) for
+# the same reason the English side takes `completely`: the adjective and the adverb are the
+# same statement, and matching only the adjective refused an honest report.
+COVERAGE_VERDICT = re.compile(
+    r"охват|\bполн\w*|\bнеполн\w*|coverage|complete(ly)?\b|incomplete", re.IGNORECASE)
 # The template line "Complete / incomplete — …", left as is, is a question, not a decision.
 COVERAGE_PLACEHOLDER = re.compile(r"полн\w*\s*/\s*неполн|complete\s*/\s*incomplete", re.IGNORECASE)
 
@@ -1998,23 +2466,51 @@ def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
 
     The file's existence proved only that the file was created: an empty `*.verify.md`
     alongside a full hunter report moved the block to `verified` without an independent check.
+    A file full of quotations is that same empty file: the template's example restated
+    inside a fence verifies nothing and states nothing, so what the gate weighs is what the
+    report SAYS — headings and quotations are not it.
     """
-    body = [ln for ln in rep.read_text(encoding="utf-8").splitlines()
+    body = [ln for ln in unquoted(rep.read_text(encoding="utf-8").splitlines())
             if ln.strip() and not ln.lstrip().startswith("#")]
     if not body:
         return (f"verifier report {rep.name} is empty — there is a file, there is no verification; "
-                f"each finding needs a verdict, the block needs a coverage state")
+                f"each finding needs a verdict, the block needs a coverage state, and both as "
+                f"ordinary lines: a fenced, indented, `>`-quoted or commented-out block is an example")
     text = "\n".join(body)
     if has_findings and not FINDING_VERDICT.search(text):
         return (f"verifier report {rep.name} has no verdict on any finding — "
-                f"confirmed / plausible / rejected / duplicate with reasoning")
+                f"confirmed / plausible / rejected / duplicate with reasoning, as an "
+                f"ordinary line and not inside a fence or a quotation")
     # Coverage is a separate question, not replaced by verdicts: what was found says
     # nothing about what remained unreviewed.
     if not COVERAGE_VERDICT.search(
             "\n".join(ln for ln in body if not COVERAGE_PLACEHOLDER.search(ln))):
         return (f"verifier report {rep.name} has no coverage verdict — is it complete and "
-                f"what is left")
+                f"what is left, as an ordinary line and not inside a fence or a quotation")
     return None
+
+
+VERDICT_VOCABULARY = {w for w, _ in VERDICT_WORDS}
+
+
+CODE_SPAN = re.compile(r"`+([^`]*)`+")
+
+def unquote_verdicts(line: str) -> str:
+    """Blank out code spans that QUOTE a verdict word instead of giving one.
+
+    A report writes about its own vocabulary: "the report says `not checked` but I did check
+    it", "`checked` is only a code span here", "the `n/a` token in a path is handled". Every
+    one of those scored the quoted word as the line's verdict, and the wrong answer reached
+    `hypotheses`, `check` and the summary with no gate going red.
+
+    Only a span whose WHOLE content is a vocabulary word is blanked. A span that carries a
+    whole clause is prose in monospace — `` `H1.1 — checked: proven by running it` `` is how
+    a real report writes its verdicts, and it must keep working.
+    """
+    def one(m: re.Match) -> str:
+        inner = m.group(1).strip().strip(".,:;!?").strip().lower()
+        return " " if inner in VERDICT_VOCABULARY else m.group(0)
+    return CODE_SPAN.sub(one, line)
 
 
 def line_verdict(line: str) -> str | None:
@@ -2025,7 +2521,7 @@ def line_verdict(line: str) -> str | None:
     declared the hypothesis unchecked. The negation is not lost either: the negated form
     ("not checked") starts earlier than the bare word ("checked") nested inside it.
     """
-    low = line.lower()
+    low = unquote_verdicts(line).lower()
     hits = [(i, v) for w, v in VERDICT_WORDS if (i := verdict_word_at(low, w)) >= 0]
     return min(hits)[1] if hits else None
 
@@ -2039,17 +2535,15 @@ def verdict_word_at(low: str, word: str) -> int:
     return low.find(word)
 
 
-def section_body(md: str, heading: re.Pattern) -> list[str] | None:
+def section_body(md: str, heading: re.Pattern, unclosed: str = "text") -> list[str] | None:
     """The lines of the section under the first matching heading (subheadings are content too).
 
     None — there is no such section at all; an empty list — the heading is there, nothing under it.
     """
     body: list[str] | None = None
     depth = 0
-    fenced = False
-    for line in md.split("\n"):
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
+    lines = md.split("\n")
+    for line, fenced in zip(lines, quoted_lines(lines, unclosed)):
         if not fenced and line.startswith("#"):
             level = len(line) - len(line.lstrip("#"))
             if body is None:
@@ -2072,11 +2566,8 @@ def section_items_full(md: str, heading: re.Pattern) -> list[str]:
     """
     lines = section_body(md, heading) or []
     marks = []
-    fenced = False
-    for i, ln in enumerate(lines):
-        if ln.lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced and LIST_ITEM.match(ln):
+    for i, (ln, fenced) in enumerate(zip(lines, quoted_lines(lines))):
+        if not fenced and LIST_ITEM.match(ln):
             # TOP-level items are counted: a nested list under a hypothesis is its details,
             # not a new hypothesis, and a list line inside a code block is an example.
             marks.append((i, len(ln) - len(ln.lstrip())))
@@ -2134,7 +2625,15 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     hypotheses_depth = 0
     table_about_hypotheses = False
     prev_was_row = False
-    for line in text.split("\n"):
+    lines = text.split("\n")
+    for line, fenced in zip(lines, quoted_lines(lines, "quoted")):
+        # A fenced block is an EXAMPLE, not an answer. The role template hands the agent the
+        # shape of a verdict line inside a ```markdown fence, with the block id already
+        # substituted; a report that quotes that skeleton and answers nothing closed every
+        # hypothesis of the block and `check` printed "review state is consistent".
+        if fenced:
+            prev_was_row = False
+            continue
         if line.startswith("#"):
             level = len(line) - len(line.lstrip("#"))
             if HYPOTHESIS_HEADING.match(line):
@@ -2143,12 +2642,13 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
                 in_hypotheses = False
         is_row = line.lstrip().startswith("|")
         if is_row and not prev_was_row:
-            # The first row of a table says what the numbers in the first column are: a
-            # header naming hypotheses, or no header at all (a bare "| 1 | … | verdict |"
-            # summary). An acceptance table ("| # | place | constraint | ✓ |") is numbered
-            # too, and its rows counted as verdicts on hypotheses 4 and 5.
-            first = line.strip().strip("|").split("|")[0].strip()
-            table_about_hypotheses = bool(HYPOTHESIS_WORD.search(line)) or first.isdigit()
+            # A table counts as a table of hypothesis verdicts only when it SAYS SO — its
+            # first row names hypotheses. Reading a bare first data row ("| 1 | … |") as a
+            # header too made every numbered table in the report a verdict table: the
+            # gate→test→mutation table the acceptance criterion itself asks for closed
+            # hypotheses 1 and 2 with the verdicts of rows 1 and 2. A header-less summary of
+            # hypotheses is still read — under the "Hypotheses" heading, where it belongs.
+            table_about_hypotheses = bool(HYPOTHESIS_WORD.search(line))
         prev_was_row = is_row
         verdict = line_verdict(line)
         if not verdict:
@@ -2215,6 +2715,43 @@ def cmd_hypotheses(args) -> int:
 # --------------------------------------------------------------------------- check
 
 
+# The header lines of a unified diff — the only place where `a/` and `b/` in front of a
+# path mean "the same file before and after" rather than a directory called `a`. A report
+# pastes such a header inside a list item ("- --- a/src/api.ts"), so the marker is looked
+# for anywhere on the line and the prefix is read only after it.
+DIFF_HEADER = re.compile(r"(?:^|\s)(?:diff --git|---|\+\+\+)\s")
+
+
+def names_file(text: str, rel: str) -> bool:
+    """Does the text name THIS path — not a longer one that merely contains it?
+
+    A plain `in` closed the gate for `src/api.ts` as soon as the report mentioned
+    `src/api.ts.snap`; the same held for a `.map`, a `.test.ts` next to a `.ts` and an
+    `index.ts` under a longer directory. The occurrence must be a whole path: what follows
+    may not continue the name, and what precedes may not be the rest of a longer one.
+    A trailing period ("I read src/api.ts.") is a sentence, not a longer path.
+
+    Two prefixes are the SAME path written another way and are accepted: `./`, which an
+    agent writes out of habit, and the `a/`, `b/` of a pasted diff header. Refusing them
+    left an honest, complete report with no repair but rewriting its paths — and a gate
+    that stops accepting honest reports is discovered by the person whose work it refuses.
+    They are accepted only where the prefix itself starts a path, so `docs/src/api.ts`
+    and `lib/a/src/api.ts` still name files of their own.
+
+    `a/` and `b/` are ALSO ordinary directory names, and they are read as a diff prefix
+    only on a diff header line, where they cannot mean anything else. Accepted everywhere,
+    they closed the gate for a file nobody had read: a block owning both `src/api.ts` and
+    `a/src/api.ts` passed on a report that named only the second.
+    """
+    tail = r"(?![A-Za-z0-9_-]|[./][A-Za-z0-9_-])"
+    said = re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?" + re.escape(rel) + tail)
+    if said.search(text):
+        return True
+    diffed = re.compile(r"(?<![A-Za-z0-9_./-])[ab]/" + re.escape(rel) + tail)
+    return any(diffed.search(line, m.end())
+               for line in text.split("\n") if (m := DIFF_HEADER.search(line)))
+
+
 def cmd_check(args) -> int:
     defn, st, rows = blocks(), state(), findings()
     idx = block_index(defn)
@@ -2260,7 +2797,7 @@ def cmd_check(args) -> int:
         manifest = manifest_path(b)
         if not manifest.exists():
             problems.append(f"{bid}: no manifest {manifest.relative_to(ROOT)}")
-        elif len(manifest.read_text(encoding="utf-8").strip()) < 200:
+        elif len(manifest.read_text(encoding="utf-8").strip()) < MANIFEST_MIN_CHARS:
             # An empty file passed the "manifest exists" check.
             problems.append(f"{bid}: manifest {manifest.relative_to(ROOT)} is empty or nearly empty")
 
@@ -2360,14 +2897,18 @@ def cmd_check(args) -> int:
             # neighbouring project pointed at a commit that did not touch the named file at
             # all: the fix was made in another module, and the record stayed as it was. By
             # hand nobody checks that — and nobody did for half a year.
+            # `-z`: without it git C-quotes a non-ASCII path (`"src/\320\274…"`) and no
+            # finding on a Cyrillic-named file could ever be marked fixed — the gate stayed
+            # red on a truthful state for ever. Paths are compared as git prints them with
+            # `ls-files -z`, that is raw and NUL-separated.
             touched = subprocess.run(
-                ["git", "-C", str(ROOT), "show", "--name-only", "--format=", f["fix_commit"]],
+                ["git", "-C", str(ROOT), "show", "--name-only", "-z", "--format=", f["fix_commit"]],
                 capture_output=True, text=True,
             )
             if touched.returncode != 0:
                 problems.append(f"finding {fid}: commit {f['fix_commit']} is not in the repository")
             elif f.get("file") and not ({f["file"], *f.get("fixed_in", [])}
-                                        & set(touched.stdout.splitlines())):
+                                        & {p for p in touched.stdout.split("\0") if p}):
                 problems.append(
                     f"finding {fid}: commit {f['fix_commit']} does not touch {f['file']} — "
                     f"either the mark belongs to another finding, or the fix was made elsewhere: "
@@ -2409,7 +2950,17 @@ def cmd_check(args) -> int:
         # finding that is still open. A fixed one cites the file as it was before the fix;
         # after it the file legitimately shrinks (the first migrated registry: three fixed
         # findings, all flagged).
-        if f.get("status") in ("open", "deferred") and f.get("line") and isinstance(f["line"], int):
+        # The type is part of the vocabulary, like severity and status: a hand-written draft
+        # says `"line": "2137"` as easily as `2137`, `import` copies the field through
+        # untouched, findings.md renders both the same — and the gate below used to skip the
+        # quoted one silently, which is worse than having no gate.
+        if f.get("line") is not None and (isinstance(f["line"], bool)
+                                          or not isinstance(f["line"], int)):
+            problems.append(
+                f"finding {fid}: line={f['line']!r} is not a number — write the line as a "
+                f"number without quotes, or leave the field out"
+            )
+        elif f.get("status") in ("open", "deferred") and f.get("line"):
             n = file_lines(f.get("file", ""))
             if n is not None and f["line"] > n:
                 problems.append(
@@ -2593,7 +3144,7 @@ def cmd_check(args) -> int:
                 rp.read_text(encoding="utf-8", errors="ignore")
                 for rp in (REVIEW / "reports").glob(f"{b['id']}-*.md")
             )
-            missing = [f for f in owned if f not in text]
+            missing = [f for f in owned if not names_file(text, f)]
             if missing:
                 problems.append(
                     f"{b['id']}: {len(missing)} of {len(owned)} block files are not named by full "
@@ -2624,18 +3175,23 @@ def cmd_check(args) -> int:
             continue
         hunter = REVIEW / "reports" / f"{b['id']}-{b['slug']}.hunter.md"
         if hunter.exists():
-            body = section_body(hunter.read_text(encoding="utf-8"), LIMITS_HEADING)
+            body = section_body(hunter.read_text(encoding="utf-8"), LIMITS_HEADING, "quoted")
             if body is None:
                 problems.append(
-                    f"{b['id']}: the hunter report has no 'Coverage limits' section — "
-                    f"what was deliberately not read and why"
+                    f"{b['id']}: the hunter report has no 'Coverage limits' section outside a "
+                    f"fence or a quotation — what was deliberately not read and why, as the "
+                    f"report's own heading (a heading inside an example, or after a fence that "
+                    f"never closes, is part of the example)"
                 )
-            elif not [ln for ln in body if ln.strip() and not LIMITS_PLACEHOLDER.search(ln)]:
+            elif not [ln for ln in unquoted(body)
+                      if ln.strip() and not LIMITS_PLACEHOLDER.search(ln)]:
                 # A heading without text is the same silence as no heading: neither what
-                # was not reviewed is named, nor that there is nothing of the kind.
+                # was not reviewed is named, nor that there is nothing of the kind. A
+                # section holding only the template's fenced example is that same silence.
                 problems.append(
                     f"{b['id']}: the 'Coverage limits' section of the hunter report is empty — "
-                    f"name what was not read or say outright that there is nothing"
+                    f"name what was not read or say outright that there is nothing, as an "
+                    f"ordinary line and not inside a fence or a quotation"
                 )
 
     # A defect class that repeated three times is closed by a guard, not by three fixes:
@@ -2660,6 +3216,8 @@ def cmd_check(args) -> int:
     # A tree that fell behind the server shows the fixed as broken. The findings of such a
     # pass describe code that no longer exists, and "confirmed by execution" sounds just as
     # convincing as on a fresh tree.
+    if inert := freshness_inert():
+        warnings.append(f"the freshness gate is not running: {inert}")
     stale = stale_tree()
     if stale:
         days, ref = stale

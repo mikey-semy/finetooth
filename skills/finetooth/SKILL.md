@@ -160,4 +160,6 @@ review starts from zero.
   [assets/run-role.sh](assets/run-role.sh) — a role run through `claude -p` with the event
   stream kept and the spend logged.
 - [scripts/axes.py](scripts/axes.py) — the spend of one run by axis (cache, turns, tool
-  output, re-reads) from that stream; `--journal` gives the one line `run-role.sh` writes.
+  output, re-reads) from that stream; `--journal` gives the one line `run-role.sh` writes,
+  `--reply` the agent's answer. It is the only reader of the stream: a killed run leaves
+  its last line half-written, and a second parser dies on it.

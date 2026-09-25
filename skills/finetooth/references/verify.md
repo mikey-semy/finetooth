@@ -51,6 +51,12 @@ hypotheses are numbered in order (`{{BLOCK_ID}}.1`, `{{BLOCK_ID}}.2`, …), and 
 exactly one verdict in the block's reports: "checked: what proves it", "not checked: what got
 in the way", "not applicable: why". Someone else's verdict you disagree with is overridden by
 your own — with an explanation. The state check requires a verdict for all hypotheses of the block.
+Write it as an ordinary line, outside code blocks and quotations: a ``` or ~~~ fence, a
+block indented by four spaces, a line behind `>` and an `<!-- html comment -->` are all
+read as examples, and a verdict word alone in backticks is a quotation of the word. The
+same holds for **everything the state check reads in the report** — your verdict on each
+finding and your statement about coverage included: a report whose substance is all quoted
+is read as an empty one, and the block does not pass.
 
 **First check that the tree is fresh.** `git log HEAD..origin/master --oneline`; for a neighboring repository — `git fetch` and reading through `git show origin/master:<file>`. Execution does not save you if you execute yesterday's code: that is exactly how a defect long gone from `origin/master` was once confirmed.
 

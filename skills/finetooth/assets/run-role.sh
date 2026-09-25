@@ -26,23 +26,42 @@ OUT="${TMPDIR:-/tmp}/finetooth-runs"; mkdir -p "$OUT"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 PROMPT="$OUT/$BLOCK.$ROLE.$STAMP.prompt.md"
 STREAM="$OUT/$BLOCK.$ROLE.$STAMP.stream.jsonl"
-$REVIEW prompt "$BLOCK" --role "$ROLE" "$@" > "$PROMPT"
+# A failing `review prompt` (an unknown block, a template with a hole) must not leave a
+# zero-byte prompt file behind for the next run to find.
+$REVIEW prompt "$BLOCK" --role "$ROLE" "$@" > "$PROMPT" || PROMPT_RC=$?
+if [ -n "${PROMPT_RC:-}" ]; then
+  rm -f "$PROMPT"
+  exit "$PROMPT_RC"
+fi
 echo "prompt: $PROMPT ($(wc -c < "$PROMPT") bytes); cap: $CAP turns; stream: $STREAM"
 set +e
 claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
   --max-turns "$CAP" ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"} --allowedTools "$TOOLS" \
   < "$PROMPT" > "$STREAM" 2> "$STREAM.err"
 RC=$?
-set -e
+# Everything below is reporting. Every step runs even if an earlier one failed — the reply
+# must reach the operator — and the exit code tells both endings apart: the run's own code
+# when `claude` failed, 3 when the run succeeded but a report was lost (no journal line: the
+# only memory the next session has). A trap that always exited with the run's code hid a
+# failed journal write behind exit 0 (the kit's own review, fix review round 3).
+REPORT_RC=0
 echo "claude exit: $RC"
-python3 "$HERE/../scripts/axes.py" "$STREAM"
-LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)"
-$REVIEW log "$BLOCK" "$ROLE — $LINE"
-python3 - "$STREAM" <<'PY'
-import json, sys
-for line in open(sys.argv[1], encoding="utf-8"):
-    ev = json.loads(line) if line.strip() else {}
-    if ev.get("type") == "result":
-        print("\n--- agent reply ---\n" + (ev.get("result") or "")[:4000])
-PY
-exit $RC
+python3 "$HERE/../scripts/axes.py" "$STREAM" || REPORT_RC=$?
+LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)" || REPORT_RC=$?
+# The journal is the only memory the next session has. A run that died or was cut off at
+# the turn cap used to be written there as an ordinary completed one — "hunter — spend: 0
+# min, None turns … $0.00" — with no word that the assignment was truncated, and the block
+# read as hunted. The exit code goes into the line; what the stream itself says about the
+# ending (no result event, a non-success subtype) axes.py has already put there.
+if [ "$RC" -ne 0 ]; then
+  LINE="RUN FAILED (claude exit $RC — the assignment was NOT completed) · $LINE"
+fi
+$REVIEW log "$BLOCK" "$ROLE — $LINE" || { REPORT_RC=$?; echo "journal write failed — the spend line above is not recorded" >&2; }
+# ONE reader for the stream. A second one written here parsed every line with `json.loads`
+# and died on the half-written last line a killed run leaves behind — the very line
+# `axes.py` counts and reports — so an operator whose run was cut off saw a Python
+# traceback instead of the agent's answer.
+python3 "$HERE/../scripts/axes.py" "$STREAM" --reply || REPORT_RC=$?
+if [ "$RC" -ne 0 ]; then exit "$RC"; fi
+if [ "$REPORT_RC" -ne 0 ]; then exit 3; fi
+exit 0
