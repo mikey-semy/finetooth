@@ -5343,27 +5343,83 @@ class TestSuiteRuleTest(unittest.TestCase):
                 self.assertEqual(_spawns(src), [], "узда придирается к верной записи")
 
 
+def _asks_the_tool_for_commands(fn: ast.FunctionDef) -> bool:
+    """Обход спросил список подкоманд у самого инструмента: `--help` или `_subcommands()`.
+
+    Вопрос ищется в КОДЕ, а не в тексте функции: докстрока, называющая `--help`, — это
+    рассказ об обходе, а не обход.
+    """
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Call):
+            continue
+        if isinstance(n.func, ast.Name) and n.func.id == "_subcommands":
+            return True
+        if isinstance(n.func, ast.Attribute) and n.func.attr == "_subcommands":
+            return True
+        if any(isinstance(a, ast.Constant) and a.value == "--help" for a in n.args):
+            return True
+    return False
+
+
+def _runs_a_command_it_was_given(fn: ast.FunctionDef) -> bool:
+    """Обход зовёт команду, имя которой он получил, а не написал: довод не строка-литерал.
+
+    `self.s.run(*[cmd])` — тот же обход: имя приходит из развёрнутого списка, и правило,
+    смотревшее только на голое имя первым доводом, такой обход не видело вовсе.
+    """
+    for n in ast.walk(fn):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "run" and n.args):
+            continue
+        first = n.args[0]
+        if isinstance(first, ast.Starred):
+            return True
+        if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+            return True
+    return False
+
+
+def _asserts_the_command_started(fn: ast.FunctionDef) -> bool:
+    """Обход СПРАШИВАЕТ про отказ argparse и ВЕШАЕТ НА ОТВЕТ проверку.
+
+    Оба условия измерены на выдуманных обходах: имя `argparse_refused` в докстроке,
+    мёртвое `argparse_refused = None` и вызов без проверки оставляют обход ровно таким,
+    каким он был до правила. Годится и общий помощник, и свой перебор `ARGPARSE_REFUSED`
+    — важно, что вопрос задан в коде, а ответ доведён до утверждения.
+    """
+    # `for said in ARGPARSE_REFUSED: ... assertNotIn(said, ...)` — проверка утверждает про
+    # имя, взятое ИЗ словаря; без этого свой перебор выглядел бы обходом без вопроса.
+    borrowed: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.For) and any(
+                isinstance(n, ast.Name) and n.id == "ARGPARSE_REFUSED"
+                and isinstance(n.ctx, ast.Load) for n in ast.walk(node.iter)):
+            borrowed |= {t.id for t in ast.walk(node.target) if isinstance(t, ast.Name)}
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Assert)
+                or (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr.startswith("assert"))):
+            continue
+        for n in ast.walk(node):
+            if (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                    and (n.id in ("argparse_refused", "ARGPARSE_REFUSED") or n.id in borrowed)):
+                return True
+    return False
+
+
 def _sweeps_without_body_check(source: str) -> list[str]:
     """Обходы команд, которые не смотрят, дошла ли команда до своего тела.
 
     Обход узнаётся ПО ВИДУ, а не по имени: он спросил список у самого инструмента
-    (`--help` или общий `_subcommands`) и зовёт команду из переменной. Такой обход обязан
-    спросить общий словарь отказов argparse — иначе он перечисляет команды, а проверяет
-    отказ argparse, и мимо него проходит ровно то, что он заведён держать.
+    (`--help` или общий `_subcommands`) и зовёт команду, имя которой получил. Такой обход
+    обязан спросить общий словарь отказов argparse и повесить на ответ проверку — иначе
+    он перечисляет команды, а проверяет отказ argparse, и мимо него проходит ровно то,
+    что он заведён держать.
     """
-    offenders = []
-    for fn in ast.walk(ast.parse(source)):
-        if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")):
-            continue
-        text = ast.unparse(fn)
-        runs_by_name = any(
-            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "run" and n.args and isinstance(n.args[0], ast.Name)
-            for n in ast.walk(fn))
-        if (("--help" in text or "_subcommands(" in text) and runs_by_name
-                and not re.search("argparse_refused", text, re.I)):
-            offenders.append(fn.name)
-    return offenders
+    return [fn.name for fn in ast.walk(ast.parse(source))
+            if isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")
+            and _asks_the_tool_for_commands(fn) and _runs_a_command_it_was_given(fn)
+            and not _asserts_the_command_started(fn)]
 
 
 class CommandSweepRuleTest(unittest.TestCase):
@@ -5392,6 +5448,24 @@ class CommandSweepRuleTest(unittest.TestCase):
         "обход через общий список": (
             "class S:\n    def test_x(self):\n"
             "        for cmd in self._subcommands():\n            self.s.run(cmd)\n"),
+        # Три способа выглядеть спросившим, не спросив: измерены на правиле, которое
+        # искало имя `argparse_refused` в тексте функции и команду — голым именем.
+        "вопрос только в докстроке": (
+            "class S:\n    def test_x(self):\n"
+            "        '''Каждая команда зовётся так, что argparse_refused пуст.'''\n"
+            "        for cmd in self._subcommands():\n            self.s.run(cmd)\n"),
+        "мёртвое присваивание вместо вопроса": (
+            "class S:\n    def test_x(self):\n"
+            "        argparse_refused = None\n"
+            "        for cmd in self._subcommands():\n            self.s.run(cmd)\n"),
+        "вопрос без проверки": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(cmd)\n"
+            "            argparse_refused(out.stderr)\n"),
+        "имя команды через развёртывание списка": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n            self.s.run(*[cmd])\n"),
     }
     INNOCENT_SWEEPS = {
         "обход, который спросил про argparse": (
@@ -5408,6 +5482,15 @@ class CommandSweepRuleTest(unittest.TestCase):
         "перебор двух названных команд": (
             "class S:\n    def test_x(self):\n"
             "        for cmd in ('check', 'coverage'):\n            self.s.run(cmd)\n"),
+        "развёртывание списка, но со спросом": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(*[cmd, *BODY_ARGV[cmd]])\n"
+            "            self.assertFalse(argparse_refused(out.stderr))\n"),
+        "рассказ об обходе, а не обход": (
+            "class S:\n    def test_x(self):\n"
+            "        '''Список берётся у --help, как в обходе через _subcommands().'''\n"
+            "        self.assertIn('check', self.s.run('--help').stdout)\n"),
     }
 
     def test_узда_видит_обход_которого_ещё_нет(self):
