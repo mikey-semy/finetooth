@@ -11,6 +11,7 @@ with a review already under way.
 
 ### Fixed
 
+- `run-role.sh`: the hunter may execute (`python3`, `node`, `npm test`, `pytest`, `make`). Three blocks of the kit's own review in a row had their hunter refused `python3`, and a `proof: measured` block was "proven" by reading. The template still forbids changing project files.
 The whole-repository review of the kit itself, block T1 (`review.py`, `axes.py`,
 `run-role.sh`, `guard-grep.sh`): 68 findings over the hunt and seven rounds of fix review, all confirmed by execution — the rest of each is in the register with its status and reason; the verdict parser's open class moved to issue #17.
 

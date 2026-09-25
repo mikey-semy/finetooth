@@ -1237,6 +1237,14 @@ class ReviewToolTest(unittest.TestCase):
         self.assertNotIn("docs/review/", out.stdout.split("\n\n")[0])   # the register itself is not a reference
         self.assertIn("reference(s) to findings in the code", self.s.run("check").stdout)
 
+    def test_охотник_может_исполнять(self):
+        """Три блока подряд (T1–T3) охотнику отказывали в python3, и блок `proof: measured`
+        доказывался чтением. Список разрешений охотника обязан включать исполнение."""
+        text = (SKILL / "assets" / "run-role.sh").read_text(encoding="utf-8")
+        hunter = next(ln for ln in text.splitlines() if ln.strip().startswith("hunter)"))
+        for tool in ("Bash(python3 *)", "Bash(npm test *)", "Bash(node *)"):
+            self.assertIn(tool, hunter)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
