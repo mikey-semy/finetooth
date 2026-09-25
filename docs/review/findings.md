@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **48** of 116 records.
+Open: **30** of 116 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **48** of 116 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (9 open / 37)
+## medium (6 open / 37)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -53,11 +53,11 @@ Open: **48** of 116 records.
 | T3-002 | T3 | open | `tests/test_review.py:3925` | _check_gates matches only `problems.append(x)` on a Name, so a gate written with `+=` or `extend` yields no key, needs no GATES entry and no test, and the registry stays green |
 | T3-003 | T3 | open | `tests/test_review.py:4034` | GateRegistryTest checks only that the test named beside a gate exists; nothing ties the two, so a gate registered against any existing test name satisfies the guard with zero coverage |
 | T3-004 | T3 | open | `tests/test_review.py:611` | backfill runs once in the whole suite and set-finding over several ids only on the happy path, so neither backfill's idempotence nor set-finding's all-or-nothing is held by a test |
-| T4-001 | T4 | open | `skills/finetooth/SKILL.md:4` | The skill's frontmatter still says the base was handed over without a license, which LICENSE and NOTICE.md retired on 24.09.2026 |
-| T4-003 | T4 | open | `SECURITY.md:3` | The stated security boundary ('writes to docs/review/', 'sends nothing over the network') is false for `summary` and for assets/run-role.sh |
-| T4-016 | T4 | open | `skills/finetooth/scripts/review.py:564` | `init` answers a Python traceback on a blocks.json without the top-level review_id, and the guard test that forbids exactly that stays green |
+| T4-001 | T4 | fixed | `skills/finetooth/SKILL.md:4` | The skill's frontmatter still says the base was handed over without a license, which LICENSE and NOTICE.md retired on 24.09.2026 |
+| T4-003 | T4 | fixed | `SECURITY.md:3` | The stated security boundary ('writes to docs/review/', 'sends nothing over the network') is false for `summary` and for assets/run-role.sh |
+| T4-016 | T4 | fixed | `skills/finetooth/scripts/review.py:564` | `init` answers a Python traceback on a blocks.json without the top-level review_id, and the guard test that forbids exactly that stays green |
 
-## low (39 open / 74)
+## low (24 open / 74)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -120,19 +120,19 @@ Open: **48** of 116 records.
 | T3-013 | T3 | open | `tests/test_review.py:2801` | No fixture path contains a bracket, so the :(literal) prefix in file_sha — there because git-pathspec reads [handle] as a character class — can be deleted with the suite green |
 | T3-014 | T3 | open | `tests/test_review.py:4253` | The threshold guard walks only module-level `NAME = <number>`, so a bare threshold written as a BinOp or as a tuple assignment carries no source and the suite stays green |
 | T3-015 | T3 | open | `tests/test_review.py:66` | The suite spawns the tool as PATH `python3` in seven places while using sys.executable in five, so running it under another interpreter does not test that interpreter |
-| T4-002 | T4 | open | `CHANGELOG.md:40` | NOTICE.md's unqualified promise that road-tested projects are not named is contradicted by CHANGELOG.md:40, which names the owner's own project and one of its paths |
-| T4-004 | T4 | open | `README.md:281` | README (en, ru) and AGENTS.md give the suite as 98 scenarios taking about a minute; measured, it is 248 tests in 201 seconds |
-| T4-005 | T4 | open | `README.md:457` | README (en, ru) states the coupling shared-node threshold as a fixed six blocks and the mass cutoff as the 95th percentile; the code derives both |
-| T4-006 | T4 | open | `CHANGELOG.md:68` | The Unreleased section contradicts itself: Added says a shared node is a file coupled with >= 6 blocks, Fixed says the threshold became a share with a floor of three |
-| T4-007 | T4 | open | `.github/ISSUE_TEMPLATE/proposal.yml:16` | The proposal template sends contributors to docs/prior-art.md and asks for a ROADMAP direction number; both were moved to a private repository |
-| T4-008 | T4 | open | `CHANGELOG.md:594` | Versions 0.5.1, 0.5.0 and 0.4.1 have no compare link in either CHANGELOG, though RELEASING gate 4 requires one before the tag |
-| T4-009 | T4 | open | `RELEASING.md:23` | RELEASING calls its gates 'all mechanical' when three of the four are human steps that nothing checks |
-| T4-010 | T4 | open | `CONTRIBUTING.md:75` | The DCO sign-off is mandatory and nothing verifies it: no workflow checks commits, only a self-reported PR checkbox |
-| T4-011 | T4 | open | `README.ru.md:16` | README.ru.md has no counterpart to README.md:28-52 — the six claims that separate the kit from PR-review bots, and the Language paragraph |
-| T4-012 | T4 | open | `README.md:421` | The README's 'What is inside' inventory is incomplete in both languages: 19 of 23 commands, no axes.py or run-role.sh, and none of the ten .ru.md templates |
-| T4-013 | T4 | open | `RELEASING.md:50` | The release procedure names two paths that do not exist: `scripts/review.py` and a root `SKILL.md` |
-| T4-014 | T4 | open | `.github/workflows/tests.yml:15` | actions/checkout is taken by the mutable tag v5 while every other action and install in the same two workflows is pinned by commit |
-| T4-015 | T4 | open | `.github/workflows/tests.yml:16` | The CI workflow's step names and comments are in Russian, against AGENTS.md rule 7 and the 0.7.0 English-primary release |
-| T4-017 | T4 | open | `skills/finetooth/SKILL.md:5` | SKILL.md states the tool is tested on Python 3.12 and 3.14, while the CI workflow pins no Python version and runs the suite on one |
-| T4-018 | T4 | open | `CODE_OF_CONDUCT.md:1` | Neither code of conduct links to its other-language copy, against the 0.7.0 claim that the Russian copies are cross-linked at the top of each file |
+| T4-002 | T4 | fixed | `CHANGELOG.md:40` | NOTICE.md's unqualified promise that road-tested projects are not named is contradicted by CHANGELOG.md:40, which names the owner's own project and one of its paths |
+| T4-004 | T4 | fixed | `README.md:281` | README (en, ru) and AGENTS.md give the suite as 98 scenarios taking about a minute; measured, it is 248 tests in 201 seconds |
+| T4-005 | T4 | fixed | `README.md:457` | README (en, ru) states the coupling shared-node threshold as a fixed six blocks and the mass cutoff as the 95th percentile; the code derives both |
+| T4-006 | T4 | fixed | `CHANGELOG.md:68` | The Unreleased section contradicts itself: Added says a shared node is a file coupled with >= 6 blocks, Fixed says the threshold became a share with a floor of three |
+| T4-007 | T4 | fixed | `.github/ISSUE_TEMPLATE/proposal.yml:16` | The proposal template sends contributors to docs/prior-art.md and asks for a ROADMAP direction number; both were moved to a private repository |
+| T4-008 | T4 | fixed | `CHANGELOG.md:594` | Versions 0.5.1, 0.5.0 and 0.4.1 have no compare link in either CHANGELOG, though RELEASING gate 4 requires one before the tag |
+| T4-009 | T4 | fixed | `RELEASING.md:23` | RELEASING calls its gates 'all mechanical' when three of the four are human steps that nothing checks |
+| T4-010 | T4 | fixed | `CONTRIBUTING.md:75` | The DCO sign-off is mandatory and nothing verifies it: no workflow checks commits, only a self-reported PR checkbox |
+| T4-011 | T4 | fixed | `README.ru.md:16` | README.ru.md has no counterpart to README.md:28-52 — the six claims that separate the kit from PR-review bots, and the Language paragraph |
+| T4-012 | T4 | fixed | `README.md:421` | The README's 'What is inside' inventory is incomplete in both languages: 19 of 23 commands, no axes.py or run-role.sh, and none of the ten .ru.md templates |
+| T4-013 | T4 | fixed | `RELEASING.md:50` | The release procedure names two paths that do not exist: `scripts/review.py` and a root `SKILL.md` |
+| T4-014 | T4 | fixed | `.github/workflows/tests.yml:15` | actions/checkout is taken by the mutable tag v5 while every other action and install in the same two workflows is pinned by commit |
+| T4-015 | T4 | fixed | `.github/workflows/tests.yml:16` | The CI workflow's step names and comments are in Russian, against AGENTS.md rule 7 and the 0.7.0 English-primary release |
+| T4-017 | T4 | fixed | `skills/finetooth/SKILL.md:5` | SKILL.md states the tool is tested on Python 3.12 and 3.14, while the CI workflow pins no Python version and runs the suite on one |
+| T4-018 | T4 | fixed | `CODE_OF_CONDUCT.md:1` | Neither code of conduct links to its other-language copy, against the 0.7.0 claim that the Russian copies are cross-linked at the top of each file |
 

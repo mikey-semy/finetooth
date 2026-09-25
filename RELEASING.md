@@ -20,16 +20,24 @@ end of a working session. Everything below is what it takes for a number to mean
 At most one release a week, and only when **Unreleased** in `CHANGELOG.md` holds something a
 user would update for. Small fixes accumulate; they are not a reason to cut a version.
 
-## Gates — all mechanical, all before the tag
+## Gates before the tag
 
-1. **Tests green**, and every new check named in CHANGELOG together with the mutation that
-   proves its test (break the mechanism → the test goes red).
-2. **`skills-ref validate skills/finetooth`** — valid skill.
+Two of the four are run by CI on every pull request; the other two are a human's, and
+nothing but this list holds them. That is said here plainly because calling all four
+"mechanical" is how 0.5.1, 0.5.0 and 0.4.1 shipped without their compare links.
+
+1. **Tests green** (CI: the `unittest` job, on every Python version the skill declares), and
+   every new check named in CHANGELOG together with the mutation that proves its test (break
+   the mechanism → the test goes red). *The suite is mechanical; naming the mutation is not.*
+2. **`skills-ref validate skills/finetooth`** — valid skill (CI: the `skill` job).
 3. **A run on a live project.** The release candidate has taken at least one block through
    hunter and verifier on a real repository, and `check` is green there. The release notes
-   link the journal entry. A version nobody has run is a tag, not a release.
+   link the journal entry. A version nobody has run is a tag, not a release. *A human's:
+   this one cannot be automated, and automating the release would make it unenforceable.*
 4. **CHANGELOG is complete** before the tag: the version section is written, the compare link
-   is added, the GitHub release notes are taken from it verbatim.
+   is added, the GitHub release notes are taken from it verbatim. *The compare link is held
+   by a test — a version heading without one fails the suite. Whether the section is complete
+   is a human's judgement.*
 
 ## Branches
 
@@ -47,8 +55,9 @@ user would update for. Small fixes accumulate; they are not a reason to cut a ve
    a version and the gates above hold, a PR `dev → master` carries the version bump and the
    CHANGELOG section; it is merged with a merge commit, so `master` keeps the release
    history readable.
-2. Bump `VERSION` in `scripts/review.py` and `version` in `SKILL.md` in the same PR that
-   moves **Unreleased** under the new version heading.
+2. Bump `VERSION` in `skills/finetooth/scripts/review.py` and `version` in
+   `skills/finetooth/SKILL.md` in the same PR that moves **Unreleased** under the new
+   version heading. (The two must agree: a test compares them.)
 3. After the merge into `master`: annotated tag `vX.Y.Z` on the merge commit, `gh release create` with the
    CHANGELOG section as notes, `--latest` only for the highest version.
 4. A release is never rewritten. A mistake in a release gets the next version.

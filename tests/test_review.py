@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import collections
 import datetime as dt
+import hashlib
 import json
 import re
 import os
@@ -2384,6 +2385,16 @@ class SkillFormatTest(unittest.TestCase):
         """При установке уезжает только папка скилла — условия обязаны ехать с ней."""
         self.assertEqual((SKILL / "LICENSE").read_bytes(), (KIT / "LICENSE").read_bytes())
 
+    def test_поле_лицензии_это_её_обозначение_и_ничего_сверх(self):
+        """Шапку скилла читает тот, кто решает, можно ли его ставить. Пока в поле стояла
+        проза («MIT на правки; основа передана без лицензии»), она пережила смену самой
+        лицензии и утверждала обратное тому, что написано в LICENSE. Обозначение берётся
+        из LICENSE, так что поле не разъедется с ним и в следующий раз."""
+        first = (KIT / "LICENSE").read_text(encoding="utf-8").splitlines()[0].strip()
+        spdx = re.fullmatch(r"([A-Za-z0-9.+-]+) License", first)
+        self.assertTrue(spdx, f"первая строка LICENSE не называет лицензию: {first!r}")
+        self.assertEqual(self.frontmatter()["license"], spdx.group(1))
+
 
 class SetupTest(unittest.TestCase):
     """`setup` заводит ревью в проекте; инструмент при этом остаётся в скилле."""
@@ -2939,6 +2950,89 @@ class GitTruthTest(unittest.TestCase):
         self.assertNotIn("src/generated/x.ts", out.stdout)
 
 
+class WriteBoundaryTest(unittest.TestCase):
+    """УЗДА КЛАССА «инструмент пишет не там, где обещано».
+
+    SECURITY.md называет запись вне разрешённых мест уязвимостью, и это обещание дано
+    вслух — значит, его держит прогон, а не вычитка. Снимок дерева до и после: всё, что
+    появилось или изменилось вне `docs/review/`, обязано быть в списке ниже, а список
+    равен тому, что написано в SECURITY.md. Новая команда попадает под правило сама —
+    список подкоманд берётся у самого инструмента.
+    """
+
+    # Единственное разрешённое исключение: итог задуман пережить снос каталога ревью,
+    # поэтому пишется вне него — по умолчанию сюда, а по `--out` туда, куда скажут.
+    ALLOWED_OUTSIDE = {"docs/review-summary.md"}
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        self.s.write(".gitignore", "__pycache__/\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+
+    def _snapshot(self) -> dict[str, str]:
+        """Всё дерево проекта, кроме `.git` и самого каталога ревью."""
+        out = {}
+        for p in sorted(self.s.root.rglob("*")):
+            rel = p.relative_to(self.s.root).as_posix()
+            if rel.startswith((".git/", "docs/review/")) or rel in (".git", "docs/review"):
+                continue
+            if p.is_file():
+                out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+        return out
+
+    def test_ни_одна_команда_не_пишет_вне_каталога_ревью(self):
+        helped = self.s.run("--help").stdout
+        names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
+        self.assertTrue(names, helped)
+        commands = names.group(1).split(",")
+        self.assertIn("summary", commands)
+        before = self._snapshot()
+        for cmd in commands:
+            for args in ((), ("H1",)):
+                self.s.run(cmd, *args)
+        after = self._snapshot()
+        appeared = {rel for rel in after if rel not in before}
+        changed = {rel for rel in before if after.get(rel, before[rel]) != before[rel]}
+        self.assertEqual(appeared - self.ALLOWED_OUTSIDE, set(),
+                         "файлы появились вне docs/review/ — SECURITY.md этого не обещает")
+        self.assertEqual(changed, set(),
+                         "файлы изменены вне docs/review/ — SECURITY.md этого не обещает")
+
+    def test_итог_пишется_туда_куда_сказали_и_только_туда(self):
+        """Обратная сторона: разрешённое исключение обязано работать — и по умолчанию,
+        и по `--out`, в том числе за пределы репозитория."""
+        before = self._snapshot()
+        self.assertEqual(self.s.run("summary").returncode, 0)
+        self.assertTrue((self.s.root / "docs/review-summary.md").exists())
+        outside = Path(tempfile.mkdtemp(prefix="finetooth-out-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        target = outside / "итог.md"
+        out = self.s.run("summary", "--out", str(target))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(target.exists())
+        appeared = {rel for rel in self._snapshot() if rel not in before}
+        self.assertEqual(appeared, {"docs/review-summary.md"})
+
+    def test_обещание_безопасности_называет_то_же_исключение(self):
+        """Правило и текст обещания не должны разъезжаться: то, что тест разрешает
+        инструменту, обязано быть названо в SECURITY.md."""
+        promise = (KIT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("docs/review/", promise)
+        for rel in self.ALLOWED_OUTSIDE:
+            self.assertIn(rel, promise, f"SECURITY.md не называет {rel}")
+        # Скрипт-запускатель пишет во временный каталог и отправляет промпт по сети —
+        # обещание обязано говорить и об этом, иначе оно лжёт о наборе целиком.
+        runner = (SKILL / "assets" / "run-role.sh").read_text(encoding="utf-8")
+        self.assertIn("finetooth-runs", runner)
+        self.assertIn("finetooth-runs", promise)
+        self.assertIn("claude -p", promise)
+
+
 class HandWrittenInputTest(unittest.TestCase):
     """Всё, что человек правит руками, обязано получать отказ, а не трейсбек:
     определение блоков, итоговый файл, текст манифеста."""
@@ -3056,20 +3150,90 @@ class HandWrittenInputTest(unittest.TestCase):
         self.assertNotIn("{{FILES}}", out)
         self.assertNotIn("{{BLOCK_ID}}", out)
 
-    def test_ни_одна_команда_не_роняет_трейсбек_на_битом_определении(self):
-        """Узда класса: список подкоманд берётся у самого инструмента, так что новая
-        команда попадает под правило сама, без правки теста."""
-        self._stand()
-        self._add_block(id="H2", title="Платежи", paths=["src/one.ts"])
+    # Порча определения — таблицей, а не одним случаем: стенд всегда писал верхнеуровневые
+    # поля сам, поэтому `review_id`, `exclusions` и `paths` не проверял никто, и `init`
+    # отвечал трейсбеком на определение, которое человек пишет руками.
+    DAMAGE = {
+        "блок без обязательных полей":
+            lambda d: d["blocks"].append({"id": "H2", "title": "Платежи",
+                                          "paths": ["src/one.ts"]}),
+        "нет review_id": lambda d: d.pop("review_id"),
+        "review_id пустой": lambda d: d.update(review_id="  "),
+        "review_id не строка": lambda d: d.update(review_id=7),
+        "исключение без pattern": lambda d: d["exclusions"].append({"reason": "сборка"}),
+        "исключения не списком": lambda d: d.update(exclusions={"pattern": "dist/**"}),
+        "pattern не строка": lambda d: d["exclusions"].append({"pattern": 7}),
+        "paths строкой": lambda d: d["blocks"][0].update(paths="src/one.ts"),
+        "paths с числом": lambda d: d["blocks"][0].update(paths=["src/one.ts", 7]),
+        "ref_paths строкой": lambda d: d["blocks"][0].update(ref_paths="src/one.ts"),
+        "blocks не списком": lambda d: d.update(blocks={"id": "H1"}),
+    }
+
+    def _damage(self, how) -> None:
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        how(d)
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _subcommands(self) -> list[str]:
         helped = self.s.run("--help").stdout
         names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
         self.assertTrue(names, helped)
         commands = names.group(1).split(",")
         self.assertIn("check", commands)
-        for cmd in commands:
-            out = self.s.run(cmd, "H1", "s.md")
-            with self.subTest(cmd=cmd):
-                self.assertNotIn("Traceback", out.stderr, f"{cmd}: {out.stderr[-400:]}")
+        return commands
+
+    def test_ни_одна_команда_не_роняет_трейсбек_на_битом_определении(self):
+        """Узда класса: список подкоманд берётся у самого инструмента, а порча определения —
+        таблицей, так что и новая команда, и новое поле попадают под правило сами.
+
+        Команда зовётся И с лишними доводами, И без них: пока звали только с `H1 s.md`,
+        `init` до своего кода не доходил — argparse отвергал позиционные доводы раньше, —
+        и трейсбек `KeyError: 'review_id'` проходил мимо узды.
+        """
+        self._stand()
+        commands = self._subcommands()
+        for name, how in self.DAMAGE.items():
+            with self.subTest(порча=name):
+                self._stand()
+                self._damage(how)
+                for cmd in commands:
+                    for args in ((), ("H1", "s.md")):
+                        out = self.s.run(cmd, *args)
+                        with self.subTest(cmd=cmd, args=args):
+                            self.assertNotIn("Traceback", out.stderr,
+                                             f"{name} / {cmd} {args}: {out.stderr[-400:]}")
+
+    def test_отказ_на_битом_определении_называет_поле_и_файл(self):
+        """Отказ читает тот, кто видит инструмент впервые: он обязан назвать, что править."""
+        for name, how, field in (
+                ("нет review_id", self.DAMAGE["нет review_id"], "review_id"),
+                ("исключение без pattern", self.DAMAGE["исключение без pattern"], "pattern"),
+                ("paths строкой", self.DAMAGE["paths строкой"], "paths")):
+            with self.subTest(порча=name):
+                self._stand()
+                self._damage(how)
+                out = self.s.run("init")
+                self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+                self.assertNotIn("Traceback", out.stderr)
+                self.assertIn(field, out.stderr)
+                self.assertIn("blocks.json", out.stderr)
+
+    def test_целое_определение_по_прежнему_принимается(self):
+        """Обратная сторона: проверка не должна отнимать то, что было разрешено, —
+        исключение с лишними ключами, блок без `paths`, определение без `exclusions`."""
+        self._stand()
+        self._damage(lambda d: d["exclusions"].append(
+            {"pattern": "dist/**", "reason": "сборка", "кем": "человеком"}))
+        self._damage(lambda d: d["blocks"].append(
+            {"id": "H2", "slug": "two", "phase": 1, "title": "Платежи", "role": "demo",
+             "goal": "проверить"}))
+        out = self.s.run("init")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self._damage(lambda d: d.pop("exclusions"))
+        out = self.s.run("status")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("Платежи", out.stdout)
 
 
 class IdempotenceTest(unittest.TestCase):
@@ -4079,6 +4243,304 @@ def cmd_check(args):
                   '    problems = []\n'
                   '    problems.append(f"{bid}: no manifest {path}")\n')
         self.assertEqual([key for _, _, key in _check_gates(source)], [": no manifest"])
+
+
+class DcoGateTest(unittest.TestCase):
+    """CONTRIBUTING обещает, что каждый коммит подписан, — и до этих ворот обещание не
+    держало ничто, кроме галочки в шаблоне предложения, которую автор ставит сам."""
+
+    SCRIPT = KIT / ".github" / "dco.sh"
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="finetooth-dco-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.git("init", "-q", "-b", "main", ".")
+        self.git("config", "user.name", "Анна Автор")
+        self.git("config", "user.email", "anna@example.com")
+        self.commit("first", signoff="Анна Автор <anna@example.com>")
+
+    def git(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=self.root, check=True,
+                              capture_output=True, text=True)
+
+    def commit(self, subject: str, *, signoff: str | None = None, author: str | None = None) -> None:
+        (self.root / f"{subject}.txt").write_text(subject + "\n", encoding="utf-8")
+        self.git("add", "-A")
+        message = subject if signoff is None else f"{subject}\n\nSigned-off-by: {signoff}"
+        extra = ["--author", author] if author else []
+        self.git("commit", "-qm", message, *extra)
+
+    def check(self, rng: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", str(self.SCRIPT), rng], cwd=self.root,
+                              capture_output=True, text=True)
+
+    def test_коммит_без_подписи_роняет_ворота_и_называет_починку(self):
+        self.commit("second")
+        out = self.check("HEAD~1..HEAD")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("second", out.stderr)
+        self.assertIn("git rebase --signoff", out.stderr)
+        self.assertIn("CONTRIBUTING.md", out.stderr)
+
+    def test_подпись_с_чужой_почтой_не_засчитывается(self):
+        """Подпись, перенесённая из соседнего коммита, не удостоверяет ничего: DCO
+        подписывает тот, кто передаёт код."""
+        self.commit("borrowed", signoff="Борис Другой <boris@example.com>")
+        self.assertEqual(self.check("HEAD~1..HEAD").returncode, 1)
+
+    def test_подписанные_коммиты_проходят(self):
+        """Обратная сторона, и она важнее: ворота не должны заворачивать честную работу.
+        Проверяются и разные авторы в одной ветке, и подпись, набранная в другом регистре."""
+        self.commit("second", signoff="Анна Автор <anna@example.com>")
+        self.commit("third", signoff="Пётр Второй <PETR@example.com>",
+                    author="Пётр Второй <petr@example.com>")
+        self.commit("fourth", signoff="Анна Автор <anna@example.com>")
+        out = self.check("HEAD~3..HEAD")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("signed off", out.stdout)
+
+    def test_коммит_слияния_подписи_не_требует(self):
+        """Слияние не несёт ничьего авторства кода, и `git merge` не подписывает его."""
+        self.git("checkout", "-q", "-b", "side")
+        self.commit("side-work", signoff="Анна Автор <anna@example.com>")
+        self.git("checkout", "-q", "main")
+        self.commit("main-work", signoff="Анна Автор <anna@example.com>")
+        self.git("merge", "--no-ff", "-q", "-m", "merge side", "side")
+        out = self.check("HEAD~2..HEAD")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_рабочий_процесс_зовёт_эти_ворота(self):
+        """Скрипт без вызова — не ворота."""
+        wf = (KIT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+        self.assertIn(".github/dco.sh", wf)
+        self.assertIn("fetch-depth: 0", wf)
+        self.assertTrue(os.access(self.SCRIPT, os.X_OK), "dco.sh не исполняемый")
+
+
+def _ordinal_share(value: float) -> str:
+    """0.10 → "tenth": доля, как её называют словом в английском тексте."""
+    return {2: "half", 3: "third", 4: "quarter", 5: "fifth", 10: "tenth"}[round(1 / value)]
+
+
+def _ordinal_share_ru(value: float) -> str:
+    return {2: "половине", 3: "трети", 4: "четверти", 5: "пятой", 10: "десятой"}[round(1 / value)]
+
+
+class RepositoryContractTest(unittest.TestCase):
+    """УЗДЫ КЛАССА «документ обещает то, чего в репозитории нет».
+
+    Документы — публичное лицо набора, и их никто не прогоняет: число сценариев
+    отставало от настоящего втрое, `RELEASING.md` вёл к путям, которых нет с 0.4.0,
+    шаблон обращения — в каталог, уехавший в закрытую базу знаний. Каждое такое
+    утверждение либо держится прогоном, либо разъезжается с кодом молча.
+    """
+
+    def test_число_сценариев_в_документах_равно_настоящему(self):
+        """README (обоих языков) и AGENTS.md называют число сценариев как доказательство
+        того, что набор проверен. Число брали из головы: 98 против настоящих 248."""
+        real = unittest.defaultTestLoader.discover(str(KIT / "tests")).countTestCases()
+        self.assertGreater(real, 0)
+        for rel, pattern in (("README.md", r"(\d+) scenarios"),
+                             ("README.ru.md", r"(\d+) сценариев"),
+                             ("AGENTS.md", r"(\d+) scenarios")):
+            text = (KIT / rel).read_text(encoding="utf-8")
+            found = re.findall(pattern, text)
+            with self.subTest(файл=rel):
+                self.assertTrue(found, f"{rel}: число сценариев не названо")
+                for n in found:
+                    self.assertEqual(int(n), real,
+                                     f"{rel} обещает {n} сценариев, а их {real}")
+
+    # Порог, названный в публичном документе, обязан читаться из того же места, откуда его
+    # берёт инструмент. Пары «константа → как она обязана звучать в тексте»: README описывал
+    # порог общего узла твёрдой шестёркой, когда в коде давно доля с полом.
+    CHANGELOGS = ("CHANGELOG.md", "CHANGELOG.ru.md")
+    QUOTED_CONSTANTS = (
+        ("COUPLING_MIN_TOGETHER", CHANGELOGS, lambda v: [f"≥ {int(v)}"]),
+        ("COUPLING_MIN_SHARE", CHANGELOGS, lambda v: [f"{int(v * 100)}%", f"{int(v * 100)} %"]),
+        ("COUPLING_MASS_PERCENTILE", ("README.md", "README.ru.md") + CHANGELOGS,
+         lambda v: [f"{int(v)}th percentile", f"{int(v)}-го процентиля"]),
+        ("COUPLING_HUB_FLOOR", ("README.md", "README.ru.md") + CHANGELOGS,
+         lambda v: ["three", "трёх", "тремя"]),
+        ("COUPLING_HUB_SHARE", ("README.md", "README.ru.md") + CHANGELOGS,
+         lambda v: [f"a {_ordinal_share(v)}", f"{_ordinal_share_ru(v)} част"]),
+    )
+
+    def test_пороги_из_документов_читаются_из_кода(self):
+        """УЗДА КОРНЯ «число в публичном документе не сверено с источником». Документы
+        описывают отсечки `coupling` словами; если константа в коде изменится, а текст —
+        нет, прогон краснеет. Каждый порог спрашивается у тех файлов, которые его
+        называют: README говорит про отбор, CHANGELOG — про все пороги команды."""
+        source = TOOL.read_text(encoding="utf-8")
+        for name, files, wording in self.QUOTED_CONSTANTS:
+            m = re.search(rf"^{name} = ([0-9.]+)$", source, re.M)
+            self.assertTrue(m, f"{name} не найдена в инструменте")
+            forms = wording(float(m.group(1)))
+            for rel in files:
+                text = (KIT / rel).read_text(encoding="utf-8")
+                with self.subTest(константа=name, файл=rel):
+                    self.assertTrue(any(f in text for f in forms),
+                                    f"{rel} не описывает {name} = {m.group(1)} "
+                                    f"(ожидалось одно из {forms})")
+
+    # Команда, которую документ велит гонять, обязана гоняться в CI: иначе правило
+    # объявлено обязательным, а держит его честное слово автора предложения.
+    GATE_BLOCKS = ("CONTRIBUTING.md",)
+
+    def test_каждые_объявленные_ворота_гоняет_ci(self):
+        """УЗДА КОРНЯ «правило объявлено обязательным, и не держит его ничто». Прогон
+        тестов, валидатор скилла и подпись DCO названы в CONTRIBUTING как обязательные;
+        до этой узды подпись не проверял никто."""
+        workflows = "\n".join(p.read_text(encoding="utf-8")
+                              for p in sorted((KIT / ".github" / "workflows").glob("*.yml")))
+        commands = []
+        for rel in self.GATE_BLOCKS:
+            text = (KIT / rel).read_text(encoding="utf-8")
+            for block in re.findall(r"```sh\n(.*?)```", text, re.S):
+                for line in block.splitlines():
+                    line = re.sub(r"\s+#.*$", "", line).strip()
+                    if line:
+                        commands.append(line)
+        self.assertTrue(commands, "в CONTRIBUTING не нашлось ни одной команды ворот")
+        for cmd in commands:
+            tokens = cmd.split()
+            anchors = [Path(tokens[0]).name]
+            last = tokens[-1]
+            if ".." not in last and not last.startswith("-") and len(tokens) > 1:
+                anchors.append(last)
+            with self.subTest(команда=cmd):
+                for anchor in anchors:
+                    self.assertTrue(anchor in workflows,
+                                    f"CONTRIBUTING велит гонять `{cmd}`, а CI этого не "
+                                    f"делает: в рабочих процессах нет `{anchor}`")
+
+    READMES = ("README.md", "README.ru.md")
+
+    @staticmethod
+    def _tracked(*args: str) -> list[str]:
+        out = subprocess.run(["git", "-C", str(KIT), "ls-files", "-z", *args],
+                             capture_output=True, text=True, check=True).stdout
+        return [p for p in out.split("\0") if p]
+
+    def test_опись_набора_называет_все_команды(self):
+        """Раздел «Что внутри» — единственное место, где репозиторий перечисляет сам себя;
+        по нему пишут цели make и решают, что именно ставится. Он перечислял 19 команд из
+        23, и `refs` не упоминался в README ни разу — значит, его никто не запускал."""
+        helped = subprocess.run(["python3", str(TOOL), "--help"],
+                                capture_output=True, text=True).stdout
+        names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
+        self.assertTrue(names, helped)
+        commands = names.group(1).split(",")
+        for rel in self.READMES:
+            text = (KIT / rel).read_text(encoding="utf-8")
+            missing = [c for c in commands if not re.search(rf"(?<![\w-]){re.escape(c)}(?![\w-])", text)]
+            with self.subTest(файл=rel):
+                self.assertEqual(missing, [], f"{rel} не называет команды: {missing}")
+
+    def test_у_каждой_версии_в_истории_есть_ссылка_на_сравнение(self):
+        """RELEASING, ворота 4: ссылка на сравнение ставится до тега. У 0.5.1, 0.5.0 и
+        0.4.1 её не было, и заголовки этих версий печатались как текст в квадратных
+        скобках — как раз у тех выпусков, чей дифф читать и хотелось бы."""
+        for rel in ("CHANGELOG.md", "CHANGELOG.ru.md"):
+            text = (KIT / rel).read_text(encoding="utf-8")
+            headings = re.findall(r"^## \[([^\]]+)\]", text, re.M)
+            defined = set(re.findall(r"^\[([^\]]+)\]:\s*\S+", text, re.M))
+            self.assertTrue(headings, rel)
+            with self.subTest(файл=rel):
+                self.assertEqual([h for h in headings if h not in defined], [],
+                                 f"{rel}: версии без ссылки на сравнение")
+
+    # Пары «оригинал — перевод»: обе половины обязаны вести друг на друга с первой строки.
+    BILINGUAL = ("README", "CHANGELOG", "CODE_OF_CONDUCT")
+
+    def test_у_двуязычных_файлов_ссылка_друг_на_друга_в_первой_строке(self):
+        """0.7.0 обещал, что русские копии «связаны ссылкой в шапке каждого файла». У обоих
+        кодексов поведения ссылки не было ни в одну сторону, а CODE_OF_CONDUCT.md — тот
+        файл, который GitHub показывает в профиле сообщества: перевод существовал и был
+        никому не виден."""
+        for stem in self.BILINGUAL:
+            en, ru = KIT / f"{stem}.md", KIT / f"{stem}.ru.md"
+            self.assertTrue(ru.exists(), ru)
+            for src, target in ((en, ru.name), (ru, en.name)):
+                head = "\n".join(src.read_text(encoding="utf-8").splitlines()[:3])
+                with self.subTest(файл=src.name):
+                    self.assertIn(f"]({target})", head,
+                                  f"{src.name}: в шапке нет ссылки на {target}")
+
+    # Документы, которые говорят «сделай вот это сейчас»: процедура выпуска и шаблоны, по
+    # которым пишет человек со стороны. CHANGELOG сюда не входит — он про то, что было.
+    LIVE_GUIDANCE = ("RELEASING.md", ".github/PULL_REQUEST_TEMPLATE.md",
+                     ".github/ISSUE_TEMPLATE/bug.yml", ".github/ISSUE_TEMPLATE/proposal.yml",
+                     ".github/ISSUE_TEMPLATE/trophy.yml", ".github/ISSUE_TEMPLATE/config.yml")
+    # Путь — то, в чём есть косая черта: голое имя (`blocks.json`, `SKILL.md`) документы
+    # называют по-свойски, и оно не обязано лежать в корне.
+    PATH_IN_TEXT = re.compile(
+        r"(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+\.(?:md|py|sh|json|yml|tsv|jsonl|mk))(?![\w/-])")
+
+    def test_живое_руководство_ведёт_на_существующие_пути(self):
+        """Шаг 2 выпуска вёл на `scripts/review.py`, которого нет с 0.4.0, а шаблон
+        предложения — на `docs/prior-art.md`, уехавший в закрытую базу знаний: человек со
+        стороны либо застревает, либо заводит файл заново рядом с настоящим."""
+        missing = []
+        for rel in self.LIVE_GUIDANCE:
+            f = KIT / rel
+            self.assertTrue(f.exists(), rel)
+            for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                for tok in self.PATH_IN_TEXT.findall(line):
+                    if not (KIT / tok).exists():
+                        missing.append(f"{rel}:{n} {tok}")
+        self.assertEqual(missing, [], "руководство ведёт на путь, которого в репозитории нет")
+
+    def test_действия_ci_закреплены_коммитом(self):
+        """Подвижный тег — чужой код в шаге, который распоряжается рабочим деревом, а
+        зелёный CI — то, что защита ветки требует перед слиянием в `master`. `stale.yml`
+        и установка `skills-ref` закреплены давно; `actions/checkout` ехал по `v5`."""
+        loose = []
+        for wf in sorted((KIT / ".github" / "workflows").glob("*.yml")):
+            for n, line in enumerate(wf.read_text(encoding="utf-8").splitlines(), 1):
+                m = re.search(r"uses:\s*(\S+)", line)
+                if m and not re.search(r"@[0-9a-f]{40}\b", m.group(1)):
+                    loose.append(f"{wf.name}:{n} {m.group(1)}")
+        self.assertEqual(loose, [], "действие CI не закреплено коммитом")
+
+    def test_версии_python_из_шапки_скилла_прогоняются_в_ci(self):
+        """`compatibility` в SKILL.md — то, на что смотрит команда, решая, ставить ли набор.
+        Пока в рабочем процессе не было `setup-python`, обе названные версии держались на
+        слове: суите доставался тот python3, который принёс образ раннера."""
+        head = (SKILL / "SKILL.md").read_text(encoding="utf-8").split("---\n", 2)[1]
+        claimed = set(re.findall(r"\b(\d+\.\d+)\b",
+                                 re.search(r"^compatibility:.*$", head, re.M).group(0)))
+        wf = (KIT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+        matrix = re.search(r"python-version:\s*\[([^\]]+)\]", wf)
+        self.assertTrue(matrix, "в рабочем процессе нет набора версий python")
+        run = set(re.findall(r"\d+\.\d+", matrix.group(1)))
+        self.assertEqual(claimed, run,
+                         f"SKILL.md обещает {sorted(claimed)}, CI гоняет {sorted(run)}")
+
+    def test_в_github_нет_кириллицы(self):
+        """AGENTS.md, правило 7: содержимое по-английски, русское — только в копиях
+        `.ru.md`. Имена шагов и комментарии рабочего процесса были по-русски, а это то,
+        что видит в панели проверок автор предложения со стороны."""
+        offenders = []
+        for p in sorted((KIT / ".github").rglob("*")):
+            if not p.is_file() or p.suffix in (".png", ".jpg", ".ico"):
+                continue
+            text = p.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"[А-Яа-яЁё]", text):
+                offenders.append(p.relative_to(KIT).as_posix())
+        self.assertEqual(offenders, [], "кириллица в .github/ — там нет двуязычных копий")
+
+    def test_опись_набора_называет_все_файлы_скилла_и_корня(self):
+        """Ставится папка скилла целиком — значит, названа она целиком; корневые файлы
+        читает тот, кто пришёл со стороны. Десять русских шаблонов, `axes.py` и
+        `run-role.sh` (два файла, пишущие вне репозитория) в описи не значились."""
+        files = [Path(p).name for p in self._tracked("skills/finetooth")]
+        files += [p for p in self._tracked() if "/" not in p]
+        for rel in self.READMES:
+            text = (KIT / rel).read_text(encoding="utf-8")
+            missing = sorted({f for f in files if f not in text})
+            with self.subTest(файл=rel):
+                self.assertEqual(missing, [], f"{rel} не называет файлы: {missing}")
 
 
 class SourceRuleTest(unittest.TestCase):

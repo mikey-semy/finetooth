@@ -278,7 +278,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-Ninety-eight scenarios, no dependencies other than `git`. Each one creates a fresh temporary
+270 scenarios, about five minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -418,33 +418,48 @@ share of what exists that is.
 skills/finetooth/                THE SKILL — this is what gets installed into the agent
   SKILL.md                        when to apply and the order of work (read by the agent)
   LICENSE                         terms — travel with the skill
-  scripts/review.py               the tool: version, setup, init, inventory, sizes, status,
-                                  next, coverage, prompt, import, set-status, set-finding,
-                                  hypotheses, roots, restamp, backfill, findings, check, log
+  scripts/review.py               the tool, 23 commands: version, setup, init, status, next,
+                                  inventory, sizes, coverage, coupling, order, roots, prompt,
+                                  import, set-status, set-finding, hypotheses, restamp,
+                                  backfill, refs, findings, summary, check, log
+  scripts/axes.py                 the spend of a headless run, broken down by axis
   references/hunter.md            hunter: reads the block's files and raises findings
   references/verify.md            verifier: its own independent pass, three verdicts
   references/fix.md               fixer: fixes, proves with a test, runs the gates
   references/fixreview.md         fix reviewer: reads the whole diff, rounds, verdict on the next one
   references/lessons.md           lessons from two reviews, from which the rules grew
+  references/*.ru.md              the same five in Russian — hunter.ru.md, verify.ru.md,
+                                  fix.ru.md, fixreview.ru.md, lessons.ru.md; `lang` in
+                                  blocks.json picks the language of the pair
   assets/entry-point.md           template of docs/review/README.md for the project
   assets/blocks.example.json      three blocks of different kinds + exclusions with justification
   assets/manifest.example.md      block manifest: hypotheses and acceptance criterion
   assets/invariants.example.md    someone else's invariants — as a sample of the structure
   assets/journal.example.md       header of the decisions journal
+  assets/agent-banner.md          banner for the project's root instructions file
+  assets/*.ru.md                  the Russian copies of those five — entry-point.ru.md,
+                                  manifest.example.ru.md, invariants.example.ru.md,
+                                  journal.example.ru.md, agent-banner.ru.md
   assets/makefile-snippet.mk      make targets
   assets/package-json-snippet.json the same for an npm project
   assets/guard-grep.sh            grep-gate engine: allowance by line number
-  assets/agent-banner.md          banner for the project's root instructions file
-tests/test_review.py              tests of the tool and the skill format: 98 scenarios
+  assets/run-role.sh              runs a role headless through `claude -p` and writes the
+                                  spend to the journal — the one part that leaves the machine
+tests/test_review.py              tests of the tool and the skill format: 270 scenarios
 examples/toy                      a real docs/review/ after one block, on a toy app
-README.ru.md                      this file in Russian
+.github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
+                                  check), issue and PR templates, the logo
+README.md, README.ru.md           this file and its Russian copy
 AGENTS.md                         rules for whoever edits the kit itself
+CLAUDE.md                         points the agent at AGENTS.md — one source, two names
 CONTRIBUTING.md                   how to contribute: DCO, test + mutation, no dependencies
 RELEASING.md                      how versions are numbered and what a release must prove
 NOTICE.md                         origin and rights: two authors, consent to MIT
-SECURITY.md                       how to report a vulnerability and what counts as one
-CODE_OF_CONDUCT.md                Contributor Covenant 2.1
-CHANGELOG.md                      version history
+SECURITY.md                       what the kit writes and sends, and how to report a hole
+LICENSE                           MIT, two copyright holders
+CODE_OF_CONDUCT.md                Contributor Covenant 2.1 (+ CODE_OF_CONDUCT.ru.md)
+CHANGELOG.md                      version history (+ CHANGELOG.ru.md)
+.gitignore                        the tool's bytecode must not reach a commit
 ```
 
 Block statuses: `todo → running → hunted → verified → triaged → fixing → closed` (plus
@@ -452,11 +467,15 @@ Block statuses: `todo → running → hunted → verified → triaged → fixing
 
 **Seams between blocks.** A block is the unit inside which an agent sees everything; the seam
 between two blocks is seen by nobody. On the first project 76% of the file pairs that change
-together sit in different blocks. `review coupling` reads `git log`, drops mass commits (above
-the 95th percentile of files per commit in this repository) and shared nodes (a file coupled
-with six or more blocks), and prints the cross-block pairs with a ready `ref_paths` entry and a
-hypothesis for the manifest; clusters of pairs between the same two blocks are where a seam
-block is due. `--write` keeps the pairs in `docs/review/coupling.tsv`.
+together sit in different blocks. `review coupling` reads `git log`, drops mass commits and
+shared nodes, and prints the cross-block pairs with a ready `ref_paths` entry and a hypothesis
+for the manifest; clusters of pairs between the same two blocks are where a seam block is due.
+`--write` keeps the pairs in `docs/review/coupling.tsv`. Both cutoffs are derived from the
+repository rather than fixed, and the run prints the ones it used: a commit is a mass commit
+above the 95th percentile of files per commit **here** — or, on a history of fewer than twenty
+commits, where the percentile cannot separate anything, above Tukey's fence; a file is a
+shared node when it is coupled with a tenth of the review's blocks, never fewer than three
+(a seam runs between two, so a third means it no longer describes one seam).
 
 **What a run costs, measured.** `assets/run-role.sh <ID> <role>` runs a role headless through
 `claude -p`, keeps the event stream and writes one line to the journal: turns, tool calls,

@@ -11,22 +11,50 @@ permissions:
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The versions SKILL.md declares the kit is tested on. A compatibility claim with
+        # nothing running it is a claim; without the matrix the suite ran on whatever
+        # python3 the runner image happened to carry, and that moves under us.
+        python-version: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v5
-      # Тесты ставят набор во временные git-репозитории и дёргают командную строку,
-      # поэтому git обязан уметь коммитить: в чистом раннере имени и почты нет.
-      - name: Настроить git
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      # The tests set the kit up in temporary git repositories and drive the command line,
+      # so git must be able to commit: a clean runner has no name and no email.
+      - name: Configure git
         run: |
           git config --global user.email "tests@example.com"
           git config --global user.name "finetooth tests"
           git config --global init.defaultBranch master
-      - name: Прогнать тесты
+      - name: Run the tests
         run: python3 -m unittest discover -s tests -v
-      # Формат скилла — тем же валидатором, что предлагает спецификация Agent Skills.
-      # Юнит-тесты повторяют часть его правил, но не заменяют его: разбор YAML-шапки и
-      # полный набор ограничений живут в нём.
-      - name: Проверить формат скилла
+
+  skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # The skill format, checked by the validator the Agent Skills specification itself
+      # offers. The unit tests repeat part of its rules but do not replace it: parsing the
+      # YAML header and the full set of constraints live in it.
+      - name: Validate the skill format
         run: |
           python3 -m venv "$RUNNER_TEMP/skills-ref"
           "$RUNNER_TEMP/skills-ref/bin/pip" install --quiet "skills-ref @ git+https://github.com/agentskills/agentskills.git@69ef37e9424c0a7ea9dd2293b559e43ec8176379#subdirectory=skills-ref"
           "$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth
+
+  dco:
+    # CONTRIBUTING.md says every commit is signed off; until this job existed, nothing
+    # checked it and the only artefact was a checkbox in the pull request template.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # The whole history: the check walks the commits of the pull request.
+          fetch-depth: 0
+      - name: Check the sign-off on every commit
+        run: .github/dco.sh ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
