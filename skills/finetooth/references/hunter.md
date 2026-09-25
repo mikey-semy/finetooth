@@ -60,6 +60,14 @@ block that reads that file in full will find it.
 {{REF_FILES}}
 ```
 
+# Findings already recorded against this block
+
+{{RECORDED}}
+
+Do not file these again: if what you find is one of them, say so in the report under its id.
+Your new findings continue the numbering — the first one will be **{{NEXT_ID}}**; the lead
+session adds them with `import --append`, so what is recorded stays.
+
 # What to deliver
 
 ## 1. Report — write it to the file `{{REPORT_PATH}}`

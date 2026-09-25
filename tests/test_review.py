@@ -4411,6 +4411,25 @@ class RecordedFindingsImportTest(unittest.TestCase):
         out = self.s.run("import", "H1", "--force")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
 
+    # prompts
+    def test_охотник_и_проверяющий_видят_записанные_находки(self):
+        self.register(self.row("handed over before the pass", id="H1-001", severity="high"),
+                      self.row("deferred into this block", id="H1-004", status="deferred",
+                               defer_reason="after the release"))
+        for role in ("hunter", "verify"):
+            out = self.s.run("prompt", "H1", "--role", role).stdout
+            self.assertIn("H1-001", out, role)
+            self.assertIn("handed over before the pass", out, role)
+            self.assertIn("H1-004", out, role)
+
+    def test_номер_первой_новой_находки_тот_же_что_выдаст_append(self):
+        self.register(self.row("a", id="H1-001"), self.row("d", id="H1-004"))
+        out = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("**H1-005**", out)
+        self.draft(self.row("new"))
+        self.s.run("import", "H1", "--append")
+        self.assertIn("H1-005", [f["id"] for f in self.reg()])
+
     # --append and a foreign block's id
     def test_append_отказывает_на_номере_чужого_блока(self):
         self.register(self.row("mine", id="H1-001"))

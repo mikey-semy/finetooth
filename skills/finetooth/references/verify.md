@@ -88,6 +88,15 @@ to the primary finding, not deleted.
 {{FILES}}
 ```
 
+# Findings already recorded against this block
+
+{{RECORDED}}
+
+Check these too, but do not put them into the final findings file: give your verdict on each
+in a separate table of the report, **"Verdicts on recorded findings"** (id → confirmed /
+rejected / fixed already, with the reason). The lead session moves them in the register
+with `set-finding`.
+
 # What to deliver
 
 ## 1. Report — to the file `{{REPORT_PATH}}`

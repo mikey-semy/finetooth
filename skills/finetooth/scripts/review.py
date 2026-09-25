@@ -160,6 +160,8 @@ MSG = {
   "files_read": "Block files ({n}) — read all",
   "scope_line": " Your half of the diff: **{scope}** — read the rest for context, file findings for your half.",
   "no_open_findings": "(no open findings for this block — ask the lead session why the fixer was started)",
+  "rec_none": "(nothing is recorded against this block yet)",
+  "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(recorded {date})_",
   "f_where": "**Location:**", "f_claim": "**What is wrong:**", "f_scenario": "**Failure scenario:**", "f_invariant": "**Violated invariant:**", "f_conf": "confidence",
   "md_title": "# Review findings", "md_gen": "> This file is GENERATED from `findings.jsonl` by `{cli} findings`.", "md_noedit": "> Do not edit by hand — edit the jsonl and regenerate.",
   "md_open": "Open: **{live}** of {total} records.", "md_sev": "## {sev} ({open} open / {total})", "md_cols": "| id | block | status | location | what is wrong |",
@@ -209,6 +211,8 @@ MSG = {
   "files_read": "Файлы блока ({n} шт.) — прочитать все",
   "scope_line": " Твоя половина диффа: **{scope}** — остальное читай для контекста, находки оформляй по своей половине.",
   "no_open_findings": "(открытых находок по блоку нет — уточни у ведущей сессии, зачем запущен фиксер)",
+  "rec_none": "(за блоком пока ничего не записано)",
+  "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(записана {date})_",
   "f_where": "**Место:**", "f_claim": "**Что не так:**", "f_scenario": "**Сценарий отказа:**", "f_invariant": "**Нарушенный инвариант:**", "f_conf": "уверенность",
   "md_title": "# Находки ревью", "md_gen": "> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `{cli} findings`.", "md_noedit": "> Не редактируй его руками — правь jsonl и перегенерируй.",
   "md_open": "Открыто: **{live}** из {total} записей.", "md_sev": "## {sev} ({open} открыто / {total})", "md_cols": "| id | блок | статус | место | что не так |",
@@ -1742,6 +1746,8 @@ def cmd_prompt(args) -> int:
         "{{VOLUME}}": volume_note(files),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
+        "{{RECORDED}}": render_recorded_for(b["id"]),
+        "{{NEXT_ID}}": next_finding_id(b["id"]),
         # The project name and its gates are substitutions, not text in the template. A
         # template copied without proofreading greeted the agent on behalf of ANOTHER
         # project, and it was not noticed at once: the assignment looked meaningful as a whole.
@@ -1770,6 +1776,32 @@ def cmd_prompt(args) -> int:
 
 def block_findings_path(b: dict) -> Path:
     return REVIEW / "reports" / f"{b['id']}-findings.jsonl"
+
+
+def next_finding_id(block_id: str) -> str:
+    """The id `import --append` will give the block's first new finding: after the highest
+    number the block has ever used — numbers have gaps, and a retired id stays retired."""
+    taken = [int(m.group(1)) for f in findings()
+             if (m := re.fullmatch(rf"{re.escape(block_id)}-(\d+)", f.get("id", "")))]
+    return f"{block_id}-{max(taken, default=0) + 1:03d}"
+
+
+def render_recorded_for(block_id: str) -> str:
+    """Findings recorded against the block before this pass — handed over by another block's
+    fixer, left by an earlier pass, deferred into it. Without them in the prompt the hunter
+    numbers from 001 and hunts again for what is already written down (the kit author's
+    review, 24.09)."""
+    rows = [f for f in findings() if f.get("block") == block_id
+            and f.get("status") in ("open", "deferred")]
+    if not rows:
+        return T("rec_none")
+    out = []
+    for f in sorted(rows, key=lambda f: f.get("id", "")):
+        where = f.get("file", "") + (f":{f['line']}" if f.get("line") else "")
+        out.append(T("rec_row", id=f.get("id", "?"), severity=f.get("severity", "?"),
+                     status=f.get("status", "?"), where=where, claim=f.get("claim", ""),
+                     date=(f.get("imported_at") or "")[:10]))
+    return "\n".join(out)
 
 
 def render_findings_for(block_id: str) -> str:
