@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.parse
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
@@ -3898,6 +3899,9 @@ BODY_ARGV = {
     "restamp": ("H1-001",), "backfill": (), "inventory": (), "sizes": (),
     "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
     "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
+    # Без `--out`: поток — поведение по умолчанию, и обход границы записи проверяет, что оно
+    # ничего не пишет. `--out` — просьба человека, её держит отдельный тест.
+    "sarif": (),
 }
 # Отказ argparse — это не поведение команды: он печатается до её начала.
 ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are required",
@@ -4073,6 +4077,20 @@ class WriteBoundaryTest(unittest.TestCase):
         appeared = {rel for rel in self._snapshot() if rel not in before}
         self.assertEqual(appeared, {"docs/review-summary.md"})
 
+    def test_sarif_пишет_только_по_out_и_только_туда(self):
+        """`sarif` без `--out` печатает в поток и не пишет ничего (это держит обход выше);
+        с `--out` — ровно один файл, названный человеком, в том числе вне репозитория."""
+        before = self._snapshot()
+        out = self.s.run("sarif", "--out", "build/finetooth.sarif")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        outside = Path(tempfile.mkdtemp(prefix="finetooth-out-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        self.assertEqual(self.s.run("sarif", "--out", str(outside / "ф.sarif")).returncode, 0)
+        self.assertTrue((outside / "ф.sarif").exists())
+        after = self._snapshot()
+        self.assertEqual({rel for rel in after if rel not in before}, {"build/finetooth.sarif"})
+        self.assertEqual({rel for rel in before if after[rel] != before[rel]}, set())
+
     def test_обещание_безопасности_называет_то_же_исключение(self):
         """Правило и текст обещания не должны разъезжаться: то, что тест разрешает
         инструменту, обязано быть названо в SECURITY.md."""
@@ -4080,6 +4098,7 @@ class WriteBoundaryTest(unittest.TestCase):
         self.assertIn("docs/review/", promise)
         for rel in self.ALLOWED_OUTSIDE:
             self.assertIn(rel, promise, f"SECURITY.md не называет {rel}")
+        self.assertIn("`sarif`", promise, "SECURITY.md не называет запись `sarif --out`")
         # Скрипт-запускатель пишет во временный каталог и отправляет промпт по сети —
         # обещание обязано говорить и об этом, иначе оно лжёт о наборе целиком.
         runner = (SKILL / "assets" / "run-role.sh").read_text(encoding="utf-8")
@@ -6958,7 +6977,12 @@ jobs:
         зелёный CI — то, что защита ветки требует перед слиянием в `master`. `stale.yml`
         и установка `skills-ref` закреплены давно; `actions/checkout` ехал по `v5`."""
         loose = []
-        for wf in sorted((KIT / ".github" / "workflows").glob("*.yml")):
+        # Образцы CI из скилла — тоже рабочие процессы, только чужого проекта: их вставляют
+        # как есть, и подвижный тег уезжает туда же. `upload-sarif` держит токен с правом
+        # записи в предупреждения.
+        snippets = sorted((SKILL / "assets").glob("*.yml"))
+        self.assertTrue(snippets, "образцов CI в скилле не нашлось — правило их не видит")
+        for wf in sorted((KIT / ".github" / "workflows").glob("*.yml")) + snippets:
             for n, line in enumerate(wf.read_text(encoding="utf-8").splitlines(), 1):
                 m = re.search(r"uses:\s*(\S+)", line)
                 if m and not re.search(r"@[0-9a-f]{40}\b", m.group(1)):
@@ -9953,6 +9977,315 @@ class SweepTest(unittest.TestCase):
         self.assertIn("+ sweep 3 files / 150 lines", sizes)
         prompt = self.s.run("prompt", "H1", "--role", "hunter").stdout
         self.assertIn("docs/review/sweeps/H1", prompt)
+
+
+# ----------------------------------------------------------------------------- SARIF
+#
+# Проверяющий структуры SARIF 2.1.0 — свой: схема живёт в сети, а у набора сети нет, и
+# зависимостей тоже (jsonschema в стандартной библиотеке нет). Что обязательно — выписано из
+# первоисточников, и каждое требование названо рядом с тем, откуда оно:
+#   OASIS SARIF 2.1.0 errata 01 (§ — раздел спецификации);
+#   GitHub, «SARIF support for code scanning» (GH) — что читает Code Scanning.
+# Сверено 25.09 с самой схемой (json.schemastore.org/sarif-2.1.0.json и схемой OASIS) через
+# jsonschema вне набора: выгрузка этого репозитория проходит обе без единой ошибки.
+SARIF_LEVELS = ("none", "note", "warning", "error")                    # §3.27.10
+SARIF_SUPPRESSION_KINDS = ("inSource", "external")                     # §3.35.2
+SARIF_SUPPRESSION_STATUSES = ("accepted", "underReview", "rejected")   # §3.35.3
+# RFC 3986, на который ссылается §3.10.1: в относительной ссылке пути — только эти знаки и
+# `%XX`. Пробел и кириллица сырыми сюда не входят.
+URI_PATH = re.compile(r"(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})+")
+
+
+def sarif_problems(doc) -> list[str]:
+    out = []
+    if not isinstance(doc, dict):
+        return ["журнал SARIF — не объект"]
+    if doc.get("version") != "2.1.0":                                   # §3.13.2, GH
+        out.append("version не 2.1.0")
+    if not isinstance(doc.get("$schema"), str):                         # GH: $schema
+        out.append("нет $schema")
+    runs = doc.get("runs")
+    if not isinstance(runs, list) or not runs:                          # §3.13.4
+        return out + ["runs — не непустой массив"]
+    for r, run in enumerate(runs):
+        driver = (run.get("tool") or {}).get("driver") if isinstance(run, dict) else None
+        if not isinstance(driver, dict):                                # §3.14.6, §3.18.2
+            out.append(f"runs[{r}]: нет tool.driver")
+            continue
+        if not isinstance(driver.get("name"), str) or not driver["name"]:   # §3.19.8
+            out.append(f"runs[{r}]: у driver нет name")
+        rules = driver.get("rules", [])
+        if not isinstance(rules, list):
+            out.append(f"runs[{r}]: rules — не массив")
+            rules = []
+        ids = []
+        for i, rule in enumerate(rules):
+            if not isinstance(rule, dict) or not isinstance(rule.get("id"), str):  # §3.49.3
+                out.append(f"rules[{i}]: нет id")
+                continue
+            ids.append(rule["id"])
+            for field in ("shortDescription", "fullDescription", "help"):  # GH: required
+                text = (rule.get(field) or {}).get("text")
+                if not isinstance(text, str) or not text:
+                    out.append(f"rules[{i}]: нет {field}.text")
+                elif field != "help" and len(text) > 1024:              # GH: 1024
+                    out.append(f"rules[{i}]: {field}.text длиннее 1024")
+            level = (rule.get("defaultConfiguration") or {}).get("level", "warning")
+            if level not in SARIF_LEVELS:
+                out.append(f"rules[{i}]: уровень {level!r}")
+        if len(set(ids)) != len(ids):
+            out.append(f"runs[{r}]: id правил повторяются")
+        results = run.get("results", [])                               # §3.14.23: MAY
+        if not isinstance(results, list):
+            out.append(f"runs[{r}]: results — не массив")
+            continue
+        for n, res in enumerate(results):
+            where = f"results[{n}]"
+            msg = res.get("message") if isinstance(res, dict) else None
+            if not isinstance(msg, dict) or not (isinstance(msg.get("text"), str)
+                                                 or isinstance(msg.get("id"), str)):
+                out.append(f"{where}: нет message.text")                # §3.27.11, §3.11
+                continue
+            if res.get("level", "warning") not in SARIF_LEVELS:
+                out.append(f"{where}: уровень {res.get('level')!r}")
+            rid, rix = res.get("ruleId"), res.get("ruleIndex")
+            if rid is not None and rid not in ids:
+                out.append(f"{where}: ruleId {rid!r} не описан в rules")
+            if rix is not None and (not isinstance(rix, int) or not 0 <= rix < len(ids)
+                                    or ids[rix] != rid):                # §3.27.6
+                out.append(f"{where}: ruleIndex не указывает на ruleId")
+            fp = res.get("partialFingerprints")
+            if not isinstance(fp, dict) or not fp.get("primaryLocationLineHash"):  # GH
+                out.append(f"{where}: нет partialFingerprints.primaryLocationLineHash")
+            locs = res.get("locations")
+            if not isinstance(locs, list) or not locs:                  # GH: хотя бы одно
+                out.append(f"{where}: нет locations")
+                locs = []
+            for loc in locs:
+                phys = (loc or {}).get("physicalLocation") or {}
+                uri = (phys.get("artifactLocation") or {}).get("uri")
+                if not isinstance(uri, str) or not URI_PATH.fullmatch(uri) \
+                        or uri.startswith("/") or re.match(r"[A-Za-z][\w+.-]*:", uri):
+                    out.append(f"{where}: uri {uri!r} — не относительная ссылка RFC 3986")
+                line = (phys.get("region") or {}).get("startLine")
+                if not isinstance(line, int) or isinstance(line, bool) or line < 1:  # §3.30.5, GH
+                    out.append(f"{where}: startLine {line!r}")
+            for sup in res.get("suppressions", []) or []:
+                if sup.get("kind") not in SARIF_SUPPRESSION_KINDS:
+                    out.append(f"{where}: suppression.kind {sup.get('kind')!r}")
+                if sup.get("status", "accepted") not in SARIF_SUPPRESSION_STATUSES:
+                    out.append(f"{where}: suppression.status {sup.get('status')!r}")
+    return out
+
+
+class SarifExportTest(unittest.TestCase):
+    """`review sarif`: реестр → SARIF 2.1.0 для GitHub Code Scanning (направление 18, шаг 1).
+
+    Держит две вещи. Первая — выгрузка проходит структуру SARIF 2.1.0 (`sarif_problems`
+    выше; сам проверяющий доказан порчей, иначе «прошла» ничего не значит). Вторая — каждое
+    поле берётся из реестра, с обеих сторон: открытая выгружена, закрытая — нет; уровень —
+    таблицей по серьёзности; правило — корень, без корня — блок; отпечаток — номер находки.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        for f in ("src/one.ts", "src/two.ts", "src/мой файл.ts"):
+            self.s.write(f, "первая\nвторая\nтретья\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+
+    def register(self, *rows: dict) -> None:
+        (self.s.root / "docs/review/findings.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+    @staticmethod
+    def row(fid: str, status: str = "open", severity: str = "medium", **extra) -> dict:
+        return {"id": fid, "block": "H1", "severity": severity, "confidence": "confirmed",
+                "status": status, "file": "src/one.ts", "line": 2,
+                "claim": f"утверждение {fid}", "scenario": f"сценарий {fid}", **extra}
+
+    def sarif(self, *args: str) -> dict:
+        out = self.s.run("sarif", *args)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    @staticmethod
+    def results(doc: dict) -> dict[str, dict]:
+        return {r["properties"]["finding"]: r for r in doc["runs"][0]["results"]}
+
+    def test_выгрузка_проходит_структуру_sarif(self):
+        self.register(
+            self.row("H1-001", root="общий корень"),
+            self.row("H1-002", "deferred", defer_reason="ждёт блок H2"),
+            self.row("H1-003", "fixed", fix_commit="abc1234"),
+            self.row("H1-004", "rejected", reject_reason="не воспроизводится"),
+            self.row("H1-005", "duplicate", dup_of="H1-001"),
+            self.row("H1-006", file="src/мой файл.ts", line=3, severity="critical"))
+        doc = self.sarif()
+        self.assertEqual(sarif_problems(doc), [])
+        self.assertEqual(doc["runs"][0]["tool"]["driver"]["name"], "finetooth")
+
+    # Порча, на которой проверяющий обязан покраснеть: каждое требование — своей строкой.
+    SPOILS = {
+        "версия": lambda d: d.update(version="2.0.0"),
+        "без $schema": lambda d: d.pop("$schema"),
+        "без runs": lambda d: d.update(runs=[]),
+        "без имени инструмента": lambda d: d["runs"][0]["tool"]["driver"].pop("name"),
+        "правило без id": lambda d: d["runs"][0]["tool"]["driver"]["rules"][0].pop("id"),
+        "правило без help": lambda d: d["runs"][0]["tool"]["driver"]["rules"][0].pop("help"),
+        "длинное описание": lambda d: d["runs"][0]["tool"]["driver"]["rules"][0].update(
+            shortDescription={"text": "x" * 1025}),
+        "без сообщения": lambda d: d["runs"][0]["results"][0].pop("message"),
+        "чужой уровень": lambda d: d["runs"][0]["results"][0].update(level="critical"),
+        "ruleId не описан": lambda d: d["runs"][0]["results"][0].update(ruleId="нет такого"),
+        "без отпечатка": lambda d: d["runs"][0]["results"][0].pop("partialFingerprints"),
+        "без места": lambda d: d["runs"][0]["results"][0].pop("locations"),
+        "сырой пробел в uri": lambda d: d["runs"][0]["results"][0]["locations"][0][
+            "physicalLocation"]["artifactLocation"].update(uri="src/my file.ts"),
+        "абсолютный uri": lambda d: d["runs"][0]["results"][0]["locations"][0][
+            "physicalLocation"]["artifactLocation"].update(uri="/src/one.ts"),
+        "строка ноль": lambda d: d["runs"][0]["results"][0]["locations"][0][
+            "physicalLocation"]["region"].update(startLine=0),
+        "подавление без kind": lambda d: d["runs"][0]["results"][0].update(
+            suppressions=[{"status": "accepted"}]),
+    }
+
+    def test_проверяющий_структуры_краснеет_на_каждом_нарушении(self):
+        """Обратная сторона: проверяющий, который молчит на испорченном журнале, делает
+        «выгрузка прошла структуру» пустым словом."""
+        self.register(self.row("H1-001", root="корень"))
+        clean = self.sarif()
+        self.assertEqual(sarif_problems(clean), [])
+        for name, spoil in self.SPOILS.items():
+            doc = json.loads(json.dumps(clean))
+            spoil(doc)
+            with self.subTest(порча=name):
+                self.assertNotEqual(sarif_problems(doc), [], "проверяющий порчи не увидел")
+
+    def test_выгружены_открытая_и_отложенная_закрытые_нет(self):
+        self.register(self.row("H1-001"),
+                      self.row("H1-002", "deferred", defer_reason="принятый риск"),
+                      self.row("H1-003", "fixed", fix_commit="abc1234"),
+                      self.row("H1-004", "rejected", reject_reason="не дефект"),
+                      self.row("H1-005", "duplicate", dup_of="H1-001"))
+        self.assertEqual(sorted(self.results(self.sarif())), ["H1-001", "H1-002"],
+                         "закрытая находка в Security — дефект, которого по реестру нет")
+
+    def test_пустой_реестр_даёт_пустой_прогон_а_не_отказ(self):
+        """Ревью без находок — законное состояние: GitHub закрывает прежние предупреждения
+        только по выгрузке, где их больше нет."""
+        doc = self.sarif()
+        self.assertEqual(sarif_problems(doc), [])
+        self.assertEqual(doc["runs"][0]["results"], [])
+
+    def test_уровень_берётся_из_серьёзности_таблицей(self):
+        table = {"critical": "error", "high": "error", "medium": "warning", "low": "note"}
+        self.register(*[self.row(f"H1-00{i}", severity=sev)
+                        for i, sev in enumerate(table, 1)])
+        got = {r["properties"]["severity"]: r["level"] for r in self.results(self.sarif()).values()}
+        self.assertEqual(got, table)
+
+    def test_правило_это_корень_а_без_корня_блок(self):
+        self.register(self.row("H1-001", root="разбор по форме, а не по смыслу"),
+                      self.row("H1-002", root="разбор по форме, а не по смыслу", severity="high"),
+                      self.row("H1-003"))
+        doc = self.sarif()
+        res = self.results(doc)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]
+        self.assertEqual(res["H1-001"]["ruleId"], "разбор по форме, а не по смыслу")
+        self.assertEqual(res["H1-002"]["ruleId"], res["H1-001"]["ruleId"],
+                         "экземпляры одного класса — одно правило")
+        self.assertEqual(res["H1-003"]["ruleId"], "H1")
+        self.assertEqual(sorted(r["id"] for r in rules), ["H1", "разбор по форме, а не по смыслу"])
+        for r in res.values():
+            self.assertEqual(rules[r["ruleIndex"]]["id"], r["ruleId"])
+        by_id = {r["id"]: r for r in rules}
+        self.assertEqual(by_id["разбор по форме, а не по смыслу"]["defaultConfiguration"]["level"],
+                         "error", "умолчание правила — самый тяжёлый его экземпляр")
+
+    def test_сообщение_это_утверждение_сценарий_и_отчёт_блока(self):
+        self.register(self.row("H1-001"))
+        text = self.results(self.sarif())["H1-001"]["message"]["text"]
+        self.assertTrue(text.startswith("утверждение H1-001"),
+                        "GitHub показывает первое предложение — это обязано быть утверждение")
+        self.assertIn("сценарий H1-001", text)
+        self.assertNotIn("H1-demo", text, "отчёта нет — и ссылки на него быть не должно")
+        self.s.write("docs/review/reports/H1-demo.hunter.md", "# охотник\n")
+        res = self.results(self.sarif())["H1-001"]
+        self.assertIn("docs/review/reports/H1-demo.hunter.md", res["message"]["text"])
+        self.assertEqual(res["properties"]["report"], "docs/review/reports/H1-demo.hunter.md")
+        self.s.write("docs/review/reports/H1-demo.verify.md", "# проверяющий\n")
+        res = self.results(self.sarif())["H1-001"]
+        self.assertEqual(res["properties"]["report"], "docs/review/reports/H1-demo.verify.md",
+                         "находку в реестр внёс вердикт проверяющего — на его отчёт и ссылка")
+
+    def test_отпечаток_это_номер_находки_и_правка_строки_его_не_меняет(self):
+        self.register(self.row("H1-001"))
+        first = self.results(self.sarif())["H1-001"]["partialFingerprints"]
+        self.assertEqual(first["primaryLocationLineHash"], "test/H1-001",
+                         "отпечаток — ревью и номер находки: GitHub читает только этот ключ")
+        self.s.write("src/one.ts", "первая\nвторая, переписанная\nтретья\n")
+        self.s.commit("правка строки находки")
+        self.assertEqual(self.results(self.sarif())["H1-001"]["partialFingerprints"], first,
+                         "правка строки открыла бы в GitHub второе предупреждение рядом с первым")
+
+    def test_путь_с_пробелом_и_кириллицей_относительный_и_закодирован(self):
+        self.register(self.row("H1-001", file="src/мой файл.ts", line=3))
+        loc = self.results(self.sarif())["H1-001"]["locations"][0]["physicalLocation"]
+        uri = loc["artifactLocation"]["uri"]
+        self.assertEqual(uri, "src/%D0%BC%D0%BE%D0%B9%20%D1%84%D0%B0%D0%B9%D0%BB.ts")
+        self.assertIn(urllib.parse.unquote(uri), self.s.git("ls-files", "-z").stdout.split("\0"),
+                      "раскодированный путь обязан быть файлом репозитория, от его корня")
+        self.assertEqual(loc["region"]["startLine"], 3)
+
+    def test_находка_без_строки_указывает_на_начало_файла(self):
+        row = self.row("H1-001")
+        row.pop("line")
+        self.register(row)
+        doc = self.sarif()
+        self.assertEqual(sarif_problems(doc), [])
+        self.assertEqual(self.results(doc)["H1-001"]["locations"][0]["physicalLocation"]
+                         ["region"]["startLine"], 1)
+
+    def test_отложенная_находка_принятый_риск_и_в_подавлении_и_в_тексте(self):
+        self.register(self.row("H1-001", "deferred", defer_reason="ждёт блок H2"),
+                      self.row("H1-002"))
+        res = self.results(self.sarif())
+        self.assertEqual(res["H1-001"]["suppressions"],
+                         [{"kind": "external", "status": "accepted",
+                           "justification": "ждёт блок H2"}])
+        self.assertTrue(res["H1-001"]["message"]["text"].startswith("Принятый риск"),
+                        "GitHub подавлений не читает: принятый риск обязан сказать о себе сам")
+        self.assertIn("ждёт блок H2", res["H1-001"]["message"]["text"])
+        self.assertNotIn("suppressions", res["H1-002"], "открытая находка не подавлена")
+        self.assertFalse(res["H1-002"]["message"]["text"].startswith("Принятый риск"))
+
+    def test_находка_внесённая_import_выгружается_путём_человека(self):
+        """Путь человека: черновик → `import` → `sarif`, без записи в реестр руками."""
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "high", "confidence": "confirmed", "status": "open",
+            "file": "src/two.ts", "line": 1, "claim": "дефект", "scenario": "сценарий",
+            "root": "класс"}, ensure_ascii=False) + "\n")
+        self.s.commit("черновик")
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        doc = self.sarif()
+        self.assertEqual(sarif_problems(doc), [])
+        res = self.results(doc)["H1-001"]
+        self.assertEqual((res["ruleId"], res["level"]), ("класс", "error"))
+        self.assertEqual(res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+                         "src/two.ts")
+
+    def test_out_пишет_файл_и_ничего_не_печатает_в_поток(self):
+        self.register(self.row("H1-001"))
+        printed = self.s.run("sarif")
+        out = self.s.run("sarif", "--out", "build/finetooth.sarif")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        written = (self.s.root / "build/finetooth.sarif").read_text(encoding="utf-8")
+        self.assertEqual(written, printed.stdout, "--out пишет то же, что печатается в поток")
+        self.assertNotIn('"version"', out.stdout)
 
 if __name__ == "__main__":
     unittest.main()

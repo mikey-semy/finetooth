@@ -280,7 +280,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-393 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+407 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -420,10 +420,10 @@ share of what exists that is.
 skills/finetooth/                THE SKILL — this is what gets installed into the agent
   SKILL.md                        when to apply and the order of work (read by the agent)
   LICENSE                         terms — travel with the skill
-  scripts/review.py               the tool, 23 commands: version, setup, init, status, next,
+  scripts/review.py               the tool, 24 commands: version, setup, init, status, next,
                                   inventory, sizes, coverage, coupling, order, roots, prompt,
                                   import, set-status, set-finding, hypotheses, restamp,
-                                  backfill, refs, findings, summary, check, log
+                                  backfill, refs, findings, summary, sarif, check, log
   scripts/axes.py                 the spend of a headless run, broken down by axis
   references/hunter.md            hunter: reads the block's files and raises findings
   references/verify.md            verifier: its own independent pass, three verdicts
@@ -444,10 +444,12 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
                                   journal.example.ru.md, agent-banner.ru.md
   assets/makefile-snippet.mk      make targets
   assets/package-json-snippet.json the same for an npm project
+  assets/github-actions-snippet.yml CI for GitHub: `check` as a required check + SARIF upload
+  assets/gitlab-ci-snippet.yml    CI for GitLab: `check` as a job
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 393 scenarios
+tests/                            tests of the tool and the skill format: 407 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
@@ -495,6 +497,19 @@ fingerprints, the rejected findings with reasons (so the next review does not fi
 the accepted risks, and what closed each class (guards, commits). `review summary --aged <file>`
 answers, from `git log` alone, how far each block has drifted since that commit — an auditor's
 re-test starts from there, not from zero.
+
+**Findings where the platform shows them.** `review sarif` prints the open and deferred
+findings of the register as SARIF 2.1.0 for GitHub code scanning: the rule is the finding's
+defect class (its block when it has none), the level comes from the severity (critical and
+high → error, medium → warning, low → note), the location is the file and line from the
+repository root, the fingerprint is the finding's id — an edited line does not open a second
+alert. A deferred finding carries an accepted SARIF suppression and says "accepted risk" in
+its message, because GitHub does not read suppressions. `security-severity` is not written:
+the register does not say which finding is a vulnerability. The ready jobs are
+`assets/github-actions-snippet.yml` (`check` as a required check plus the upload through
+`github/codeql-action/upload-sarif`, pinned to a commit) and `assets/gitlab-ci-snippet.yml`
+(`check` as a job; GitLab shows SARIF on the Ultimate tier only, and a Code Quality report is
+the next step).
 
 **Order of walking.** `review order` ranks the blocks by the cost of failure first (`risk` on
 the block) and by change frequency second — measured on the first project as a prediction:

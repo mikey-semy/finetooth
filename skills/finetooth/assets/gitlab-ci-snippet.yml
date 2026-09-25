@@ -1,0 +1,36 @@
+# The review in GitLab CI. Pasted into the project's .gitlab-ci.yml.
+#
+# `review.py check` as a job: the review state is consistent — statuses, reports, the
+# register, the coverage map, and no open finding whose file changed since it was read.
+# Where nobody watches the interface and an agent merges, this job is the only gate: make
+# it required ("Pipelines must succeed" in the merge request settings).
+#
+# There is no SARIF job here, on purpose. GitLab reads SARIF (`artifacts:reports:sarif`) on
+# the Ultimate tier only — generally available since GitLab 19.2; on Free and Premium it is
+# not shown anywhere. What every tier's merge request widget does read is a Code Quality
+# report (CodeClimate JSON); exporting one is the next step of the kit, not this file.
+# Until then the findings are in docs/review/findings.md. On Ultimate, the job below can
+# add `python3 "$REVIEW" sarif --out finetooth.sarif` and
+# `artifacts: {reports: {sarif: finetooth.sarif}}`; GitLab then skips the deferred findings
+# (it drops a result whose suppression is accepted), which is what "accepted risk" means.
+#
+# Sources: https://docs.gitlab.com/user/application_security/detect/sarif/ and
+# https://docs.gitlab.com/ci/testing/code_quality/
+
+# The path to the tool is where the skill was installed into the project; change REVIEW if
+# yours is elsewhere. The image is the official Python one: it carries git, which the tool
+# reads the repository through.
+
+review-check:
+  stage: test
+  image: python:3.12
+  variables:
+    REVIEW: .claude/skills/finetooth/scripts/review.py
+    # The whole history: `check` follows fix commits and the main line through git, and
+    # GitLab clones 20 commits deep by default.
+    GIT_DEPTH: "0"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - python3 "$REVIEW" check

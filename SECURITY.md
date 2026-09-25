@@ -7,10 +7,12 @@ read the prompt before handing it to an agent.
 ## What the kit writes, and where
 
 - **`review.py` writes under `docs/review/`** — the state, the register, the coverage map,
-  the journal. Nothing else, with two exceptions the user asks for by name:
+  the journal. Nothing else, with the exceptions the user asks for by name:
   - `summary` writes the summary that is meant to outlive the review directory, so it is
     written **outside** it: `docs/review-summary.md` by default, or wherever `--out` says —
     including outside the repository.
+  - `sarif` prints the findings as SARIF to stdout and writes nothing; with `--out` it
+    writes that one file wherever `--out` says — for CI to hand to code scanning.
   - `setup` creates files under `docs/review/` only, and never overwrites one that exists.
 - **`review.py` sends nothing over the network** and runs no command but `git`.
 - **`assets/run-role.sh` is the exception, and it is opt-in.** It is a convenience runner,
