@@ -4674,5 +4674,145 @@ class ShippedSampleTest(unittest.TestCase):
         self.assertIn("comes after phase", self.run_in(root, "check").stdout)
 
 
+class BilingualAssetTest(unittest.TestCase):
+    """УЗДА КЛАССА «перевод, который не переведён, и подсказка не из CLI».
+
+    Договор двуязычия: строка, которая есть на одном языке и нет на другом, — дефект.
+    Русский баннер нёс английский текст слово в слово (переведено было только пояснение
+    вокруг), а `setup --lang ru` называл в своём списке дел английские образцы — и четыре
+    русских файла набора не были упомянуты нигде. Рядом второй класс: тот же баннер
+    вписывал `make review-status` намертво, и проект без Makefile рассылал каждой своей
+    сессии несуществующую команду.
+    """
+
+    WORD = re.compile(r"[A-Za-z]{3,}")
+    CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+    # Ассеты, которые уезжают в чужой проект и читаются там человеком и агентом: команду
+    # они обязаны брать из {{CLI}}. Образцы целей сборки (`makefile-snippet.mk`,
+    # `package-json-snippet.json`) — наоборот, сами и есть эти команды.
+    HANDED_OVER = ("entry-point", "agent-banner")
+    PROJECT_COMMANDS = re.compile(r"\b(make review|npm run review|just review)")
+
+    def ru_pairs(self) -> list[tuple[Path, Path]]:
+        out = []
+        for d in ("references", "assets"):
+            for ru in sorted((SKILL / d).glob("*.ru.*")):
+                en = ru.with_name(ru.name.replace(".ru.", ".", 1))
+                self.assertTrue(en.exists(), f"{ru.name} без английского оригинала")
+                out.append((en, ru))
+        return out
+
+    def english_prose(self, text: str) -> list[str]:
+        """Строки без единой кириллической буквы, которые при этом являются прозой.
+
+        Команда, путь и код по-английски и должны быть; пять и больше слов подряд вне
+        ограды и вне обратных кавычек — это непереведённый текст.
+        """
+        out, fenced = [], False
+        for line in text.splitlines():
+            if line.lstrip().startswith(("```", "~~~")):
+                fenced = not fenced
+                continue
+            if fenced or self.CYRILLIC.search(line):
+                continue
+            bare = re.sub(r"`[^`]*`", " ", re.sub(r"https?://\S+", " ", line))
+            if len(self.WORD.findall(bare)) >= 5:
+                out.append(line)
+        return out
+
+    def test_русская_копия_действительно_переведена(self):
+        pairs = self.ru_pairs()
+        self.assertGreater(len(pairs), 5, "русских копий стало подозрительно мало")
+        for en, ru in pairs:
+            with self.subTest(file=ru.name):
+                left = self.english_prose(ru.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    left[:3], [],
+                    f"{ru.name}: {len(left)} строк английской прозы — суффикс .ru для того "
+                    f"и нужен, чтобы вставляли перевод, а не оригинал")
+
+    def test_ассеты_для_чужого_проекта_берут_команду_из_подстановки(self):
+        for name in self.HANDED_OVER:
+            for path in sorted((SKILL / "assets").glob(f"{name}*")):
+                with self.subTest(file=path.name):
+                    text = path.read_text(encoding="utf-8")
+                    hit = self.PROJECT_COMMANDS.search(text)
+                    self.assertIsNone(
+                        hit, f"{path.name} называет команду конкретного проекта "
+                             f"({hit.group(0) if hit else ''}) — подсказки собираются из CLI")
+                    self.assertIn("{{CLI}}", text,
+                                  f"{path.name} не берёт команду проекта ниоткуда")
+
+    def test_образцы_целей_сборки_команду_называть_обязаны(self):
+        """Обратная сторона правила: снипеты целей и есть эти команды."""
+        self.assertRegex((SKILL / "assets" / "makefile-snippet.mk").read_text(encoding="utf-8"),
+                         r"review-status")
+        self.assertIn("review", json.loads(
+            (SKILL / "assets" / "package-json-snippet.json").read_text(encoding="utf-8"))["scripts"])
+
+
+class SetupLanguageTest(unittest.TestCase):
+    """`setup --lang ru` называет русские образцы, а баннер печатает готовым к вставке."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="finetooth-setup-lang-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True)
+        (self.root / "app.ts").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True)
+
+    def setup(self, *extra: str) -> str:
+        out = subprocess.run(["python3", str(TOOL), "setup", *extra], cwd=self.root,
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    def named_assets(self, text: str) -> list[str]:
+        return re.findall(r"/skills/finetooth/assets/([\w.\-]+)", text)
+
+    def test_русское_ревью_получает_русские_образцы(self):
+        out = self.setup("--lang", "ru", "--project", "Проект", "--cli", "npm run review --")
+        named = self.named_assets(out)
+        self.assertTrue(named, "список дел перестал называть образцы: " + out)
+        for name in named:
+            with self.subTest(asset=name):
+                self.assertTrue((SKILL / "assets" / name).exists(), name)
+                ru_name = re.sub(r"\.(\w+)$", r".ru.\1", name.replace(".ru.", ".", 1))
+                if (SKILL / "assets" / ru_name).exists():
+                    self.assertEqual(name, ru_name,
+                                     f"русскому ревью назван английский образец {name}")
+        # Точку входа setup не называет, а переносит: её достижимость видна в том, что
+        # записано на диск.
+        self.assertIn("# Сплошное ревью Проект",
+                      (self.root / "docs/review/README.md").read_text(encoding="utf-8"),
+                      "точка входа взята не на языке ревью")
+        # Остальные русские ассеты обязаны быть названы: иначе они едут в поставке, и
+        # найти их пользователю неоткуда — ровно так и жили четыре из них.
+        for ru in sorted((SKILL / "assets").glob("*.ru.*")):
+            if ru.name.startswith("entry-point"):
+                continue
+            self.assertIn(ru.name, named, f"{ru.name} не назван ничем в наборе")
+
+    def test_английское_ревью_получает_английские_образцы(self):
+        """Вторая сторона: русские копии не должны протечь в английский список дел."""
+        named = self.named_assets(self.setup("--project", "Demo"))
+        self.assertTrue(named)
+        for name in named:
+            self.assertNotIn(".ru.", name, f"английскому ревью назван русский образец {name}")
+
+    def test_баннер_печатается_готовым_и_с_командой_проекта(self):
+        out = self.setup("--project", "Demo", "--cli", "npm run review --")
+        self.assertIn("npm run review -- status", out,
+                      "баннер обязан называть команду, которой проект зовёт инструмент")
+        self.assertIn("A whole-repository review of Demo is in progress", out)
+        self.assertNotIn("{{", out, "в напечатанном баннере не осталось подстановок")
+        ru = self.setup("--lang", "ru", "--project", "Проект")
+        self.assertIn("Идёт сплошное ревью проекта Проект", ru)
+        self.assertNotIn("{{", ru)
+
+
 if __name__ == "__main__":
     unittest.main()
