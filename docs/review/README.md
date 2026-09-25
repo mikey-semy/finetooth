@@ -9,6 +9,7 @@ python3 skills/finetooth/scripts/review.py status                     # where we
 python3 skills/finetooth/scripts/review.py coverage                   # the file → block map; fails if a file is unowned
 python3 skills/finetooth/scripts/review.py check                      # the state is consistent
 python3 skills/finetooth/scripts/review.py hypotheses H1              # which of the block's hypotheses are closed
+python3 skills/finetooth/scripts/review.py roots                      # defect classes: how many instances, what closes each
 python3 skills/finetooth/scripts/review.py prompt H1 --role hunter    # a ready prompt for an agent
 ```
 
@@ -24,8 +25,8 @@ python3 skills/finetooth/scripts/review.py prompt H1 --role hunter    # a ready 
 | `findings.md` | human-readable summary, **generated** from the jsonl |
 | `coverage.tsv` | the coverage map, **generated**; the proof that the review is complete |
 | `journal.md` | the decisions journal: what was decided and why. Cannot be recovered — write it right away |
-| `prompts/` | optional: your own version of a role template (`hunter.md`, `verify.md`, `fix.md`). No file — the skill's template is used |
-| `reports/` | agent reports. The agent writes them itself, not the lead session |
+| `prompts/` | optional: your own version of a role template (`hunter.md`, `verify.md`, `fix.md`, `fixreview.md`). No file — the skill's template is used |
+| `reports/` | agent reports, named by the tool: `<ID>-<slug>.hunter.md`, `.verify.md`, `.fix.md` (`.fix-N.md` from round 2), `.fixreview-N.md`. The agent writes them itself, not the lead session |
 
 ## Working through a block
 
@@ -40,15 +41,38 @@ python3 skills/finetooth/scripts/review.py prompt H1 --role hunter    # a ready 
    review finds the same thing. Then `set-status <ID> verified`.
 4. **Acceptance.** Read both reports yourself and check them against the acceptance criterion.
    Coverage incomplete — send the block back for another pass, do not close it.
-5. **Into the register.** `import <ID>`, then `findings`, then `check`.
+5. **Into the register.** `import <ID>`, then `findings`, then `check`. The plain import
+   refuses when the file would erase a finding already recorded against the block or
+   overturn a decision already taken — then `import <ID> --append`: what is recorded stays,
+   the new rows get the next free numbers.
 6. **Journal.** `log <ID> "what was decided and why"`.
-7. **Fixing** (`--role fix`) — by a **different** agent, not the one that hunted.
-8. **Diff review** — by those who did not write it, **before** the suggestion is opened. Only after
-   that `set-status <ID> closed`.
+7. **Fixing** (`--role fix`) — by a **different** agent, not the one that hunted. A repeat
+   round is `--role fix --round N`: without the flag the second fixer's report overwrites
+   the first one's. Findings are moved with `set-finding <ID…> fixed --commit <sha>`, and a
+   defect class with a third instance is closed by a guard (`--rule <path to the test or
+   rule>`), not by a list of fixes.
+   **The fix gate:** `set-status <next ID> running` refuses while findings at the `fix_gate`
+   severity or above (`high` by default, set in `blocks.json`) are still open in the blocks
+   already passed — the method finds faster than a project fixes. `status` shows that debt
+   as its own line.
+8. **Fix review** (`--role fixreview --diff main...HEAD [--round N] [--scope <half>]`) — a
+   fresh agent that did not write the fixes, **before** the change is opened. Its report is
+   `reports/<ID>-<slug>.fixreview-<N>.md`, and a block with fixed findings does not pass
+   `check` without one. Its confirmed findings go into the register as a top-up
+   (`import <ID> --append`), even the ones already fixed. A new round only for a finding of
+   medium or higher; low ones are fixed without one.
+9. Only after that `set-status <ID> closed`.
 
 ⚠️ One agent does not hunt and fix at the same time. ⚠️ A block is not closed without the
 acceptance criterion met. ⚠️ Do not run more than two or three agents at once if a build is
 running on the same machine — the CPU is fully taken.
+
+## When the code moves under a block already read
+
+`check` keeps a fingerprint of what was read — the block's files, its context and the text
+of the hypotheses — and goes red when they change after the review. `restamp <ID>` is not a
+way to switch that off: it says on record that the new text was seen. `backfill` fills in
+the fingerprints of records written before fingerprints existed.
 
 ## Fixing rules
 
@@ -60,14 +84,20 @@ running on the same machine — the CPU is fully taken.
 - Fixes accumulate on one branch and leave as one suggestion per batch; security-critical ones
   — as a separate urgent one, without waiting for the batch.
 - In the register the finding gets `status: fixed` and the fix commit:
-  `set-finding <ID> fixed --commit <sha>`.
+  `set-finding <ID> fixed --commit <sha>`. A finding that cannot be fixed now is deferred
+  with a reason (`deferred --reason "…"`), not left open: a deferral without a reason is
+  refused, and the reason is what the summary publishes it by.
 - **No references to the review in code**: finding identifiers, block and suggestion numbers must
   not get into comments and tests — they die with this directory.
 
 ## What counts as finished
 
-All blocks `closed`, no records with status `open` in `findings.md`, and every rejected finding
-has its rejection reason recorded (`check` requires this).
+All blocks `closed`, no records with status `open` in `findings.md`, and every rejected
+finding has its rejection reason recorded (`check` requires this).
+
+A finding left `deferred` is **not** an unfinished one: it is an accepted risk, and it
+leaves the review that way — with the reason, under "Accepted risks" in the summary. What
+is forbidden is a deferral nobody signed, which is why the reason is demanded.
 
 ## How this directory dies
 

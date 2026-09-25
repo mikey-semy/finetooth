@@ -1,6 +1,6 @@
 {
   "review_id": "toy-review",
-  "updated_at": "2026-09-24T07:31:52Z",
+  "updated_at": "2026-09-25T05:19:41Z",
   "blocks": {
     "H1": {
       "status": "verified",
@@ -9,8 +9,9 @@
       "reports": [],
       "note": "",
       "reviewed_sha": "b9029a5da964fb34",
-      "refs_sha": "de50bab6191f2402",
-      "hypotheses_sha": "ae46150a4153bf20"
+      "refs_sha": "252e1c57c4aa56d8",
+      "hypotheses_sha": "ae46150a4153bf20",
+      "restamped_at": "2026-09-25T05:19:41Z"
     },
     "V1": {
       "status": "todo",

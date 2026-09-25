@@ -1,7 +1,7 @@
 ---
 name: finetooth
 description: Whole-repository review in blocks — with a file → block coverage map, hypotheses as the second denominator, four agent roles (hunter, verifier, fixer, fix reviewer) and on-disk state that survives session changes. Use when asked for a full or whole-codebase review or audit that must cover every file rather than a diff, to resume a review already in progress (the repository has docs/review/), or to run the hunter, verify, fix or fixreview role on a review block.
-license: MIT for the additions; the base was handed over by its author without a license — full terms in LICENSE
+license: MIT
 compatibility: Requires git and Python 3 (standard library only; tested on 3.12 and 3.14). Run from the directory of the repository under review.
 metadata:
   version: "0.7.0"
@@ -23,11 +23,18 @@ repository under review** (the root is taken from git by the working directory):
 
 ```sh
 python3 <path-to-skill>/scripts/review.py status
+python3 <path-to-skill>/scripts/review.py version   # which version of the kit this project is on
 ```
 
 Below it is called `review`. If `docs/review/blocks.json` has a `cli` field, the project calls
-the tool its own way (`npm run review --`, `make review`) — use that. Every refusal from the
-tool names the command that fixes it: read the refusal, do not guess.
+the tool its own way — use that. Every hint and every refusal is assembled from it
+(`<cli> coverage`, `<cli> restamp H1`), so the value has to be a command that takes the
+subcommand and its flags after it: `npm run review --`, a shell wrapper of the project's
+own. `make` is not one of them — it reads `--role` as its own option — so a project on
+`make` leaves `cli` unset and gets hints with the real path to the tool
+([assets/makefile-snippet.mk](assets/makefile-snippet.mk) has the targets for the everyday
+commands). Every refusal from the tool names the command that fixes it: read the refusal,
+do not guess.
 
 ## Getting started
 
@@ -85,24 +92,34 @@ one of your own:
    by execution, does its own pass over the most dangerous places, rewrites the findings file.
    Rejected findings are not deleted — they stay with the reason. Then `review set-status <ID> verified`.
 4. **Acceptance.** Read both reports yourself and check them against the acceptance criterion.
+   `review hypotheses <ID>` shows which of the block's hypotheses got a verdict and where.
    Coverage incomplete — the block goes back for another pass, not to closure.
 5. **Register.** `review import <ID>`, `review findings`, `review check`. The plain import
    refuses when the file would erase a finding already recorded against the block or overturn
    a recorded decision — then `import <ID> --append` (or `--force`, deliberately).
 6. **Journal.** `review log <ID> "what was decided and why"` — right away: this cannot be recovered.
-7. **Fixing** — yet another agent: `review prompt <ID> --role fix`. Cut assignments by related
-   areas, not one finding at a time. Run the gates and the revert check yourself after the
-   fixer. Findings are moved with `review set-finding <ID…> fixed --commit <sha>` (several ids
-   at once); a defect class with a third instance is closed by a guard
-   (`--rule <path to the test or rule>`), not by a list of fixes. Deferring is allowed only
-   with a reason (`deferred --reason`). **The fix gate:** `review set-status <next ID> running`
+7. **Fixing** — yet another agent: `review prompt <ID> --role fix [--round N]`. Cut assignments
+   by related areas, not one finding at a time. A repeat round needs `--round N`: without it
+   the second fixer writes over the first one's report, and the fix reviewer of round N is
+   pointed at `<ID>-<slug>.fix-N.md`, which nothing would have written. Run the gates and the
+   revert check yourself after the fixer. Findings are moved with
+   `review set-finding <ID…> fixed --commit <sha>` (several ids at once); a defect class with
+   a third instance is closed by a guard (`--rule <path to the test or rule>`), not by a list
+   of fixes. The guard is recorded only on the findings named in the command — name the
+   instances it goes red on; `review roots` lists the classes, their instances and which
+   guard each instance carries, and flags a root whose instances disagree.
+   Deferring is allowed only with a reason (`deferred --reason`), and a deferred finding
+   leaves the review as an accepted risk, published in the summary with that reason.
+   **The fix gate:** `review set-status <next ID> running`
    refuses while findings at `fix_gate` severity or above (`high` by default, set in
    `blocks.json`; `"none"` switches it off) are open in the blocks already passed — the
    method finds faster than a project fixes, and a finding that never reaches a fix is debt.
    `review status` shows this debt as its own line.
 8. **Fix reviewer** — a fresh agent that did not write the fixes:
    `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope <half>]`.
-   The diff is pasted into the prompt whole; two agents on two halves of the diff is fine. Its
+   The diff is pasted into the prompt whole, and `--scope` names a reviewer's half in its
+   report without shrinking it: a diff too large for one agent is split by giving each a
+   narrower `--diff` range. Its
    confirmed findings go into the register as a top-up import (`import <ID> --append`), even
    the ones already fixed. A new round only for a finding of medium or higher; low ones are
    fixed by the fixer or by the lead, and a lead's fix is marked in the journal and the PR as
@@ -123,6 +140,7 @@ one of your own:
 - Checking outside your own repository — against a fresh `origin` after `git fetch`: a stale
   tree shows what is fixed as broken.
 - No references to the review in code: finding and block numbers die with `docs/review/`.
+  `review refs` lists the ones that got in; `check` warns about them.
 - Do not run more than two or three agents at once if a build is running on the machine.
 
 ## What `review check` holds
@@ -142,7 +160,9 @@ more than a week behind the server.
 
 ## When the review is finished
 
-All blocks `closed`, no open findings, every rejected one has a reason. Then
+All blocks `closed`, no open findings, every rejected one has a reason and every deferred
+one — a deferral is an accepted risk that leaves the review with its reason, not an
+unfinished fix. Then
 `review summary` writes the one file that outlives the directory (`docs/review-summary.md`
 by default): the date and the base commit, the blocks and their acceptance criteria, the
 rejected findings with reasons, the accepted risks, what closed each defect class. Only then

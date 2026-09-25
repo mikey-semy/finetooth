@@ -12,7 +12,11 @@ defects; you are the check it does not have.
 1. **The diff is pasted below in full — read it, not the fixer's report.** The report is a
    claim, the diff is a fact. A discrepancy between them (a fix that is not in the report; a
    test that is claimed and not written; a finding named closed and not touched) is a
-   finding in itself.
+   finding in itself. Its volume is stated above the diff itself: if it does not fit what
+   you can hold at once, **say so** and ask for a narrower range (`--diff <part>`) — that is
+   the only thing that makes the diff smaller; `--scope` divides who reports on what, not
+   what is pasted. Reading what fits and reporting on the whole is the one outcome this rule
+   exists to prevent.
 2. **A fix is proven by reverting.** For every regression test make sure it goes red without
    the fix: from the code, or better by running it with the fix reverted. A test that is
    green on the old code guards nothing. Check that the reverted code **builds**: a removed
@@ -70,6 +74,8 @@ defects; you are the check it does not have.
 
 # Diff — range `{{DIFF_RANGE}}`, pasted in full
 
+{{DIFF_VOLUME}}
+
 {{DIFF}}
 
 # What to deliver
@@ -91,6 +97,12 @@ by violation / what was reproduced live. Honestly about what you did not do.
 **Why it is a defect:** the violated invariant, a rule above or common sense.
 **Introduced by this round or present before:** one of the two.
 **Confidence:** confirmed | plausible
+**Root:** a short name of the defect class if it is not the only one of its kind — one
+phrase, the same for every instance. It goes into the register as the `root` field of the
+finding; from the third instance the state check demands the class be closed by a guard.
+A guard is recorded per finding, not per root: check in `roots` that each guard the fixer
+recorded goes red on the defect of every finding it is recorded on — a guard green on one of
+them is a finding.
 
 ## Checked and found correct
 Fixes that looked suspicious but turned out to be right — with an explanation.

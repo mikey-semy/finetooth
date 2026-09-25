@@ -56,13 +56,14 @@ Terraform, Next.js, Better Auth); each has a reason.
 Branches: `master` holds releases only, `dev` is where work lands — open your PR against
 `dev` (it is the default). How a version number is chosen and what has to be true before a
 tag exists — `RELEASING.md`.
-In short: semantic versioning with a zero major, at most one release a week, four mechanical
-gates including a run on a live project, and no direct pushes to `master` for anyone.
+In short: semantic versioning with a zero major, at most one release a week, four gates before
+a tag — two run by CI, two by a human, including a run on a live project — and no direct pushes
+to `master` for anyone.
 
 ## Before a PR
 
 ```sh
-python3 -m unittest discover -s tests          # ~1 minute, needs only git
+python3 -m unittest discover -s tests          # ~5 minutes, needs only git
 skills-ref validate skills/finetooth            # pip install skills-ref
 ```
 
@@ -75,6 +76,13 @@ progress.
 Every commit is signed with the line `Signed-off-by: Name <email>` (`git commit -s`). With it
 you confirm the [Developer Certificate of Origin](https://developercertificate.org/): you have
 the right to hand over this code under the project's license. There is no CLA.
+
+CI checks it on every pull request — the commit's own author must be the one who signed off —
+and names the way out if a commit is missing the line. To run the same check locally:
+
+```sh
+.github/dco.sh origin/dev..HEAD
+```
 
 ## What we will not accept
 

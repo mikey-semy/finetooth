@@ -58,6 +58,16 @@ The design and intent are in [`README.md`](README.md), the check against world p
 8. **A change to a mechanism is a change to a prompt.** If a gate has started requiring
    something new, the role template must say so: the agent will not guess it from an error
    message that a human will see.
+9. **One place starts git; one container holds the refusals.** Every git run goes through
+   `git()`: it adds `-z` to any run whose output carries paths and reads that output back
+   (`.fields`, `.records`), so no call site can forget either. `git log` is ordered and parsed
+   only in `log_records`. Every gate of `check` adds its refusal through `Refusals` with its
+   OWN key — `gates.refuse("finding/code-changed", …)` — and that key is what the suite pairs
+   with the test holding the gate; `cmd_check` returns nothing but `gates.report()`. A process
+   started elsewhere, a refusal with a key assembled on the way, a gate that prints and exits
+   by itself: each is a red run, not a style note. This is the answer to a defect class that
+   came back three rounds running — a guard that recognises how a call is WRITTEN always
+   misses the next spelling.
 
 ## Check before committing
 
@@ -65,7 +75,8 @@ The design and intent are in [`README.md`](README.md), the check against world p
 python3 -m unittest discover -s tests
 ```
 
-98 scenarios, about a minute. The tests create temporary git repositories and call the tool
+393 scenarios, about nine minutes (measured on the author's machine; the number of scenarios
+is held by a test, the time is not). The tests create temporary git repositories and call the tool
 from the skill folder — internals are deliberately not imported: a move survives the external
 contract, not the internal structure. The skill format:
 

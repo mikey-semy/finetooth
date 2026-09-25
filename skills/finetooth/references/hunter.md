@@ -152,8 +152,13 @@ One finding per line, exactly in this format (without the `id` field — the too
 assigns it):
 
 ```json
-{"block":"{{BLOCK_ID}}","severity":"critical|high|medium|low","confidence":"confirmed|plausible","status":"open","file":"path/from/repository/root","line":123,"claim":"what is wrong, in one line","scenario":"failure scenario","invariant":"the violated invariant or ADR, if any"}
+{"block":"{{BLOCK_ID}}","severity":"critical|high|medium|low","confidence":"confirmed|plausible","status":"open","file":"path/from/repository/root","line":123,"claim":"what is wrong, in one line","scenario":"failure scenario","invariant":"the violated invariant or ADR, if any","root":"the class name, word for word as in **Root:**"}
 ```
+
+`root` is the only field of the draft that no report text can replace: the findings are
+grouped by it, and from the third instance the state check demands the class be closed by
+a guard. Write the **same string** into every instance of one class, and leave the field
+out where the defect is the only one of its kind — an empty `root` groups nothing.
 
 Severity scale:
 - **critical** — data leak or corruption, permission bypass, loss of the user's work, no way to recover.

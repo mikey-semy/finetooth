@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-25T02:22:21Z",
+  "updated_at": "2026-09-25T17:54:56Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -8,31 +8,43 @@
       "finished": "2026-09-25T02:22:21Z",
       "reports": [],
       "note": "",
-      "reviewed_sha": "4ab80a243f3a5a01",
-      "refs_sha": "ee0980ad61d57d41",
+      "reviewed_sha": "5d9480d5e80adb9a",
+      "refs_sha": "eca24f738afe1c21",
       "hypotheses_sha": "4ab68e42761325b3",
-      "restamped_at": "2026-09-25T02:22:09Z"
+      "restamped_at": "2026-09-25T17:54:55Z"
     },
     "T2": {
-      "status": "todo",
-      "started": null,
+      "status": "fixing",
+      "started": "2026-09-25T04:04:38Z",
       "finished": null,
       "reports": [],
-      "note": ""
+      "note": "",
+      "reviewed_sha": "1cf1f9d646cc8cbc",
+      "refs_sha": "97860a66a92724ee",
+      "hypotheses_sha": "1d5450e8e739f769",
+      "restamped_at": "2026-09-25T17:40:47Z"
     },
     "T3": {
-      "status": "todo",
-      "started": null,
+      "status": "fixing",
+      "started": "2026-09-25T04:11:26Z",
       "finished": null,
       "reports": [],
-      "note": ""
+      "note": "",
+      "reviewed_sha": "a50a2ec90f9eaec9",
+      "refs_sha": "97860a66a92724ee",
+      "hypotheses_sha": "fcbe3731d494ce45",
+      "restamped_at": "2026-09-25T17:54:55Z"
     },
     "T4": {
-      "status": "todo",
-      "started": null,
+      "status": "fixing",
+      "started": "2026-09-25T04:11:26Z",
       "finished": null,
       "reports": [],
-      "note": ""
+      "note": "",
+      "reviewed_sha": "ed495ec77e1082ab",
+      "refs_sha": "fa037240b1d651ef",
+      "hypotheses_sha": "779f2bec72a0a16a",
+      "restamped_at": "2026-09-25T17:54:56Z"
     }
   }
 }
