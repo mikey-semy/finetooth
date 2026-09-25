@@ -36,6 +36,18 @@ SKILL = KIT / "skills" / "finetooth"
 TOOL = Path(os.environ.get("FINETOOTH_TOOL", SKILL / "scripts" / "review.py"))
 
 
+def shell_gate(rel: str) -> Path:
+    """Ворота, написанные на оболочке (`dco.sh`, `guard-grep.sh`) — по пути от корня.
+
+    Обычно — те, что лежат в репозитории. Переменной окружения один из них подменяет
+    мутационная узда (`ShellGateMutationTest`): она обращает в успех один отказ скрипта и
+    требует, чтобы названный рядом прогон на этой копии покраснел. Формат подмены —
+    `путь-от-корня=путь-к-копии`: подменяется ровно один скрипт, остальные остаются своими.
+    """
+    name, _, path = os.environ.get("FINETOOTH_SHELL_GATE", "").partition("=")
+    return Path(path) if name == rel and path else KIT / rel
+
+
 if "utf-8" not in (sys.getfilesystemencoding() or "").lower().replace("utf8", "utf-8"):
     # Потомкам локаль задаёт child_env, но argv кодирует РОДИТЕЛЬ: имена тестов, пути
     # стенда и сообщения коммитов здесь не-ASCII, и в локали C без режима UTF-8 прогон
@@ -4237,17 +4249,22 @@ class GuardGrepTest(unittest.TestCase):
     """Узда проекта-пользователя: один маркер — одно послабление, а несуществующий путь
     — отказ, а не тишина."""
 
+    SCRIPT = shell_gate("skills/finetooth/assets/guard-grep.sh")
+
     def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="finetooth-guard-"))
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.pkg = self.dir / "internal" / "billing"
         self.pkg.mkdir(parents=True)
 
+    def _bare(self, *args: str) -> subprocess.CompletedProcess:
+        """Скрипт без ключей от себя: отказы про сами ключи иначе не проверить."""
+        return subprocess.run(["bash", str(self.SCRIPT), *args],
+                              capture_output=True, text=True, env=child_env())
+
     def _run(self, *paths: str, extra: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["bash", str(SKILL / "assets" / "guard-grep.sh"), "--pattern", r"\.Publish\(",
-             "--marker", "outbox-allowed:", *extra, "--", *paths],
-            capture_output=True, text=True, env=child_env())
+        return self._bare("--pattern", r"\.Publish\(", "--marker", "outbox-allowed:",
+                          *extra, "--", *paths)
 
     def test_исключение_снимает_попадание_а_остальные_оставляет(self):
         """`--exclude` — второй способ не быть нарушением: вызов, который И ТАК идёт
@@ -4295,6 +4312,26 @@ class GuardGrepTest(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout)
         self.assertIn("no such path", out.stderr)
         self.assertIn("not the same as a clean tree", out.stderr)
+
+    # Ворота зовут из Makefile, и всякая опечатка в вызове — это скрипт, который ничего
+    # не просмотрел. Каждый его отказ обязан отличаться от чистого дерева кодом возврата;
+    # держит это `ShellGateMutationTest`, а без своего теста отказ не держало ничто.
+    def test_неизвестный_ключ_это_отказ_а_не_тишина(self):
+        (self.pkg / "a.go").write_text("package billing\nbroker.Publish(1)\n", encoding="utf-8")
+        out = self._run(str(self.pkg), extra=("--windwo", "3"))
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("unknown argument", out.stderr)
+
+    def test_без_образца_и_маркера_это_отказ_а_не_тишина(self):
+        out = self._bare("--", str(self.pkg))
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("--pattern", out.stderr)
+        self.assertIn("--marker", out.stderr)
+
+    def test_без_путей_это_отказ_а_не_тишина(self):
+        out = self._bare("--pattern", r"\.Publish\(", "--marker", "outbox-allowed:", "--")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("no paths", out.stderr)
 
 
 class GateCoverageTest(unittest.TestCase):
@@ -5027,6 +5064,117 @@ class GateMutationTest(unittest.TestCase):
         self._all(self._flipped)
 
 
+# Отказ ворот, написанных на оболочке: `exit` с ненулевым кодом — сам по себе или после
+# точки с запятой (`*) echo …; exit 2 ;;`). Ищется ПО ВИДУ, а не списком строк: отказ,
+# дописанный завтра, попадает под правило сам. Отказ вида `${1:?…}` сюда не входит — его
+# печатает сама оболочка, и заглушить его нечем.
+SHELL_REFUSAL = re.compile(r"(?:^|;)(\s*exit\s+)[1-9][0-9]*\b")
+
+
+def _shell_gates(source: str) -> list[int]:
+    """Номера строк, на которых скрипт-ворота отказывает."""
+    return [i for i, line in enumerate(source.splitlines(), 1)
+            if SHELL_REFUSAL.search(line)]
+
+
+def _silence_refusal(line: str) -> str:
+    """Отказ обращён в успех: `exit 2` → `exit 0`.
+
+    Мутант обязан оставаться исполнимым скриптом — иначе «прогон покраснел» значило бы
+    «копия не запускается», а не «отказ держит тест».
+    """
+    return SHELL_REFUSAL.sub(
+        lambda m: m.group(0)[:m.end(1) - m.start(0)] + "0", line, count=1)
+
+
+class ShellGateMutationTest(unittest.TestCase):
+    """УЗДА КЛАССА «ворота, которые нечем уронить» — для ворот, написанных на оболочке.
+
+    `GateMutationTest` глушит ворота внутри `cmd_check` и ворот на оболочке не видит
+    вовсе. А они есть, и красноречиво: `dco.sh` печатал «all commits are signed off» и
+    выходил с нулём, когда git не смог разобрать диапазон, а три отказа `guard-grep.sh`
+    (неизвестный ключ, нет образца, нет путей) не держал ни один тест — каждый из них
+    можно было обратить в успех, и прогон оставался зелёным. Здесь каждый отказ по очереди
+    становится `exit 0`, и названный рядом прогон обязан на такой копии покраснеть.
+    """
+
+    # Скрипт-ворота → прогон, который обязан его держать.
+    GATES = {".github/dco.sh": "DcoGateTest",
+             "skills/finetooth/assets/guard-grep.sh": "GuardGrepTest"}
+    # Мутанты ждут не процессора, а своих подпроцессов (git, bash, awk).
+    WORKERS = 8
+
+    @staticmethod
+    def _run_suite(rel: str, source: str | None, suite: str) -> subprocess.CompletedProcess:
+        """Прогоняет названный набор на КОПИИ скрипта, подменённой через окружение."""
+        with tempfile.TemporaryDirectory(prefix="finetooth-shell-") as d:
+            copy = Path(d, Path(rel).name)
+            copy.write_text((KIT / rel).read_text(encoding="utf-8")
+                            if source is None else source, encoding="utf-8")
+            copy.chmod(0o755)  # бит исполнения смотрит тест «скрипт без вызова — не ворота»
+            return subprocess.run(
+                [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests"),
+                 "-k", suite], cwd=KIT, capture_output=True, text=True,
+                env=child_env(FINETOOTH_SHELL_GATE=f"{rel}={copy}"))
+
+    def test_на_целой_копии_прогон_ворот_зелёный(self):
+        """Обратная сторона: сама подмена ничего не ломает. Без этого «прогон покраснел»
+        доказывало бы не то, что отказ держит тест, а только то, что копия не работает."""
+        for rel, suite in self.GATES.items():
+            with self.subTest(ворота=rel):
+                out = self._run_suite(rel, None, suite)
+                self.assertEqual(out.returncode, 0,
+                                 f"{rel}: на копии без мутаций `{suite}` обязан быть "
+                                 f"зелёным:\n{out.stderr[-2000:]}")
+
+    def test_каждый_отказ_скрипта_держит_тест(self):
+        jobs = []
+        for rel, suite in self.GATES.items():
+            source = (KIT / rel).read_text(encoding="utf-8")
+            lines = source.splitlines(keepends=True)
+            refusals = _shell_gates(source)
+            with self.subTest(ворота=rel):
+                self.assertTrue(refusals, f"{rel}: не нашлось ни одного отказа")
+            for lineno in refusals:
+                jobs.append((rel, lineno, suite,
+                             "".join(lines[:lineno - 1]
+                                     + [_silence_refusal(lines[lineno - 1])]
+                                     + lines[lineno:])))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
+            codes = list(pool.map(
+                lambda j: self._run_suite(j[0], j[3], j[2]).returncode, jobs))
+        for (rel, lineno, suite, _), code in zip(jobs, codes):
+            with self.subTest(ворота=f"{rel}:{lineno}"):
+                self.assertNotEqual(
+                    code, 0,
+                    f"{rel}:{lineno}: отказ обращён в успех, а `{suite}` зелёный — этот "
+                    f"отказ не держит ни один тест. Напишите тест, который на нём "
+                    f"краснеет: ворота, которые нечем уронить, — не ворота")
+
+    # Обе стороны самого правила, на скриптах, которых в наборе нет: отказ узнаётся по
+    # виду, а успех и чужой `exit` в тексте — не отказ.
+    REFUSAL_SHAPES = {
+        "отказ в отдельной строке": ("if [ -z \"$x\" ]; then\n  exit 1\nfi\n", 2),
+        "отказ после точки с запятой": ("case $1 in\n*) echo no >&2; exit 2 ;;\nesac\n", 2),
+    }
+    INNOCENT_SHAPES = ("[ -n \"$x\" ] || exit 0\n",
+                       "# a gate exits 1 when the tree is dirty\n",
+                       "awk 'END { exit(found ? 1 : 0) }' f\n")
+
+    def test_узда_видит_отказ_которого_ещё_нет(self):
+        for why, (src, lineno) in self.REFUSAL_SHAPES.items():
+            with self.subTest(отказ=why):
+                self.assertEqual(_shell_gates(src), [lineno],
+                                 "узда не увидела отказ по виду")
+                line = src.splitlines(keepends=True)[lineno - 1]
+                self.assertIn("exit 0", _silence_refusal(line),
+                              "отказ не обращён в успех — мутант ничего не проверяет")
+        for src in self.INNOCENT_SHAPES:
+            with self.subTest(невиновный=src.strip()):
+                self.assertEqual(_shell_gates(src), [],
+                                 "узда приняла за отказ то, что отказом не является")
+
+
 def _spawns(source: str) -> list[tuple[int, str]]:
     """Запуски потомков в наборе и то, чем они грешат: (строка, жалоба).
 
@@ -5117,11 +5265,89 @@ class TestSuiteRuleTest(unittest.TestCase):
                 self.assertEqual(_spawns(src), [], "узда придирается к верной записи")
 
 
+def _sweeps_without_body_check(source: str) -> list[str]:
+    """Обходы команд, которые не смотрят, дошла ли команда до своего тела.
+
+    Обход узнаётся ПО ВИДУ, а не по имени: он спросил список у самого инструмента
+    (`--help` или общий `_subcommands`) и зовёт команду из переменной. Такой обход обязан
+    спросить общий словарь отказов argparse — иначе он перечисляет команды, а проверяет
+    отказ argparse, и мимо него проходит ровно то, что он заведён держать.
+    """
+    offenders = []
+    for fn in ast.walk(ast.parse(source)):
+        if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")):
+            continue
+        text = ast.unparse(fn)
+        runs_by_name = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "run" and n.args and isinstance(n.args[0], ast.Name)
+            for n in ast.walk(fn))
+        if (("--help" in text or "_subcommands(" in text) and runs_by_name
+                and not re.search("argparse_refused", text, re.I)):
+            offenders.append(fn.name)
+    return offenders
+
+
+class CommandSweepRuleTest(unittest.TestCase):
+    """УЗДА КЛАССА «узда перечисляет свой предмет, не запуская его».
+
+    Два обхода подряд брали список подкоманд у самого инструмента — и звали их так, что
+    argparse отвергал часть до их кода: до `init` не доходил обход порченых определений, до
+    `set-status`, `set-finding` и `log` — обход границы записи, то есть до трёх из тех
+    команд, что пишут. Оба обхода были зелёные, и оба записаны как правила, под которые
+    новая команда попадает сама. Правило по исходнику набора держит и тот обход, которого
+    ещё нет: следующий напишут копией соседнего.
+    """
+
+    def test_каждый_обход_команд_проверяет_что_команда_началась(self):
+        self.assertEqual(
+            _sweeps_without_body_check(Path(__file__).read_text(encoding="utf-8")), [],
+            "обход берёт список команд у инструмента и не проверяет, что команда дошла до "
+            "тела: спросите argparse_refused(out.stderr) и зовите команды через BODY_ARGV")
+
+    # Обе стороны правила, на обходах, которых в наборе нет.
+    SWEEP_SHAPES = {
+        "обход через --help": (
+            "class S:\n    def test_x(self):\n"
+            "        cmds = re.findall(r'x', self.s.run('--help').stdout)\n"
+            "        for cmd in cmds:\n            self.s.run(cmd)\n"),
+        "обход через общий список": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n            self.s.run(cmd)\n"),
+    }
+    INNOCENT_SWEEPS = {
+        "обход, который спросил про argparse": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(cmd, *BODY_ARGV[cmd])\n"
+            "            self.assertFalse(argparse_refused(out.stderr))\n"),
+        "обход со своей копией словаря отказов": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in self._subcommands():\n"
+            "            out = self.s.run(cmd)\n"
+            "            for said in ARGPARSE_REFUSED:\n"
+            "                self.assertNotIn(said, out.stderr)\n"),
+        "перебор двух названных команд": (
+            "class S:\n    def test_x(self):\n"
+            "        for cmd in ('check', 'coverage'):\n            self.s.run(cmd)\n"),
+    }
+
+    def test_узда_видит_обход_которого_ещё_нет(self):
+        for why, src in self.SWEEP_SHAPES.items():
+            with self.subTest(обход=why):
+                self.assertEqual(_sweeps_without_body_check(src), ["test_x"],
+                                 "узда не увидела обход по виду")
+        for why, src in self.INNOCENT_SWEEPS.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(_sweeps_without_body_check(src), [],
+                                 "узда придирается к верному обходу")
+
+
 class DcoGateTest(unittest.TestCase):
     """CONTRIBUTING обещает, что каждый коммит подписан, — и до этих ворот обещание не
     держало ничто, кроме галочки в шаблоне предложения, которую автор ставит сам."""
 
-    SCRIPT = KIT / ".github" / "dco.sh"
+    SCRIPT = shell_gate(".github/dco.sh")
 
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="finetooth-dco-"))
