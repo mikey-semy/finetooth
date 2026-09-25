@@ -4316,5 +4316,108 @@ class QuotationMapTest(unittest.TestCase):
 
 
 
+
+class RecordedFindingsImportTest(unittest.TestCase):
+    """A finding can be recorded against a block before its pass — handed over by another
+    block's fixer or fix reviewer, left by an earlier pass. The plain import replaced the
+    block's set with the file's rows: the recorded finding vanished, its id went to the
+    hunter's new finding, and `check` stayed green (the kit author's review, 24.09 — 26
+    such rows in 15 unstarted blocks of a live register). Rules from that review, held both
+    ways."""
+
+    def setUp(self):
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+
+    def row(self, claim, **kw):
+        base = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "claim": claim, "scenario": "x does y"}
+        base.update(kw)
+        return base
+
+    def register(self, *rows):
+        self.s.write("docs/review/findings.jsonl",
+                     "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+    def draft(self, *rows):
+        self.s.write("docs/review/reports/H1-findings.jsonl",
+                     "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+    def reg(self):
+        p = Path(self.s.root, "docs/review/findings.jsonl")
+        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    # forbidden — refused, register and file untouched
+    def test_записанная_открытая_находка_не_стирается_простым_импортом(self):
+        self.register(self.row("handed over before the pass", id="H1-001", severity="high"))
+        self.draft(self.row("the hunter found this"))
+        before = self.reg()
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("H1-001", out.stdout + out.stderr)
+        self.assertIn("--append", out.stdout + out.stderr)
+        self.assertEqual(self.reg(), before)
+
+    def test_решение_записанное_командой_не_откатывается_повторным_импортом(self):
+        self.draft(self.row("one"))
+        self.s.run("import", "H1")
+        self.assertEqual(self.s.run("set-finding", "H1-001", "rejected", "--reason", "так задумано").returncode, 0)
+        self.draft(self.row("one", id="H1-001"))           # the file still says open
+        before = self.reg()
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertEqual(self.reg(), before)
+
+    # allowed
+    def test_первый_импорт_блока_без_записанного(self):
+        self.draft(self.row("one"))
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+
+    def test_повторный_импорт_того_же_файла_и_с_новой_строкой(self):
+        self.draft(self.row("one"))
+        self.s.run("import", "H1")
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        p = Path(self.s.root, "docs/review/reports/H1-findings.jsonl")
+        p.write_text(p.read_text(encoding="utf-8") + json.dumps(self.row("two"), ensure_ascii=False) + "\n",
+                     encoding="utf-8")
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertEqual(sorted(f["id"] for f in self.reg()), ["H1-001", "H1-002"])
+
+    def test_append_нумерует_после_наибольшего_номера(self):
+        self.register(self.row("a", id="H1-001"), self.row("d", id="H1-004"))
+        self.draft(self.row("new"))
+        out = self.s.run("import", "H1", "--append")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("H1-005", [f["id"] for f in self.reg()])
+
+    def test_файл_сам_меняет_нештампованное_решение(self):
+        self.draft(self.row("one"))
+        self.s.run("import", "H1")
+        self.draft(self.row("Отвергнуто: так задумано", id="H1-001", status="rejected",
+                            confidence="rejected"))
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        self.draft(self.row("one", id="H1-001"))
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+
+    def test_force_заменяет_набор_осознанно(self):
+        self.register(self.row("handed over", id="H1-001"))
+        self.draft(self.row("the hunter found this"))
+        out = self.s.run("import", "H1", "--force")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    # --append and a foreign block's id
+    def test_append_отказывает_на_номере_чужого_блока(self):
+        self.register(self.row("mine", id="H1-001"))
+        self.draft(self.row("from elsewhere", id="V2-001"))
+        out = self.s.run("import", "H1", "--append")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("V2-001", out.stdout + out.stderr)
+
 if __name__ == "__main__":
     unittest.main()
