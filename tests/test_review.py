@@ -219,15 +219,12 @@ class _Values:
         self.scope: dict = {}
         self._map(self.tree, self.tree)
         self.assigned: dict = {}      # (область, имя) → всё, что в него клали
-        self.uses: dict = {}          # (область, имя) → где его читают
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Assign):
                 targets = node.targets
             elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
                 targets = [node.target]
             else:
-                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-                    self.uses.setdefault((self.scope_of(node), node.id), []).append(node)
                 continue
             if node.value is None:
                 continue
@@ -272,30 +269,6 @@ class _Values:
         return [e for v in self.lookup(name, scope)
                 for e in self.elements(v, seen + (name,))]
 
-    def built_lists(self) -> list:
-        """Каждое место, где модуль собирает список: (строка, элементы).
-
-        Имя — один раз со всем, что в него клали; выражение — там, где его никуда не
-        положили. Иначе одно и то же значение считалось бы дважды.
-        """
-        out = [(min(v.lineno for v in values), self.name_elements(name, scope))
-               for (scope, name), values in self.assigned.items()]
-        for node in ast.walk(self.tree):
-            if not (isinstance(node, (ast.List, ast.Tuple))
-                    or (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add))):
-                continue
-            up = self.parent.get(node)
-            if isinstance(up, (ast.List, ast.Tuple, ast.BinOp, ast.Starred)):
-                continue                                   # часть большего списка
-            if (isinstance(up, (ast.Assign, ast.AugAssign, ast.AnnAssign))
-                    and up.value is node
-                    and (isinstance(getattr(up, "target", None), ast.Name)
-                         or (isinstance(up, ast.Assign) and len(up.targets) == 1
-                             and isinstance(up.targets[0], ast.Name)))):
-                continue                                   # учтено по имени
-            out.append((node.lineno, self.elements(node)))
-        return sorted(out, key=lambda pair: pair[0])
-
     def literal(self, node, seen: tuple = ()):
         """Значение выражения с подставленными именами: таблицу собирают из кусков."""
         if isinstance(node, ast.Name) and node.id not in seen:
@@ -322,22 +295,6 @@ class _Values:
             if isinstance(inner, ast.Name):
                 parts += [ast.unparse(v) for v in self.lookup(inner.id, self.scope_of(inner))]
         return " ".join(parts)
-
-    def flows_into(self, node, needle: str, seen: tuple = ()) -> bool:
-        """Попадает ли значение в выражение, где есть `needle`, — прямо или через имя."""
-        up = node
-        while up in self.parent:
-            up = self.parent[up]
-            if isinstance(up, ast.stmt):
-                break
-            if needle in ast.unparse(up):
-                return True
-        if isinstance(up, ast.Assign) and len(up.targets) == 1 \
-                and isinstance(up.targets[0], ast.Name) and up.targets[0].id not in seen:
-            name = up.targets[0].id
-            return any(self.flows_into(use, needle, seen + (name,))
-                       for use in self.uses.get((self.scope_of(up), name), []))
-        return False
 
 
 FULL_HUNTER = """# отчёт охотника
@@ -3370,6 +3327,29 @@ class GitTruthTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertNotIn("does not touch", out.stdout)
 
+    def test_кириллический_путь_записан_в_карту_покрытия_как_есть(self):
+        """Карта покрытия — договор на диске: её читают обратно и `check`, и человек.
+
+        `ls-files` без `-z` печатает не-ASCII путь экранированным по C
+        (`"src/\\320\\272\\321\\200…"`, вместе с кавычками внутри значения), и в карту
+        попадал путь, которого на диске нет, — при нулевом коде возврата и без единого
+        слова. Обе стороны: и кириллическое имя, и соседнее ASCII записаны так, как их
+        держит индекс.
+        """
+        self.s.write("src/крыша.txt", "а\n")
+        self.s.write("src/plain.txt", "a\n")
+        self.s.blocks(paths=["src/**"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.assertEqual(self.s.run("coverage").returncode, 0)
+        table = (self.s.root / "docs/review/coverage.tsv").read_text(encoding="utf-8")
+        rows = dict(ln.split("\t", 1) for ln in table.strip().split("\n")[1:])
+        self.assertEqual(rows.get("src/крыша.txt"), "H1", table)
+        self.assertEqual(rows.get("src/plain.txt"), "H1", table)
+        self.assertNotIn("\\3", table, "путь попал в карту экранированным по C")
+        self.assertNotIn('"', table, "путь попал в карту в кавычках git")
+
     def test_коммит_не_касающийся_кириллического_файла_по_прежнему_ловится(self):
         self.s.write("src/модуль.ts", "a\n")
         self.s.write("src/другой.ts", "a\n")
@@ -4723,142 +4703,88 @@ class GateCoverageTest(unittest.TestCase):
         self.assertIn("is not in the vocabulary", out.stdout)
 
 
-class UnknownGateSpelling(Exception):
-    """Строка, которая что-то делает со списком отказов, а реестр её не понял."""
+# Контейнер отказов инструмента и два его глагола: другого способа завести ворота в `check`
+# нет, а у отказа есть ключ, и пишет его то место, где ворота стоят.
+GATE_VERBS = ("refuse", "warn")
+
+
+class GateWithoutKey(Exception):
+    """Отказ, добавленный без ключа-литерала: такие ворота реестру нечем назвать."""
 
 
 # Ворота: где они написаны (первая и последняя строка ЦЕЛОГО оператора — мутация вырезает
-# его целиком), в какой список пишут и под каким ключом записаны в реестре.
-Gate = collections.namedtuple("Gate", "lineno end_lineno lst key")
-
-
-def _gate_messages(stmt) -> tuple[str, list]:
-    """Сообщения, которые оператор дописывает в problems/warnings, и имя списка.
-
-    Форм записи несколько, и реестр обязан знать их все: пока он видел только
-    `problems.append(x)`, ворота, написанные `problems += [...]` или
-    `problems.extend([...])`, не давали ключа — а значит, не требовали ни записи, ни
-    теста, и снимались потом при зелёном прогоне. Разбить пятисотстрочный `cmd_check` на
-    части, собирая отказы списком, — очевидный следующий шаг, и он не должен выносить
-    ворота из-под правила. Оператор, который трогает список неизвестным способом
-    (`insert`, присваивание целиком), — не молчание, а отказ: см. UnknownGateSpelling.
-    """
-    def listed(value) -> list:
-        return list(value.elts) if isinstance(value, (ast.List, ast.Tuple)) else [value]
-
-    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
-        call = stmt.value
-        if (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
-                and call.func.value.id in ("problems", "warnings") and call.args):
-            if call.func.attr == "append":
-                return call.func.value.id, [call.args[0]]
-            if call.func.attr == "extend":
-                return call.func.value.id, listed(call.args[0])
-    if (isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name)
-            and stmt.target.id in ("problems", "warnings") and isinstance(stmt.op, ast.Add)):
-        return stmt.target.id, listed(stmt.value)
-    if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
-            and isinstance(stmt.targets[0], ast.Name)
-            and stmt.targets[0].id in ("problems", "warnings")
-            and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, ast.Add)):
-        # problems = problems + [...]
-        side = [stmt.value.left, stmt.value.right]
-        return stmt.targets[0].id, [m for s in side if not isinstance(s, ast.Name)
-                                    for m in listed(s)]
-    return "", []
+# его целиком), каким глаголом отказ добавлен и под каким ключом.
+Gate = collections.namedtuple("Gate", "lineno end_lineno verb key")
 
 
 def _check_gates(source: str | None = None) -> list[Gate]:
-    """Все ворота инструмента — ГДЕ БЫ ОНИ НИ БЫЛИ НАПИСАНЫ.
+    """Все ворота инструмента — по вызовам контейнера отказов, ГДЕ БЫ ОНИ НИ СТОЯЛИ.
 
-    Ключ — это литеральные куски f-строки, склеенные и ужатые по пробелам: он переживает
-    правку подставляемых значений и меняется, когда меняется сама формулировка.
+    Три круга подряд реестр узнавал ворота по ВИДУ строки: сначала `problems.append(...)`,
+    потом ещё `+=`, `extend` и присваивание, — и каждый круг находилась следующая форма.
+    Ворота в вынесенном помощнике, у которого список отказов зовут `refusals`, не давали
+    ключа, не требовали ни записи, ни теста и снимались потом при зелёном прогоне.
+    Перечислять формы записи бесполезно: их всегда на одну больше, чем вообразил автор.
 
-    У трёх ворот сообщение целиком приходит из вспомогательной функции или переменной
-    (`problems.append(why)`), и литералов в нём нет вовсе. Такие ворота названы выражением,
-    которое их сообщение порождает: иначе все они делят один пустой ключ, и следующие
-    ворота, написанные той же формой, совпадут с уже записанными и пройдут незамеченными.
-
-    Реестр смотрит туда, где список отказов НАПОЛНЯЮТ, а не в одну названную функцию.
-    Пока он обходил только `cmd_check`, очевидное разделение пятисотстрочной команды на
-    части выносило ворота из-под правила целиком: часть, написанная отдельной функцией,
-    которой передают `problems`, не давала ключа, не требовала ни записи, ни теста — и
-    снималась потом при зелёном прогоне. Сегодня такие ворота есть только в `cmd_check`;
-    правило держит и те, которых ещё нет.
+    Поэтому у инструмента один контейнер отказов, а у отказа — ключ, который пишут на
+    месте: реестр читает то, как ворота ЗОВУТ САМИ СЕБЯ. Имя переменной, вынесенный
+    помощник, глубина вложенности не значат больше ничего — вопрос только в том, добавлен
+    отказ или нет. Ключ обязан быть литералом: собранный по дороге ключ реестру нечем
+    назвать, и это отказ, а не молчание — см. GateWithoutKey.
     """
     if source is None:
         source = TOOL.read_text(encoding="utf-8")
     vals = _Values(source)
-    tree = vals.tree
-
-    def literal(node) -> str:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.JoinedStr):
-            return "".join(literal(v) for v in node.values)
-        if isinstance(node, ast.BinOp):
-            return literal(node.left) + literal(node.right)
-        return ""
-
     out = []
-    for stmt in ast.walk(tree):
-        if not isinstance(stmt, ast.stmt):
+    for node in ast.walk(vals.tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in GATE_VERBS):
             continue
-        lst, messages = _gate_messages(stmt)
-        if not lst:
-            _refuse_unknown_spelling(stmt, getattr(vals.scope_of(stmt), "name", "модуль"))
-            continue
-        for msg in messages:
-            key = re.sub(r"\s+", " ", literal(msg)).strip()[:46]
-            if not re.search(r"[A-Za-zА-Яа-я]", key):
-                # Quotes dropped: `ast.unparse` picks the quote style by Python version
-                # (3.14 writes f"{b['id']}…", earlier versions f'{b['id']}…'), and the
-                # registry went red in CI on a key nobody had changed.
-                key = "= " + re.sub(r"\s+", " ", re.sub(r"[\"']", "", ast.unparse(msg)))[:44]
-            out.append(Gate(stmt.lineno, stmt.end_lineno, lst, key))
+        key = node.args[0] if node.args else None
+        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)
+                and key.value.strip()):
+            where = getattr(vals.scope_of(node), "name", "модуль")
+            raise GateWithoutKey(
+                f"{where}, строка {node.lineno}: отказ добавлен без ключа-литерала "
+                f"(`{ast.unparse(node)[:60]}`) — реестру нечем назвать эти ворота, и они "
+                f"прошли бы без теста. Первым аргументом `refuse`/`warn` пишут ключ "
+                f"строкой, и он же стоит в GATES.")
+        stmt = node
+        while not isinstance(stmt, ast.stmt) and stmt in vals.parent:
+            stmt = vals.parent[stmt]
+        out.append(Gate(stmt.lineno, stmt.end_lineno, node.func.attr, key.value))
     return sorted(out)
 
 
-def _own_nodes(stmt) -> list:
-    """Узлы самого оператора, без вложенных операторов: у `for` — только его заголовок.
+def _own_verdict(source: str | None = None) -> list[str]:
+    """Места, где `check` выносит приговор мимо контейнера отказов.
 
-    Иначе любой объемлющий цикл «трогал бы» список отказов теми воротами, что лежат
-    внутри него, и правило ниже ловило бы их дважды.
+    Ворота, которые печатают отказ сами и сами возвращают код, не видны ни одному реестру:
+    ни записи, ни теста, ни мутации — и снять их можно при зелёном прогоне. Поэтому у
+    команды ровно один выход, и он приговор контейнера; `die` тоже не годится — это код 2,
+    «ошибка вызова», а красное состояние это код 1.
     """
-    out, stack = [], [stmt]
-    while stack:
-        node = stack.pop()
-        out.append(node)
-        stack += [c for c in ast.iter_child_nodes(node) if not isinstance(c, ast.stmt)]
-    return out
-
-
-def _refuse_unknown_spelling(stmt, where: str = "модуль") -> None:
-    """Оператор, который трогает список отказов способом, которого реестр не знает.
-
-    Чтение (`if problems:`, `for p in problems`) и заведение списка — не ворота. Всё
-    остальное — ворота незнакомой формы, и молчать о них нельзя: молчание здесь значит
-    ворота без теста.
-    """
-    declares = (isinstance(stmt, (ast.Assign, ast.AnnAssign))
-                and isinstance(stmt.value, (ast.List, ast.Tuple)) and not stmt.value.elts)
-    if declares:
-        return                                        # заведение пустого списка
-    touched = []
-    for node in _own_nodes(stmt):
-        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
-                and node.value.id in ("problems", "warnings")):
-            touched.append(f"{node.value.id}.{node.attr}()")
-    targets = (stmt.targets if isinstance(stmt, ast.Assign)
-               else [stmt.target] if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)) else [])
-    for t in targets:
-        if isinstance(t, ast.Name) and t.id in ("problems", "warnings"):
-            touched.append(f"{t.id} = …")
-    if touched:
-        raise UnknownGateSpelling(
-            f"{where}, строка {stmt.lineno}: {', '.join(sorted(set(touched)))} — такой "
-            f"формы записи реестр ворот не знает и пропустил бы эти ворота без теста. "
-            f"Научите _gate_messages читать её или пишите ворота `problems.append(...)`.")
+    if source is None:
+        source = TOOL.read_text(encoding="utf-8")
+    vals = _Values(source)
+    fn = next((n for n in ast.walk(vals.tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "cmd_check"), None)
+    if fn is None:
+        return ["в исходнике нет cmd_check — правило смотрит не туда"]
+    out = []
+    for node in ast.walk(fn):
+        if vals.scope_of(node) is not fn:
+            continue                       # вложенная функция отвечает за свой выход сама
+        if isinstance(node, ast.Return):
+            text = ast.unparse(node.value) if node.value is not None else ""
+            if not re.fullmatch(r"\w+\.report\(\)", text):
+                out.append(f"выход `return {text}` мимо контейнера")
+        if isinstance(node, ast.Call):
+            called = (node.func.attr if isinstance(node.func, ast.Attribute)
+                      else getattr(node.func, "id", ""))
+            if called in ("exit", "die"):
+                out.append(f"выход `{ast.unparse(node)[:40]}` мимо контейнера")
+    return sorted(out)
 
 
 class GateRegistryTest(unittest.TestCase):
@@ -4874,69 +4800,69 @@ class GateRegistryTest(unittest.TestCase):
 
     # ворота инструмента → тест, который краснеет, если их заглушить
     GATES = [
-        (': no record in state.json — run ` init`', "test_блок_из_определения_без_записи_в_состоянии"),
-        (': present in state.json but missing from block', "test_блок_в_состоянии_которого_нет_в_определении"),
-        (": status '' is not in the vocabulary — written", "test_статус_блока_вписанный_руками_роняет_проверку"),
-        (': phase comes after phase — the blocks array i', "test_фазы_в_массиве_не_убывают"),
-        (': blocked without a note — waiting for what? `', "test_заблокированный_блок_не_значит_закончено"),
-        (': no manifest', "test_манифест_пропал_а_блок_в_работе"),
-        (': manifest is empty or nearly empty', "test_куцый_манифест_роняет_проверку"),
-        (': status , but there is no verifier report — t', "test_пройденный_блок_без_отчёта_проверяющего"),
-        ("= f{b[id]}: {why}", "test_пустой_отчёт_проверяющего_не_проводит_блок"),   # verify_report_problem
-        (': state.json declares report , which is not on', "test_объявленный_отчёт_которого_нет_на_диске"),
-        (': status , but there is no hunter report — the', "test_статус_дальше_running_без_отчёта_охотника"),
-        (': stuck in running without a timestamp — when ', "test_running_без_отметки_времени"),
-        (": timestamp '' cannot be parsed", "test_неразбираемая_отметка_времени"),
-        (': stuck in running for h — the session probabl', "test_running_дольше_суток"),
-        ('finding : duplicate id', "test_две_записи_с_одним_идентификатором"),
-        ('finding : field is empty', "test_пустое_обязательное_поле_находки"),
-        ('finding : refers to nonexistent block', "test_находка_ссылается_на_несуществующий_блок"),
-        ('finding : severity= is not in the vocabulary', "test_severity_вне_словаря"),
-        ('finding : confidence= is not in the vocabulary', "test_confidence_вне_словаря"),
-        ('finding : status= is not in the vocabulary', "test_статус_находки_вне_словаря"),
-        ('finding : file is not in the repository', "test_починенная_находка_на_удалённом_файле_не_роняет_проверку"),
-        ('finding : deferred without a reason — ` set-fi', "test_отложенная_находка_требует_причину"),
-        ('finding : an external fix is written as `<repo', "test_внешний_коммит_починки_написан_не_по_форме"),
-        ('finding : commit is not in the repository', "test_починка_в_соседнем_репозитории_помечается_явно"),
-        ('finding : commit does not touch — either the m', "test_коммит_починки_обязан_касаться_файла_находки"),
-        ('finding : marked fixed, but no fix commit is g', "test_починено_без_коммита"),
-        ('finding : marked duplicate, but not of what ex', "test_дубль_без_указания_чего"),
-        ('= why', "test_дубль_указывает_на_живую_находку"),                # dup_problem
-        ('finding : rejected by the verifier, but still ', "test_отвергнутая_проверяющим_но_открытая"),
-        ('finding : status rejected but confidence — the', "test_отказ_меняет_и_уверенность"),
-        ('finding : no code fingerprint — changes in und', "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
-        ('finding : code in changed since import — re-ch', "test_изменившийся_код_под_открытой_находкой_роняет_проверку"),
-        ('finding : line= is not a number — write the li', "test_номер_строки_строкой_а_не_числом"),
-        ('finding : line is cited, but has', "test_несуществующая_строка_в_находке_роняет_проверку"),
-        ('finding : rejected, but the reject reason is n', "test_отвергнутая_находка_без_причины_роняет_проверку"),
-        ('finding : claim is characters against a limit ', "test_заголовок_находки_длиннее_потолка"),
-        ('finding : scenario is characters against a lim', "test_сценарий_длиннее_потолка"),
-        ('findings.md diverged from findings.jsonl — run', "test_findings_md_разъехался_с_реестром"),
-        (': pattern `` matches only untracked files () —', "test_шаблон_по_нетрекнутым_файлам_зовёт_git_add"),
-        (': pattern `` matches no file — the block silen', "test_шаблон_который_ничего_не_нашёл_роняет_проверку"),
-        ('files belong to no block — ` coverage`', "test_ничей_файл_роняет_не_только_карту_но_и_проверку"),
-        ('coverage.tsv is stale: lines on disk, the reco', "test_устаревшая_карта_покрытия_роняет_проверку"),
-        (': the manifest has no hypotheses — such a bloc', "test_манифест_без_гипотез_роняет_проверку"),
-        (': gives hypothesis different verdicts () — the', "test_противоречивые_вердикты_в_одном_отчёте_роняют_проверку"),
-        (': of hypotheses without a verdict () — each is', "test_гипотеза_без_вердикта_роняет_проверку"),
-        (': block in status without a fingerprint of wha', "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
-        (': block files changed after the review — the b', "test_блок_просмотренный_на_другой_версии_файлов_роняет_проверку"),
-        (': no context fingerprint (ref_paths) — ` backf', "test_блок_без_отпечатка_контекста_предупреждает"),
-        (': context files (ref_paths) changed after veri', "test_правка_контекста_предупреждает_но_не_роняет"),
-        (': no hypotheses fingerprint — an edit of the m', "test_пройденный_блок_без_отпечатка_гипотез"),
-        (': manifest hypotheses changed after verificati', "test_правка_гипотез_после_проверки_роняет_проверку"),
-        (': of block files are not named by full path in', "test_каждый_файл_блока_назван_полным_путём"),
-        (': closed with fixed findings, but there is no ', "test_закрытие_с_починками_требует_ревью_правок"),
-        (": the hunter report has no 'Coverage limits' s", "test_отчёт_без_раздела_про_непросмотренное_роняет_проверку"),
-        (": the 'Coverage limits' section of the hunter ", "test_пустой_раздел_ограничений_роняет_проверку"),
-        ("root '':", "test_узда_обязана_существовать"),                    # rule_problem
-        ("root '': instances () and no guard — a class t", "test_третий_повтор_корня_требует_узду"),
-        ('the freshness gate is not running:', "test_без_удалённого_репозитория_ворота_объявляют_себя_неработающими"),
-        ('the tree is behind by days — the findings of s', "test_отставшее_от_сервера_дерево_роняет_проверку"),
-        (": proof '' is not in the vocabulary:", "test_род_доказательства_вне_словаря"),
-        (': files, lines — cannot be read in one session', "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
-        ('open finding(s) older than days (oldest d): — ', "test_check_предупреждает_о_находке_старше_недели"),
-        ('reference(s) to findings in the code: — the id', "test_refs_находит_номер_находки_в_коде_и_только_его"),
+        ("state/no-record",                     "test_блок_из_определения_без_записи_в_состоянии"),
+        ("state/block-not-in-definition",       "test_блок_в_состоянии_которого_нет_в_определении"),
+        ("state/status-unknown",                "test_статус_блока_вписанный_руками_роняет_проверку"),
+        ("blocks/phase-order",                  "test_фазы_в_массиве_не_убывают"),
+        ("state/blocked-without-note",          "test_заблокированный_блок_не_значит_закончено"),
+        ("manifest/missing",                    "test_манифест_пропал_а_блок_в_работе"),
+        ("manifest/too-short",                  "test_куцый_манифест_роняет_проверку"),
+        ("report/verify-missing",               "test_пройденный_блок_без_отчёта_проверяющего"),
+        ("report/verify-weak",                  "test_пустой_отчёт_проверяющего_не_проводит_блок"),
+        ("report/declared-missing",             "test_объявленный_отчёт_которого_нет_на_диске"),
+        ("report/hunter-missing",               "test_статус_дальше_running_без_отчёта_охотника"),
+        ("state/running-without-timestamp",     "test_running_без_отметки_времени"),
+        ("state/timestamp-unparsable",          "test_неразбираемая_отметка_времени"),
+        ("state/running-too-long",              "test_running_дольше_суток"),
+        ("finding/duplicate-id",                "test_две_записи_с_одним_идентификатором"),
+        ("finding/empty-field",                 "test_пустое_обязательное_поле_находки"),
+        ("finding/unknown-block",               "test_находка_ссылается_на_несуществующий_блок"),
+        ("finding/severity-unknown",            "test_severity_вне_словаря"),
+        ("finding/confidence-unknown",          "test_confidence_вне_словаря"),
+        ("finding/status-unknown",              "test_статус_находки_вне_словаря"),
+        ("finding/file-missing",                "test_починенная_находка_на_удалённом_файле_не_роняет_проверку"),
+        ("finding/deferred-without-reason",     "test_отложенная_находка_требует_причину"),
+        ("finding/external-fix-malformed",      "test_внешний_коммит_починки_написан_не_по_форме"),
+        ("finding/commit-missing",              "test_починка_в_соседнем_репозитории_помечается_явно"),
+        ("finding/commit-does-not-touch",       "test_коммит_починки_обязан_касаться_файла_находки"),
+        ("finding/fixed-without-commit",        "test_починено_без_коммита"),
+        ("finding/duplicate-without-target",    "test_дубль_без_указания_чего"),
+        ("finding/duplicate-target-unusable",   "test_дубль_указывает_на_живую_находку"),
+        ("finding/rejected-but-open",           "test_отвергнутая_проверяющим_но_открытая"),
+        ("finding/rejected-without-confidence", "test_отказ_меняет_и_уверенность"),
+        ("finding/no-code-fingerprint",         "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
+        ("finding/code-changed",                "test_изменившийся_код_под_открытой_находкой_роняет_проверку"),
+        ("finding/line-not-a-number",           "test_номер_строки_строкой_а_не_числом"),
+        ("finding/line-past-end",               "test_несуществующая_строка_в_находке_роняет_проверку"),
+        ("finding/rejected-without-reason",     "test_отвергнутая_находка_без_причины_роняет_проверку"),
+        ("finding/claim-too-long",              "test_заголовок_находки_длиннее_потолка"),
+        ("finding/scenario-too-long",           "test_сценарий_длиннее_потолка"),
+        ("findings-md/stale",                   "test_findings_md_разъехался_с_реестром"),
+        ("paths/only-untracked",                "test_шаблон_по_нетрекнутым_файлам_зовёт_git_add"),
+        ("paths/matches-nothing",               "test_шаблон_который_ничего_не_нашёл_роняет_проверку"),
+        ("coverage/unowned-files",              "test_ничей_файл_роняет_не_только_карту_но_и_проверку"),
+        ("coverage/stale",                      "test_устаревшая_карта_покрытия_роняет_проверку"),
+        ("manifest/no-hypotheses",              "test_манифест_без_гипотез_роняет_проверку"),
+        ("report/verdicts-conflict",            "test_противоречивые_вердикты_в_одном_отчёте_роняют_проверку"),
+        ("report/hypothesis-without-verdict",   "test_гипотеза_без_вердикта_роняет_проверку"),
+        ("state/no-reviewed-fingerprint",       "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
+        ("state/files-changed",                 "test_блок_просмотренный_на_другой_версии_файлов_роняет_проверку"),
+        ("state/no-refs-fingerprint",           "test_блок_без_отпечатка_контекста_предупреждает"),
+        ("state/refs-changed",                  "test_правка_контекста_предупреждает_но_не_роняет"),
+        ("state/no-hypotheses-fingerprint",     "test_пройденный_блок_без_отпечатка_гипотез"),
+        ("state/hypotheses-changed",            "test_правка_гипотез_после_проверки_роняет_проверку"),
+        ("report/files-not-named",              "test_каждый_файл_блока_назван_полным_путём"),
+        ("state/closed-without-fix-review",     "test_закрытие_с_починками_требует_ревью_правок"),
+        ("report/no-coverage-limits",           "test_отчёт_без_раздела_про_непросмотренное_роняет_проверку"),
+        ("report/empty-coverage-limits",        "test_пустой_раздел_ограничений_роняет_проверку"),
+        ("root/guard-unusable",                 "test_узда_обязана_существовать"),
+        ("root/no-guard",                       "test_третий_повтор_корня_требует_узду"),
+        ("freshness/inert",                     "test_без_удалённого_репозитория_ворота_объявляют_себя_неработающими"),
+        ("freshness/tree-behind",               "test_отставшее_от_сервера_дерево_роняет_проверку"),
+        ("blocks/proof-unknown",                "test_род_доказательства_вне_словаря"),
+        ("blocks/too-big-to-read",              "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
+        ("refs/findings-named-in-code",         "test_refs_находит_номер_находки_в_коде_и_только_его"),
+        ("findings/fix-debt-age",               "test_check_предупреждает_о_находке_старше_недели"),
     ]
 
     def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):
@@ -4964,122 +4890,126 @@ class GateRegistryTest(unittest.TestCase):
             with self.subTest(gate=key):
                 self.assertIn(name, known, f"ворота `{key}` ссылаются на несуществующий тест")
 
-    # Сообщение ворот пишут двумя формами: f-строкой на месте и значением, собранным
-    # раньше (`msg = …; problems.append(msg)`) или вспомогательной функцией. Реестр обязан
-    # видеть обе: три ворот самого инструмента написаны второй формой, и следующие напишут
-    # по соседству — копией.
-    VARIABLE_MESSAGE_GATE = '''
-def cmd_check(args):
-    problems = []
-    warnings = []
-    if a != b:
-        msg = f"review_id mismatch"
-        problems.append(msg)
-    if c != d:
-        problems.append(dup_problem(f, dup))
-    return 0
-'''
-
-    def test_ворота_с_сообщением_из_переменной_не_теряются(self):
-        """Ворота, чьё сообщение не литерал, обязаны попасть в реестр отдельной записью.
-
-        Пока ключом был только литеральный скелет, такие ворота получали пустой ключ,
-        совпадали с уже записанными и проходили без единого теста — измерено мутацией:
-        добавленные в `cmd_check` ворота с `problems.append(msg)` оставляли и этот класс,
-        и весь прогон зелёными.
-        """
-        keys = [g.key for g in _check_gates(self.VARIABLE_MESSAGE_GATE)]
-        self.assertEqual(len(keys), 2, "оба гейта обязаны быть видны")
-        self.assertEqual(len(set(keys)), 2, f"ворота слились в один ключ: {keys}")
-        registered = collections.Counter(key for key, _ in self.GATES)
-        for key in keys:
-            self.assertNotIn(key, registered,
-                             "новые ворота совпали с уже записанными — реестр их не заметит")
-
-    def test_ворота_с_литеральным_сообщением_читаются_как_раньше(self):
-        """Обратная сторона: обычная f-строка по-прежнему опознаётся своим текстом, а не
-        выражением, — иначе правка подставляемого значения роняла бы реестр."""
-        source = ('def cmd_check(args):\n'
-                  '    problems = []\n'
-                  '    problems.append(f"{bid}: no manifest {path}")\n')
-        self.assertEqual([g.key for g in _check_gates(source)], [": no manifest"])
-
-    # Ворота пишут не только `append`: `cmd_check` в пятьсот строк рано или поздно
-    # разберут на части, а части собирают отказы списком. Обе формы измерены — при
-    # реестре, знавшем один `append`, ворота, написанные так, не давали ключа, не требовали
-    # ни записи, ни теста, и снимались потом при зелёном прогоне.
-    LIST_FORM_GATES = {
-        "+=": 'def cmd_check(args):\n'
-              '    problems = []\n'
-              '    if bad:\n'
-              '        problems += [f"{bid}: role `__never__` is reserved"]\n',
-        "extend": 'def cmd_check(args):\n'
-                  '    problems = []\n'
-                  '    if bad:\n'
-                  '        problems.extend([f"{bid}: role `__never__` is reserved"])\n',
-        "сложение": 'def cmd_check(args):\n'
-                    '    problems = []\n'
-                    '    if bad:\n'
-                    '        problems = problems + [f"{bid}: role `__never__` is reserved"]\n',
+    # Ворота, которых в инструменте нет: реестр обязан видеть их по ФАКТУ отказа, как бы
+    # ни было написано всё вокруг. Первые две формы — те самые, на которых реестр,
+    # узнававший ворота по виду строки, молчал три круга подряд: ворота, вынесенные в
+    # помощник, и контейнер, который в этом помощнике зовут иначе.
+    UNSEEN_GATES = {
+        "ворота в помощнике, контейнер зовут иначе":
+            'def _reserved_role(defn, refusals):\n'
+            '    if defn.get("role") == "__never__":\n'
+            '        refusals.refuse("blocks/reserved-role", f"{bid}: role is reserved")\n\n'
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    _reserved_role(defn, gates)\n'
+            '    return gates.report()\n',
+        "ворота в цикле внутри вложенной функции":
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    def one(b):\n'
+            '        for x in b:\n'
+            '            if bad(x):\n'
+            '                gates.refuse("blocks/reserved-role", f"{x}: role is reserved")\n'
+            '    return gates.report()\n',
+        "предупреждение, а не отказ":
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    if soft:\n'
+            '        gates.warn("blocks/reserved-role", f"{bid}: role is reserved")\n'
+            '    return gates.report()\n',
     }
 
-    def test_ворота_написанные_списком_видны_реестру(self):
-        for how, source in self.LIST_FORM_GATES.items():
+    def test_ворота_где_бы_они_ни_стояли_видны_реестру(self):
+        """Ворота узнаются по ключу, который они пишут сами, а не по имени переменной, не
+        по форме строки и не по тому, в какой функции стоят."""
+        for how, source in self.UNSEEN_GATES.items():
             with self.subTest(форма=how):
-                gates = _check_gates(source)
-                self.assertEqual([g.key for g in gates],
-                                 [": role `__never__` is reserved"],
-                                 f"ворота, написанные через {how}, реестр не увидел")
-                self.assertEqual([g.lst for g in gates], ["problems"])
+                self.assertEqual([g.key for g in _check_gates(source)],
+                                 ["blocks/reserved-role"],
+                                 f"ворота, написанные как «{how}», реестр не увидел")
 
-    # Ворота живут там, где наполняют список отказов, а не в одной названной команде:
-    # часть, вынесенная из `cmd_check`, — это те же ворота, и без записи в реестре их
-    # можно было бы снять при зелёном прогоне.
-    SPLIT_OUT_GATES = {
-        "часть с чужим списком":
-            'def _reserved_role(defn, problems):\n'
-            '    if defn.get("role") == "__never__":\n'
-            '        problems.append(f"{bid}: role `__never__` is reserved")\n\n'
-            'def cmd_check(args):\n'
-            '    problems = []\n'
-            '    _reserved_role(defn, problems)\n',
-        "часть отдаёт свой список":
-            'def _reserved_role(defn):\n'
-            '    problems = []\n'
-            '    if defn.get("role") == "__never__":\n'
-            '        problems.append(f"{bid}: role `__never__` is reserved")\n'
-            '    return problems\n\n'
-            'def cmd_check(args):\n'
-            '    problems = []\n'
-            '    problems += _reserved_role(defn)\n',
-    }
-
-    def test_ворота_вынесенные_из_команды_видны_реестру(self):
-        for how, source in self.SPLIT_OUT_GATES.items():
-            with self.subTest(форма=how):
-                self.assertIn(": role `__never__` is reserved",
-                              [g.key for g in _check_gates(source)],
-                              f"ворота, вынесенные {how}, реестр не увидел")
-
-    def test_незнакомая_форма_записи_отказ_а_не_молчание(self):
-        """Обратная сторона: форма, которой реестр не знает, обязана ронять прогон, а не
-        проходить как «ворот здесь нет». Молчание здесь — это ворота без теста."""
+    def test_ворота_с_несобранным_сообщением_не_сливаются(self):
+        """Обратная сторона: ключ не зависит от сообщения. Пока ключом был литеральный
+        скелет f-строки, ворота, чьё сообщение приходит из переменной или из функции,
+        получали ПУСТОЙ ключ, совпадали с уже записанными и проходили без единого теста —
+        измерено мутацией. Ключ пишут на месте, и такие ворота различимы."""
         source = ('def cmd_check(args):\n'
-                  '    problems = []\n'
-                  '    if bad:\n'
-                  '        problems.insert(0, f"{bid}: role `__never__` is reserved")\n')
-        with self.assertRaises(UnknownGateSpelling) as e:
-            _check_gates(source)
-        self.assertIn("problems.insert()", str(e.exception))
-        # а чтение списка воротами не считается
+                  '    gates = Refusals()\n'
+                  '    msg = f"review_id mismatch"\n'
+                  '    gates.refuse("state/review-id", msg)\n'
+                  '    gates.refuse("finding/duplicate-target-unusable", dup_problem(f, dup))\n'
+                  '    return gates.report()\n')
+        keys = [g.key for g in _check_gates(source)]
+        self.assertEqual(keys, ["state/review-id", "finding/duplicate-target-unusable"])
+
+    def test_чтение_отказов_воротами_не_считается(self):
+        """Обратная сторона: контейнер читают и печатают — это не ворота, и требовать от
+        такого места записи в реестре значило бы требовать записи о печати."""
         reading = ('def cmd_check(args):\n'
-                   '    problems = []\n'
-                   '    if problems:\n'
-                   '        for p in problems:\n'
+                   '    gates = Refusals()\n'
+                   '    if gates.problems:\n'
+                   '        for p in gates.problems:\n'
                    '            print(f"  · {p}")\n'
-                   '        return 1\n'
-                   '    return 0\n')
+                   '    return gates.report()\n')
         self.assertEqual(_check_gates(reading), [])
+
+    def test_отказ_без_ключа_роняет_прогон_а_не_молчит(self):
+        """Ключ, собранный по дороге, реестру нечем назвать: тогда ворота прошли бы без
+        теста, а это ровно то, ради чего реестр и написан. Молчать нельзя."""
+        source = ('def cmd_check(args):\n'
+                  '    gates = Refusals()\n'
+                  '    for key, msg in extra_gates():\n'
+                  '        gates.refuse(key, msg)\n'
+                  '    return gates.report()\n')
+        with self.assertRaises(GateWithoutKey) as e:
+            _check_gates(source)
+        self.assertIn("gates.refuse(key, msg)", str(e.exception))
+        self.assertIn("GATES", str(e.exception))
+
+    def test_приговор_check_выносит_только_контейнер(self):
+        """УЗДА КЛАССА «ворота мимо реестра»: ворота, которые печатают отказ сами и сами
+        возвращают код, не видны ни записи, ни мутации — и снимаются при зелёном прогоне."""
+        self.assertEqual(_own_verdict(), [], "у `check` появился выход мимо контейнера")
+
+    # Обе стороны правила на исходниках, которых в инструменте нет.
+    OWN_VERDICTS = {
+        "печатает и возвращает сам":
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    if bad:\n'
+            '        print("CHECK FAILED: role is reserved")\n'
+            '        return 1\n'
+            '    return gates.report()\n',
+        "выходит через sys.exit":
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    if bad:\n'
+            '        sys.exit(1)\n'
+            '    return gates.report()\n',
+        "красное состояние через die":
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    if bad:\n'
+            '        die("role is reserved")\n'
+            '    return gates.report()\n',
+    }
+
+    def test_узда_видит_приговор_мимо_контейнера(self):
+        for how, source in self.OWN_VERDICTS.items():
+            with self.subTest(форма=how):
+                self.assertNotEqual(_own_verdict(source), [],
+                                    f"узда не увидела приговор «{how}»")
+        good = ('def cmd_check(args):\n'
+                '    gates = Refusals()\n'
+                '    def local(b):\n'
+                '        if not b:\n'
+                '            return None\n'          # вложенная функция отвечает за себя сама
+                '        return b\n'
+                '    for b in blocks():\n'
+                '        if local(b) is None:\n'
+                '            gates.refuse("blocks/empty", f"{b}: empty")\n'
+                '    return gates.report()\n')
+        self.assertEqual(_own_verdict(good), [], "узда придирается к верной команде")
 
 
 @unittest.skipIf(os.environ.get("FINETOOTH_TOOL"),
@@ -5090,8 +5020,8 @@ class GateMutationTest(unittest.TestCase):
     Реестр выше называет рядом с каждыми воротами тест, но что тест держит ИМЕННО ЭТИ
     ворота, не проверял никто: запись, переставленная на любой существующий тест, проходила
     обе проверки реестра. Здесь каждые ворота по очереди глушатся в копии инструмента, и
-    названный тест обязан на этой копии покраснеть. Второй мутацией ворота переносятся из
-    `problems` в `warnings` и обратно: сообщение остаётся тем же, а код возврата меняется,
+    названный тест обязан на этой копии покраснеть. Второй мутацией отказ становится
+    предупреждением и наоборот: сообщение остаётся тем же, а код возврата меняется,
     и тест, который смотрит только на текст, этого не замечает — `check` печатает ту же
     фразу и выходит с нулём на состоянии, которое сам же отказался принять.
 
@@ -5117,10 +5047,14 @@ class GateMutationTest(unittest.TestCase):
                          + self.lines[gate.end_lineno:])
 
     def _flipped(self, gate: Gate) -> str:
-        """Ворота переставлены в соседний список: отказ становится предупреждением."""
-        other = "warnings" if gate.lst == "problems" else "problems"
-        line = self.lines[gate.lineno - 1].replace(gate.lst, other, 1)
-        return "\n".join(self.lines[:gate.lineno - 1] + [line] + self.lines[gate.lineno:])
+        """Ворота сменили строгость: отказ стал предупреждением или наоборот."""
+        other = "warn" if gate.verb == "refuse" else "refuse"
+        lines = list(self.lines)
+        for i in range(gate.lineno - 1, gate.end_lineno):
+            if f".{gate.verb}(" in lines[i]:
+                lines[i] = lines[i].replace(f".{gate.verb}(", f".{other}(", 1)
+                break
+        return "\n".join(lines)
 
     @staticmethod
     def _run_on_copy(source: str | None, *names: str) -> subprocess.CompletedProcess:
@@ -5648,64 +5582,129 @@ class SourceRuleTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.SOURCE = TOOL.read_text(encoding="utf-8")
 
-    # Команды и ключи git, чей вывод НЕСЁТ ПУТИ. Любой из них без `-z` — это путь,
-    # экранированный по-C (`"src/\320\274…"`), и поле, отделённое двоеточием, которое в
-    # пути законно.
-    ASKS_FOR_NAMES = ("ls-files", "--name-only", "--name-status", "--others", "grep")
+    # Единственная функция инструмента, которой позволено запускать процесс. Всё, что
+    # нужно знать о чтении git — репозиторий, `-z` там, где в выводе пути, разбор этого
+    # вывода, — живёт внутри неё; поэтому вопрос «попросили ли `-z`» задаётся одному месту,
+    # а не каждой сборке argv по отдельности.
+    GIT_HELPER = "git"
+    # Как запускают процесс: способ узнаётся по тому, ЧТО зовут, а не по тому, как написали.
+    SPAWNERS = ("run", "Popen", "call", "check_output", "check_call")
+    OS_SPAWNERS = ("system", "popen", "execv", "execve", "execvp", "execl", "execlp",
+                   "spawnv", "spawnve", "spawnl", "spawnlp", "posix_spawn")
 
     @classmethod
-    def _nul_offenders(cls, source: str) -> list[tuple[int, list]]:
-        """Аргументы git, которые просят пути и не просят `-z`.
+    def _spawns_outside_git(cls, source: str) -> list[str]:
+        """Функции инструмента, которые запускают процесс сами, мимо помощника.
 
-        Правило смотрит туда, где argv СОБИРАЮТ, а не туда, где его передают: список
-        склеивают из частей, копят в переменной, выносят общую приставку в модульную
-        константу, разворачивают звёздочкой — и отдают не только `subprocess.run`, но и
-        своей обёртке (`log_records`). Пока правило узнавало вызов по `subprocess.<...>`
-        с литеральным списком, любой из этих переносов снимал его целиком: измерено —
-        `-z` уходил из `untracked_files` при зелёном прогоне.
+        Три круга подряд правило спрашивало у СБОРКИ argv, попросили ли у git `-z`, и
+        каждый круг находилась форма записи, которой оно не видело: приставка, вынесенная
+        в константу; argv, накопленный `extend`; argv, собранный обёрткой `_git(*rest)`.
+        Форм записи всегда на одну больше, чем вообразил автор правила.
+
+        Поэтому спрашивается не форма, а факт: процесс запускают в одном месте, и `-z`
+        добавляет оно же. Argv можно собирать как угодно — хоть обёрткой, хоть по частям, —
+        потому что дойти до git он может только через помощника.
         """
         vals = _Values(source)
-        offenders = []
-        for lineno, elements in vals.built_lists():
-            items = [e.value for e in elements
-                     if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-            if "git" not in items or not any(a in items for a in cls.ASKS_FOR_NAMES):
+        tree = vals.tree
+        # За чем стоит сам модуль запуска и за чем — втянутые из него имена.
+        modules, imported = {"subprocess"}, set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules |= {a.asname or a.name for a in node.names if a.name == "subprocess"}
+            elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+                imported |= {a.asname or a.name for a in node.names if a.name in cls.SPAWNERS}
+        offenders = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
                 continue
-            if "-z" not in items:
-                offenders.append((lineno, items))
-        return offenders
+            by_module = (isinstance(node.func, ast.Attribute)
+                         and isinstance(node.func.value, ast.Name)
+                         and ((node.func.value.id in modules and node.func.attr in cls.SPAWNERS)
+                              or (node.func.value.id == "os"
+                                  and node.func.attr in cls.OS_SPAWNERS)))
+            by_name = (isinstance(node.func, ast.Name) and node.func.id in imported
+                       and not vals.lookup(node.func.id, vals.scope_of(node)))
+            if not (by_module or by_name):
+                continue
+            where = getattr(vals.scope_of(node), "name", "модуль")
+            if where != cls.GIT_HELPER:
+                offenders.add(where)
+        return sorted(offenders)
 
-    def test_список_путей_у_git_всегда_запрашивается_NUL_разделённым(self):
+    def test_процесс_запускают_в_одном_месте(self):
         """УЗДА КЛАССА «вывод git разобран как обычный текст».
 
         Три места разбирали список путей построчно: не-ASCII путь приходит оттуда
-        экранированным (`"src/\\320\\274…"`) и не совпадает ни с чем, а переименование
-        печатается одним новым именем. Правило держит и те вызовы, которых ещё нет.
+        экранированным (`"src/\\320\\272…"`) и не совпадает ни с чем, а переименование
+        печатается одним новым именем. `-z` просит один помощник за всех, и держится это
+        не перечислением форм записи argv, а тем, что запуск процесса в инструменте
+        ровно один.
         """
-        self.assertEqual(self._nul_offenders(self.SOURCE), [],
-                         "вызов git со списком путей без -z")
+        self.assertEqual(
+            self._spawns_outside_git(self.SOURCE), [],
+            f"процесс запускают мимо `{self.GIT_HELPER}()`: тогда argv собирают на месте, "
+            f"а вместе с ним и `-z` — зовите помощника")
 
-    # Как argv собирают на самом деле: одним литералом, склейкой и накоплением в
-    # переменной. Все три измерены — правило, читавшее один литерал, видело только первую.
-    NUL_SHAPES = {
-        "одним литералом":
-            'def f():\n    subprocess.run(["git", "-C", R, "ls-files", "--others", "--", *s])\n',
-        "склейкой":
-            'def f():\n    subprocess.run(["git", "-C", R] + ["ls-files", "--others", "--", *s])\n',
-        "накоплением в переменной":
-            'def f():\n    cmd = ["git", "-C", R]\n    cmd += ["grep", "-n", "--full-name"]\n'
-            '    subprocess.run(cmd)\n',
+    # Обе стороны правила на исходниках, которых в инструменте нет. Первые две — те самые
+    # формы, на которых слепло правило по сборке argv.
+    OUTSIDE_SPAWNS = {
+        "argv накоплен методом":
+            'def untracked_files(specs):\n'
+            '    cmd = ["git", "-C", str(ROOT)]\n'
+            '    cmd.extend(["ls-files", "--others", "--", *specs])\n'
+            '    return subprocess.run(cmd, capture_output=True, text=True).stdout.splitlines()\n',
+        "argv собран обёрткой":
+            'def _git(*rest):\n'
+            '    return ["git", "-C", str(ROOT), *rest]\n\n'
+            'def index_rows(specs):\n'
+            '    out = subprocess.run(_git("ls-files", "--stage"), capture_output=True,\n'
+            '                         text=True)\n'
+            '    return out.stdout.splitlines()\n',
+        "модуль под псевдонимом":
+            'import subprocess as sp\n\n'
+            'def churn():\n'
+            '    return sp.check_output(["git", "log", "--name-only"])\n',
+        "имя втянуто из модуля":
+            'from subprocess import run\n\n'
+            'def churn():\n'
+            '    return run(["git", "log", "--name-only"], capture_output=True)\n',
+        "мимо subprocess вообще":
+            'def churn():\n'
+            '    return os.popen("git log --name-only").read()\n',
+    }
+    INSIDE_HELPER = {
+        "помощник запускает":
+            'def git(*args, binary=False):\n'
+            '    argv = ["git", "-C", str(ROOT), *args]\n'
+            '    return subprocess.run(argv, capture_output=True, text=not binary)\n',
+        "argv по частям, но запуск в помощнике":
+            'def _git(*rest):\n'
+            '    return ["git", "-C", str(ROOT), *rest]\n\n'
+            'def git(*args):\n'
+            '    argv = _git(*args)\n'
+            '    argv.extend(["--"])\n'
+            '    return subprocess.run(argv, capture_output=True, text=True)\n\n'
+            'def index_rows(specs):\n'
+            '    return git("ls-files", "--stage").fields\n',
+        "своё имя run в другой роли":
+            'def run(cmd):\n'
+            '    return cmd\n\n'
+            'def index_rows(specs):\n'
+            '    return run(["git", "ls-files"])\n',
     }
 
-    def test_узда_видит_вызов_собранный_по_частям(self):
-        """Обе стороны: любая сборка argv без `-z` обязана ронять прогон, а с `-z` —
-        проходить, как бы её ни написали."""
-        for how, src in self.NUL_SHAPES.items():
-            with self.subTest(сборка=how):
-                self.assertNotEqual(self._nul_offenders(src), [],
-                                    "узда не увидела вызов, собранный по частям")
-                self.assertEqual(self._nul_offenders(src.replace('"-C"', '"-z", "-C"')), [],
-                                 "узда придирается к вызову, который `-z` просит")
+    def test_узда_видит_запуск_мимо_помощника(self):
+        """Обе стороны: запуск мимо помощника роняет прогон в любой форме записи, а сборка
+        argv по частям и сам помощник — нет."""
+        for how, src in self.OUTSIDE_SPAWNS.items():
+            with self.subTest(запуск=how):
+                self.assertNotEqual(self._spawns_outside_git(src), [],
+                                    "узда не увидела запуск мимо помощника")
+        for how, src in self.INSIDE_HELPER.items():
+            with self.subTest(невиновный=how):
+                self.assertEqual(self._spawns_outside_git(src), [],
+                                 "узда придирается к верной записи")
 
     # Распознавание цитаты живёт здесь; всё остальное спрашивает у них.
     QUOTE_TRACKERS = ("quoted_lines", "_quoted_pass", "unquoted")
@@ -5825,51 +5824,84 @@ def report_sections(md):
                 self.assertEqual(self._quote_offenders(src)[1], [],
                                  "узда требует трекер там, где разметки нет")
 
+    # Единственный читатель потока `git log` в инструменте: он же и единственный, кто этот
+    # поток заказывает, — маркер записи ставит он сам.
+    LOG_READER = "log_records"
+
     @classmethod
-    def _log_mark_offenders(cls, source: str) -> list[tuple[str, int]]:
-        """Кто читает маркер записей `git log` сам, мимо `log_records`.
-
-        Маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно. Постановка узнаётся
-        по тому, КУДА уходит значение, а не по тому, какой формой строку написали:
-        f-строка, склейка, собранный заранее кусок формата — всё это постановка, и
-        правило, знавшее одну f-строку, краснело бы на любой из остальных, а на второй
-        разбор потока при этом не смотрело.
-        """
-        vals = _Values(source)
-        offenders = []
-        for fn in ast.walk(vals.tree):
-            if not isinstance(fn, ast.FunctionDef) or fn.name == "log_records":
-                continue
-            offenders += [(fn.name, n.lineno) for n in ast.walk(fn)
-                          if isinstance(n, ast.Name) and n.id == "LOG_MARK"
-                          and not vals.flows_into(n, "--format=")]
-        return offenders
-
-    def test_записи_коммитов_разбираются_одним_местом(self):
-        """УЗДА КЛАССА «поток `git log -z` разобран своими руками».
+    def _log_stream_outside_reader(cls, source: str) -> list[str]:
+        """Функции, которые сами заказывают или сами разбирают поток `git log`.
 
         Ловушка не видна с места вызова: git завершает строку `--format` своим переводом
         строки, и `-z` оставляет его приклеенным к ПЕРВОМУ пути коммита. Два разборщика
         знали об этом порознь, и тот, что не знал, считал файл под двумя именами.
-        Разбор живёт в `log_records`, и сверять токен с маркером больше негде.
-        """
-        self.assertEqual(self._log_mark_offenders(self.SOURCE), [],
-                         "свой разбор записей git log — зовите log_records()")
 
-    def test_узда_видит_свой_разбор_записей_которого_ещё_нет(self):
-        """Обе стороны на исходниках, которых в инструменте нет: свой разбор ловится,
-        а постановка маркера в `--format=` — нет."""
-        own = ("def churn(out):\n"
-               "    for rec in out.split(LOG_MARK):\n"
-               "        yield rec\n")
-        self.assertNotEqual(self._log_mark_offenders(own), [],
-                            "узда не увидела своего разбора")
-        placing = ("def log_records(cmd):\n"
-                   "    return run(cmd)\n\n"
-                   "def churn(paths):\n"
-                   '    return log_records(["git", "log", f"--format={LOG_MARK}%H"])\n')
-        self.assertEqual(self._log_mark_offenders(placing), [],
-                         "узда придирается к постановке маркера")
+        Прежнее правило разрешало ПОСТАНОВКУ маркера в `--format=` где угодно и запрещало
+        чтение — и на том различении теряло разбор, написанный в одном выражении с форматом.
+        Различать больше нечего: формат ставит сам читатель, поток заказывает он же, и
+        маркера за его пределами быть не может — ни в постановке, ни в чтении.
+        """
+        vals = _Values(source)
+        offenders = set()
+        for n in ast.walk(vals.tree):
+            where = getattr(vals.scope_of(n), "name", "модуль")
+            if where == cls.LOG_READER:
+                continue
+            # Само объявление маркера — не чтение: смотрим туда, где его БЕРУТ.
+            if (isinstance(n, ast.Name) and n.id == "LOG_MARK"
+                    and isinstance(n.ctx, ast.Load)):
+                offenders.add(f"{where}: маркер записи мимо {cls.LOG_READER}()")
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == cls.GIT_HELPER and n.args
+                    and isinstance(n.args[0], ast.Constant) and n.args[0].value == "log"):
+                offenders.add(f"{where}: свой запуск `git log`")
+        return sorted(offenders)
+
+    def test_поток_истории_заказывает_и_разбирает_одно_место(self):
+        """УЗДА КЛАССА «поток `git log` разобран своими руками».
+
+        Второй разбор потока — это второе представление о том, где заканчивается запись
+        коммита, и в прошлый раз оно разошлось с первым молча. Заказ потока и его разбор
+        живут в одной функции, и взять помеченный поток больше негде.
+        """
+        self.assertEqual(self._log_stream_outside_reader(self.SOURCE), [],
+                         f"свой поток или свой разбор истории — зовите {self.LOG_READER}()")
+
+    # Обе стороны правила на исходниках, которых в инструменте нет. Первый — та самая
+    # сжатая форма, которую прежнее правило пропускало: разбор в одном выражении с форматом.
+    OWN_LOG_PARSERS = {
+        "разбор в одном выражении с форматом":
+            'def churn(root):\n'
+            '    return git("log", f"--format={LOG_MARK}%H", "--name-only").out.split(LOG_MARK)\n',
+        "разбор отдельным оператором":
+            'def churn(out):\n'
+            '    for rec in out.split(LOG_MARK):\n'
+            '        yield rec\n',
+        "свой заказ потока без маркера":
+            'def churn(root):\n'
+            '    return git("log", "--name-only", "--first-parent").fields\n',
+    }
+    LOG_READER_ONLY = {
+        "читатель заказывает и разбирает сам":
+            'def log_records(*args):\n'
+            '    out = git("log", f"--format={LOG_MARK}%H", *args)\n'
+            '    return [t for t in out.fields if t.startswith(LOG_MARK)]\n\n'
+            'def churn(paths):\n'
+            '    return log_records("--name-only", "--", *paths)\n',
+        "соседняя команда git не история":
+            'def touched(commit):\n'
+            '    return git("show", "--name-only", "--format=", commit).fields\n',
+    }
+
+    def test_узда_видит_свой_разбор_истории_которого_ещё_нет(self):
+        for how, src in self.OWN_LOG_PARSERS.items():
+            with self.subTest(разбор=how):
+                self.assertNotEqual(self._log_stream_outside_reader(src), [],
+                                    "узда не увидела своего разбора истории")
+        for how, src in self.LOG_READER_ONLY.items():
+            with self.subTest(невиновный=how):
+                self.assertEqual(self._log_stream_outside_reader(src), [],
+                                 "узда придирается к верной записи")
 
     @staticmethod
     def _bare_numbers(source: str) -> list[str]:
@@ -5914,85 +5946,113 @@ def report_sections(md):
     # УЗДА КЛАССА «узда, написанная под одну форму записи».
     #
     # Правило по исходнику видит ровно то, что уже написано, и три узды подряд пропустили
-    # правдоподобную форму, которой в инструменте нет: git-вызов, собранный из частей;
-    # порог, записанный выражением; ворота, написанные списком. Поэтому правило обязано
-    # (1) жить в отдельной функции, а не прямо в тесте — иначе его нечем покормить, — и
-    # (2) быть прогнанным на ВЫДУМАННОМ исходнике: только так видно, что оно замечает
-    # форму, которой ещё никто не писал.
-    SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__")
+    # правдоподобную форму, которой в инструменте нет. Доказывается такое правило только
+    # мутацией настоящего исходника (SOURCE_MUTATIONS ниже), поэтому каждое обязано в той
+    # таблице быть. Прежде правило-по-исходнику узнавалось по тому, чем его КОРМЯТ — по трём
+    # строкам-маркерам в аргументе, — и правило, которому инструмент подали путём
+    # (`(SKILL / "scripts" / "review.py").read_text()`), в таблицу не просилось вовсе.
+    # Кормить можно как угодно; узнаётся правило по тому, что оно ДЕЛАЕТ: превращает текст
+    # в дерево. Ищется это вызовом, а не поиском строки в тексте функции: иначе выдуманный
+    # образец, лежащий в тесте строкой, сам сходил бы за правило.
+    PARSE_CALLS = ("ast.parse", "_Values")
+    # Откуда начинается поиск: приговор набора выносят тесты и то, что для них готовят.
+    RULE_ENTRIES = ("test_", "setUp", "setUpClass", "setUpModule")
 
     @classmethod
-    def _rules_without_samples(cls, source: str) -> tuple[list[str], list[str], list[str]]:
-        """(правила прямо в тесте; правила без выдуманного образца; правила по исходнику).
+    def _rules_without_tables(cls, source: str) -> tuple[list[str], list[str]]:
+        """(правила прямо в тесте; правила по исходнику — те, чей приговор доходит до теста).
 
-        Исходник узнаётся и тогда, когда его передали через переменную: `src = self.SOURCE`
-        — тот же настоящий исходник, и правило, прогнанное только на нём, остаётся
-        недоказанным, как бы ни назвали переменную по дороге.
+        Правило — это первая разбирающая исходник функция на пути от теста: глубже искать
+        нечего, потому что помощники правила доказываются вместе с ним. Написанное прямо в
+        тесте правилом не считается — его нечем покормить, кроме уже написанного кода, и это
+        отдельная жалоба.
         """
-        vals = _Values(source)
-        tree = vals.tree
-        reads_tool = {fn.name for fn in ast.walk(tree)
-                      if isinstance(fn, ast.FunctionDef) and "TOOL.read_text" in ast.unparse(fn)}
-        inline, over_source, over_invented = [], set(), set()
-        for fn in ast.walk(tree):
-            if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")):
-                continue
-            for node in ast.walk(fn):
-                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                        and node.func.attr in ("parse", "walk") and node.args
-                        and any(m in vals.text(node.args[0]) for m in cls.SOURCE_MARKS)):
-                    inline.append(fn.name)
+        tree = ast.parse(source)
+        funcs: dict[str, list] = {}
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            name = (node.func.attr if isinstance(node.func, ast.Attribute)
-                    else getattr(node.func, "id", ""))
-            if not name.startswith("_"):
-                continue
-            args = " ".join(vals.text(a) for a in node.args)
-            if any(m in args for m in cls.SOURCE_MARKS) or (not node.args and name in reads_tool):
-                over_source.add(name)
-            elif node.args:
-                over_invented.add(name)
-        return sorted(set(inline)), sorted(over_source - over_invented), sorted(over_source)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                funcs.setdefault(node.name, []).append(node)
 
-    def test_у_каждого_правила_по_исходнику_есть_выдуманный_образец(self):
+        def called_in(name: str) -> list:
+            return [node.func for fn in funcs.get(name, [])
+                    for node in ast.walk(fn) if isinstance(node, ast.Call)]
+
+        def parses(name: str) -> bool:
+            return any(f"{f.value.id}.{f.attr}" in cls.PARSE_CALLS
+                       if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                       else getattr(f, "id", "") in cls.PARSE_CALLS
+                       for f in called_in(name))
+
+        def calls(name: str) -> set[str]:
+            out = {f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+                   for f in called_in(name)}
+            return out & set(funcs)
+
+        entries = [name for name in funcs if name.startswith(cls.RULE_ENTRIES)]
+        inline = sorted({name for name in entries
+                         if name.startswith("test_") and parses(name)})
+        rules, seen, queue = set(), set(entries), list(entries)
+        while queue:
+            for called in calls(queue.pop()) - seen:
+                seen.add(called)
+                if parses(called):
+                    rules.add(called)          # правило: дальше по этому пути не идём
+                else:
+                    queue.append(called)
+        return inline, sorted(rules)
+
+    def test_каждое_правило_по_исходнику_доказано_таблицей(self):
         """УЗДА КЛАССА «узда, написанная под одну форму записи»."""
-        inline, lonely, _ = self._rules_without_samples(
+        inline, rules = self._rules_without_tables(
             Path(__file__).read_text(encoding="utf-8"))
         self.assertEqual(
             inline, [],
             "правило по исходнику написано прямо в тесте: вынесите его в функцию, иначе "
-            "его нечем покормить, кроме уже написанного кода")
+            "его нечем покормить, кроме уже написанного кода, и мутацией оно не доказано")
+        missing = sorted(set(rules) - set(SOURCE_MUTATIONS))
         self.assertEqual(
-            lonely, [],
-            "правило прогнано только на исходнике инструмента: добавьте тест, который "
-            "кормит его ВЫДУМАННЫМ исходником — обе стороны, нарушение и невиновный")
+            missing, [],
+            "правило по исходнику без таблицы мутаций: впишите его в SOURCE_MUTATIONS — "
+            "приговор, дефект и правдоподобные переписывания, — иначе оно доказано только "
+            "тем, что сумел вообразить его автор")
+        stale = sorted(set(SOURCE_MUTATIONS) - set(rules))
+        self.assertEqual(stale, [],
+                         "в таблице мутаций правило, чей приговор до теста больше не "
+                         "доходит: сверьте таблицу с тем, что осталось")
 
-    # Обе стороны самой узды, на модулях, которых в наборе нет.
+    # Обе стороны самой узды, на модулях, которых в наборе нет. Третий случай — тот самый,
+    # на котором слепла узда по строкам-маркерам: исходник взят путём, а не через SOURCE.
     RULE_SHAPES = {
         "правило прямо в тесте": (
             "class R:\n    def test_x(self):\n"
             "        for n in ast.walk(ast.parse(self.SOURCE)):\n            pass\n", 0),
-        "правило без выдуманного образца": (
+        "правило, до которого зовут через посредника": (
+            "def _new_rule(src):\n    return [n for n in ast.walk(ast.parse(src))]\n\n"
+            "def _offenders_of(src):\n    return _new_rule(src)\n\n"
             "class R:\n    def test_x(self):\n"
-            "        self.assertEqual(_new_rule(self.SOURCE), [])\n", 1),
-        "исходник передан через переменную": (
+            "        self.assertEqual(_offenders_of(self.SOURCE), [])\n", 1),
+        "исходник взят путём": (
+            "def _new_rule(src):\n    return _Values(src).tree\n\n"
             "class R:\n    def test_x(self):\n"
-            "        src = self.SOURCE\n"
+            "        src = (SKILL / 'scripts' / 'review.py').read_text()\n"
             "        self.assertEqual(_new_rule(src), [])\n", 1),
     }
 
-    def test_узда_видит_правило_которое_никто_не_кормил(self):
+    def test_узда_видит_правило_которое_никто_не_доказал(self):
         for why, (src, half) in self.RULE_SHAPES.items():
             with self.subTest(правило=why):
-                self.assertNotEqual(self._rules_without_samples(src)[half], [],
-                                    "узда не увидела правило по виду")
-        good = (self.RULE_SHAPES["правило без выдуманного образца"][0]
-                + '    def test_y(self):\n'
-                  '        self.assertNotEqual(_new_rule("def f(): pass"), [])\n')
-        self.assertEqual(self._rules_without_samples(good)[:2], ([], []),
-                         "узда придирается к правилу, у которого образец есть")
+                self.assertIn("_new_rule" if half else "test_x",
+                              self._rules_without_tables(src)[half],
+                              "узда не увидела правило по тому, что оно делает")
+        # Обратная сторона: помощник правила отдельной записи в таблице не требует — он
+        # доказан вместе с правилом, которое его зовёт.
+        helper = ("def _gate_shape(node):\n    return isinstance(node, ast.Call)\n\n"
+                  "def _new_rule(src):\n"
+                  "    return [n for n in ast.walk(ast.parse(src)) if _gate_shape(n)]\n\n"
+                  "class R:\n    def test_x(self):\n"
+                  "        self.assertEqual(_new_rule(self.SOURCE), [])\n")
+        self.assertEqual(self._rules_without_tables(helper), ([], ["_new_rule"]),
+                         "узда требует таблицу от помощника правила")
 
     # Спрашивающие git по pathspec. Образец приходит из blocks.json и зовётся `spec` или
     # `pattern`; всё прочее — ИМЯ файла, и имя обязано идти под `:(literal)`.
@@ -6121,52 +6181,68 @@ def _put(vals: _Values, near, stmt, hoisted: list, local: dict) -> None:
         hoisted.append(stmt)
 
 
-# ── git и NUL ──
+# ── запуск git ──
 
 
-def _git_argv_literals(tree) -> list:
-    out = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.List):
+def _git_spawn_outside(source: str) -> str:
+    """ДЕФЕКТ: git запускают мимо помощника — и argv, и `-z` собирают на месте."""
+    return source.rstrip("\n") + (
+        "\n\n\ndef churn_records():\n"
+        '    cmd = ["git", "log", "--first-parent", "--name-only"]\n'
+        "    out = subprocess.run(cmd, capture_output=True, text=True, check=False)\n"
+        "    return out.stdout.splitlines()\n")
+
+
+def _git_argv_by_method(source: str) -> str:
+    """Argv копят методом списка: `cmd = [...]` → `cmd = [...]; cmd.extend([...])`.
+
+    Одна из двух форм, на которых слепло правило по СБОРКЕ argv: приговор нового правила не
+    имеет права от неё зависеть — argv можно собирать как угодно, дойти до git он может
+    только через помощника.
+    """
+    vals = _Values(source)
+    table, local, hoisted = {}, {}, []
+    for node in ast.walk(vals.tree):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.List) and len(node.value.elts) > 1):
             continue
-        items = [e.value for e in node.elts
+        items = [e.value for e in node.value.elts
                  if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-        if "git" in items and any(a in items for a in SourceRuleTest.ASKS_FOR_NAMES):
-            out.append(node)
-    return out
-
-
-def _git_without_z(source: str) -> str:
-    """ДЕФЕКТ: у git больше не просят NUL-разделённый вывод."""
-    vals = _Values(source)
-    for lst in _git_argv_literals(vals.tree):
-        lst.elts = [e for e in lst.elts
-                    if not (isinstance(e, ast.Constant) and e.value == "-z")]
-    return _rewritten(vals)
-
-
-def _git_prefix_hoisted(source: str, how: str) -> str:
-    """Общая приставка `["git", "-C", str(ROOT)]` вынесена — как её и выносят."""
-    vals = _Values(source)
-    table, hoisted, local = {}, [], {}
-    for n, lst in enumerate(_git_argv_literals(vals.tree)):
-        cut = next(i for i, e in enumerate(lst.elts)
-                   if isinstance(e, ast.Constant) and e.value in SourceRuleTest.ASKS_FOR_NAMES)
-        name = f"_GIT_PREFIX_{n}"
-        if how == "звёздочкой":
-            new = ast.parse(f"[*{name}]").body[0].value
-            new.elts += lst.elts[cut:]
-        else:
-            new = ast.parse(f"{name} + []").body[0].value
-            new.right.elts = lst.elts[cut:]
-        table[id(lst)] = new
-        holder = ast.parse(f"{name} = []").body[0]
-        holder.value.elts = lst.elts[:cut]
-        if how == "приставка в функции":
-            _put(vals, lst, holder, hoisted, local)
-        else:
-            hoisted.append(holder)
+        if "git" not in items:
+            continue
+        name = node.targets[0].id
+        head, tail = node.value.elts[:1], node.value.elts[1:]
+        node.value.elts = head
+        grow = ast.parse(f"{name}.extend([])").body[0]
+        grow.value.args[0].elts = tail
+        table[id(node)] = [node, grow]
+    # оператор заменяется ДВУМЯ: подмена по тождеству отдаёт список, `_Rewrite` его развернёт
     return _rewritten(vals, table, hoisted, local)
+
+
+def _git_argv_via_wrapper(source: str) -> str:
+    """Argv приходит на запуск из обёртки: на месте запуска списка не видно вовсе.
+
+    Вторая форма, на которой слепло прежнее правило (`_git(*rest)`): argv у запуска —
+    результат чужого вызова, и прочесть его по виду нельзя. Приговор нового правила от этого
+    не зависит: запуск виден по тому, ЧТО зовут.
+    """
+    vals = _Values(source)
+    table, hoisted = {}, []
+    for node in ast.walk(vals.tree):
+        if not (isinstance(node, ast.Call) and node.args):
+            continue
+        called = (node.func.attr if isinstance(node.func, ast.Attribute)
+                  else getattr(node.func, "id", ""))
+        if called not in SourceRuleTest.SPAWNERS:
+            continue
+        wrapped = ast.parse("_argv_of(None)").body[0].value
+        wrapped.args = [node.args[0]]
+        table[id(node.args[0])] = wrapped
+    if table:
+        hoisted.append(ast.parse("def _argv_of(argv):\n    return list(argv)\n").body[0])
+    return _rewritten(vals, table, hoisted)
 
 
 # ── имя файла как pathspec ──
@@ -6213,7 +6289,18 @@ def _pathspec_respelled(source: str, how: str) -> str:
 
 
 def _gate_statements(tree) -> list:
-    return [n for n in ast.walk(tree) if isinstance(n, ast.stmt) and _gate_messages(n)[0]]
+    """Операторы, которые добавляют отказ: ворота целиком, как их вырезает мутация."""
+    out = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in GATE_VERBS):
+            continue
+        parents = {id(c): n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+        stmt = node
+        while not isinstance(stmt, ast.stmt) and id(stmt) in parents:
+            stmt = parents[id(stmt)]
+        out.append(stmt)
+    return out
 
 
 def _gate_removed(source: str) -> str:
@@ -6223,26 +6310,42 @@ def _gate_removed(source: str) -> str:
 
 
 def _gates_split_out(source: str, how: str) -> str:
-    """`cmd_check` в пятьсот строк разобран на части — очевидный следующий шаг."""
+    """`cmd_check` в пятьсот строк разобран на части — очевидный следующий шаг.
+
+    Контейнер отказов при этом передают в помощника, и зовут его там как придётся: `refusals`
+    — ровно то имя, на котором прежний реестр, узнававший список отказов по имени
+    переменной, не видел ворот вовсе.
+    """
     vals = _Values(source)
     table, hoisted, local = {}, [], {}
     for n, stmt in enumerate(_gate_statements(vals.tree)):
         name = f"_gate_{n}"
-        if how == "часть отдаёт свой список":
-            helper = ast.parse(f"def {name}():\n"
-                               f"    problems = []\n"
-                               f"    return problems\n").body[0]
-            helper.body.insert(1, stmt)
-            table[id(stmt)] = ast.parse(f"problems += {name}()").body[0]
-        else:
-            helper = ast.parse(f"def {name}(problems, warnings):\n    pass\n").body[0]
-            helper.body = [stmt]
-            table[id(stmt)] = ast.parse(f"{name}(problems, warnings)").body[0]
+        holder = "refusals" if how == "контейнер зовут иначе" else "gates"
+        helper = ast.parse(f"def {name}({holder}):\n    pass\n").body[0]
+        for node in ast.walk(stmt):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in GATE_VERBS
+                    and isinstance(node.func.value, ast.Name)):
+                node.func.value.id = holder
+        helper.body = [stmt]
+        table[id(stmt)] = ast.parse(f"{name}(gates)").body[0]
         if how == "часть внутри команды":
             _put(vals, stmt, helper, hoisted, local)
         else:
             hoisted.append(helper)
     return _rewritten(vals, table, hoisted, local)
+
+
+def _check_verdict_of_its_own(source: str) -> str:
+    """ДЕФЕКТ: ворота печатают отказ сами и сами выходят — мимо контейнера и реестра."""
+    vals = _Values(source)
+    fn = next(n for n in ast.walk(vals.tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "cmd_check")
+    own = ast.parse('if not idx:\n'
+                    '    print("CHECK FAILED: no blocks at all")\n'
+                    '    return 1\n').body[0]
+    fn.body.insert(1, own)
+    return _rewritten(vals)
 
 
 # ── пороги ──
@@ -6298,13 +6401,20 @@ def _thresholds_in_a_function(source: str) -> str:
     return "\n".join(out)
 
 
-# ── разбор потока `git log` ──
+# ── поток `git log` ──
 
 
 def _second_log_parser(source: str) -> str:
-    """ДЕФЕКТ: поток `git log -z` разбирают ещё раз, своими руками."""
-    return source.rstrip("\n") + ("\n\n\ndef churn_records(out):\n"
-                                  "    return [rec for rec in out.split(LOG_MARK) if rec]\n")
+    """ДЕФЕКТ: поток истории заказывают и разбирают ещё раз, своими руками.
+
+    Написано так, как такой разборщик и пишут, — одним выражением вместе с форматом. На
+    прежнем правиле, которое разрешало постановку маркера «куда бы значение ни шло», ровно
+    эта сжатая форма проходила молча, а раздельная — нет.
+    """
+    return source.rstrip("\n") + (
+        "\n\n\ndef churn_records(paths):\n"
+        '    return git("log", f"--format={LOG_MARK}%H", "--name-only", "--", *paths)'
+        ".out.split(LOG_MARK)\n")
 
 
 def _format_respelled(source: str, how: str) -> str:
@@ -6459,7 +6569,7 @@ def _subprocess_respelled(source: str, how: str) -> str:
     return _rewritten(vals, table, hoisted)
 
 
-# ── правила без выдуманного образца ──
+# ── правила без таблицы мутаций ──
 
 
 def _rule_inline_in_a_test(source: str) -> str:
@@ -6471,32 +6581,66 @@ def _rule_inline_in_a_test(source: str) -> str:
         "            self.assertIsNotNone(node)\n")
 
 
-def _source_through_a_variable(source: str) -> str:
-    """Исходник доехал до правила через модульную переменную, а не прямо из чтения файла."""
+def _rule_via_relay(source: str) -> str:
+    """До правила зовут не из теста прямо, а через посредника.
+
+    Узда обязана дойти до правила по вызовам: прежняя смотрела, ЧЕМ правило кормят, и
+    посредник выводил правило из-под таблицы мутаций молча.
+    """
     vals = _Values(source)
-    table, hoisted = {}, []
-    seen = 0
+    table, hoisted, relays = {}, [], set()
     for node in ast.walk(vals.tree):
-        if not (isinstance(node, ast.Call) and node.args):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in SOURCE_MUTATIONS):
             continue
-        arg = node.args[0]
-        if isinstance(arg, ast.Name) or not any(
-                m in ast.unparse(arg) for m in SourceRuleTest.SOURCE_MARKS):
-            continue
-        seen += 1
-        name = f"_src_{seen}"
-        holder = ast.parse(f"{name} = None").body[0]
-        holder.value = arg
-        hoisted.append(holder)
-        table[id(arg)] = ast.Name(id=name, ctx=ast.Load())
+        relay = f"_relay{node.func.id}"
+        table[id(node.func)] = ast.Name(id=relay, ctx=ast.Load())
+        relays.add((relay, node.func.id))
+    for relay, rule in sorted(relays):
+        hoisted.append(ast.parse(f"def {relay}(*args, **kw):\n"
+                                 f"    return {rule}(*args, **kw)\n").body[0])
     return _rewritten(vals, table, hoisted)
+
+
+# ── команды инструмента ──
+
+
+def _undocumented_subcommand(source: str) -> str:
+    """ДЕФЕКТ: у инструмента появилась команда, о которой SKILL.md не знает."""
+    vals = _Values(source)
+    call = next(n for n in ast.walk(vals.tree)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "add_parser" and n.args)
+    sub = ast.unparse(call.func.value)
+    added = ast.parse(f'{sub}.add_parser("wibble", help="undocumented")').body[0]
+    hoisted, local = [], {}
+    _put(vals, call, added, hoisted, local)
+    return _rewritten(vals, {}, hoisted, local)
+
+
+def _subcommand_via_variable(source: str) -> str:
+    """Имя команды вынесено в переменную — обычный перенос, и правило не имеет права от
+    него слепнуть."""
+    vals = _Values(source)
+    table, hoisted, local = {}, [], {}
+    for n, call in enumerate(list(ast.walk(vals.tree))):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "add_parser" and call.args
+                and isinstance(call.args[0], ast.Constant)):
+            continue
+        name = f"_CMD_{n}"
+        holder = ast.parse(f"{name} = None").body[0]
+        holder.value = call.args[0]
+        _put(vals, call, holder, hoisted, local)
+        table[id(call.args[0])] = ast.Name(id=name, ctx=ast.Load())
+    return _rewritten(vals, table, hoisted, local)
 
 
 # ── приговоры правил: один список строк, пустой на честном исходнике ──
 
 
-def _v_nul(source: str) -> list[str]:
-    return sorted({" ".join(items) for _, items in SourceRuleTest._nul_offenders(source)})
+def _v_spawn_host(source: str) -> list[str]:
+    return SourceRuleTest._spawns_outside_git(source)
 
 
 def _v_pathspec(source: str) -> list[str]:
@@ -6510,12 +6654,16 @@ def _v_gates(source: str) -> list[str]:
     return sorted((was - now).elements())
 
 
+def _v_own_verdict(source: str) -> list[str]:
+    return _own_verdict(source)
+
+
 def _v_numbers(source: str) -> list[str]:
     return sorted(set(SourceRuleTest._bare_numbers(source)))
 
 
-def _v_log_mark(source: str) -> list[str]:
-    return sorted({name for name, _ in SourceRuleTest._log_mark_offenders(source)})
+def _v_log_stream(source: str) -> list[str]:
+    return SourceRuleTest._log_stream_outside_reader(source)
 
 
 def _v_quotes(source: str) -> list[str]:
@@ -6537,14 +6685,21 @@ def _v_spawns(source: str) -> list[str]:
     return sorted({why for _, why in _spawns(source)})
 
 
-def _v_samples(source: str) -> list[str]:
-    """Заодно и потеря правила из виду: узда, переставшая замечать, что правилу дают
-    настоящий исходник, молча выводит его из-под собственной таблицы мутаций."""
-    inline, lonely, reading = SourceRuleTest._rules_without_samples(source)
+def _v_subcommands(source: str) -> list[str]:
+    """Команды инструмента, которых нет в SKILL.md, — то, о чём и есть тот тест."""
+    text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    return [c for c in DocumentedSurfaceTest.subcommands(source)
+            if not re.search(rf"review(?:\.py)?\s+{re.escape(c)}\b", text)]
+
+
+def _v_rules(source: str) -> list[str]:
+    """Заодно и потеря правила из виду: узда, переставшая замечать правило, молча выводит
+    его из-под собственной таблицы мутаций."""
+    inline, rules = SourceRuleTest._rules_without_tables(source)
     return sorted([f"в тесте: {name}" for name in inline]
-                  + [f"без образца: {name}" for name in lonely]
+                  + [f"без таблицы: {name}" for name in set(rules) - set(SOURCE_MUTATIONS)]
                   + [f"потеряно из виду: {name}"
-                     for name in set(SOURCE_MUTATIONS) - set(reading)])
+                     for name in set(SOURCE_MUTATIONS) - set(rules)])
 
 
 # Что доказывается мутациями: приговор правила, дефект и правдоподобные переписывания,
@@ -6553,11 +6708,12 @@ def _v_samples(source: str) -> list[str]:
 Mutated = collections.namedtuple("Mutated", "verdict spoil respellings suite")
 
 SOURCE_MUTATIONS = {
-    "_nul_offenders": Mutated(_v_nul, _git_without_z, {
+    "_spawns_outside_git": Mutated(_v_spawn_host, _git_spawn_outside, {
         "как написано": _reparsed,
-        "приставка в модуле": lambda s: _git_prefix_hoisted(s, "приставка в модуле"),
-        "приставка в функции": lambda s: _git_prefix_hoisted(s, "приставка в функции"),
-        "звёздочкой": lambda s: _git_prefix_hoisted(s, "звёздочкой"),
+        "argv накоплен методом": _git_argv_by_method,
+        "argv из обёртки": _git_argv_via_wrapper,
+        "модуль под псевдонимом": lambda s: _subprocess_respelled(s, "модуль под псевдонимом"),
+        "имя втянуто из модуля": lambda s: _subprocess_respelled(s, "имя втянуто из модуля"),
     }, False),
     "_name_as_pattern": Mutated(_v_pathspec, _pathspec_without_literal, {
         "как написано": _reparsed,
@@ -6567,9 +6723,14 @@ SOURCE_MUTATIONS = {
     }, False),
     "_check_gates": Mutated(_v_gates, _gate_removed, {
         "как написано": _reparsed,
-        "часть с чужим списком": lambda s: _gates_split_out(s, "часть с чужим списком"),
-        "часть отдаёт свой список": lambda s: _gates_split_out(s, "часть отдаёт свой список"),
+        "ворота в помощнике": lambda s: _gates_split_out(s, "ворота в помощнике"),
+        "контейнер зовут иначе": lambda s: _gates_split_out(s, "контейнер зовут иначе"),
         "часть внутри команды": lambda s: _gates_split_out(s, "часть внутри команды"),
+    }, False),
+    "_own_verdict": Mutated(_v_own_verdict, _check_verdict_of_its_own, {
+        "как написано": _reparsed,
+        "ворота в помощнике": lambda s: _gates_split_out(s, "ворота в помощнике"),
+        "контейнер зовут иначе": lambda s: _gates_split_out(s, "контейнер зовут иначе"),
     }, False),
     "_bare_numbers": Mutated(_v_numbers, _threshold_unexplained, {
         "как написано": lambda s: s,
@@ -6577,7 +6738,7 @@ SOURCE_MUTATIONS = {
         "объявление с типом": lambda s: _thresholds_respelled(s, "объявление с типом"),
         "порог внутри функции": _thresholds_in_a_function,
     }, False),
-    "_log_mark_offenders": Mutated(_v_log_mark, _second_log_parser, {
+    "_log_stream_outside_reader": Mutated(_v_log_stream, _second_log_parser, {
         "как написано": _reparsed,
         "формат склейкой": lambda s: _format_respelled(s, "склейкой"),
         "формат собран заранее": lambda s: _format_respelled(s, "заранее"),
@@ -6601,9 +6762,13 @@ SOURCE_MUTATIONS = {
         "имя втянуто из модуля": lambda s: _subprocess_respelled(s, "имя втянуто из модуля"),
         "интерпретатор в переменной": lambda s: _subprocess_respelled(s, "в переменной"),
     }, True),
-    "_rules_without_samples": Mutated(_v_samples, _rule_inline_in_a_test, {
+    "subcommands": Mutated(_v_subcommands, _undocumented_subcommand, {
         "как написано": _reparsed,
-        "исходник через переменную": _source_through_a_variable,
+        "имя команды в переменной": _subcommand_via_variable,
+    }, False),
+    "_rules_without_tables": Mutated(_v_rules, _rule_inline_in_a_test, {
+        "как написано": _reparsed,
+        "правило через посредника": _rule_via_relay,
     }, True),
 }
 
@@ -6627,11 +6792,6 @@ class SourceMutationTest(unittest.TestCase):
     Последнее и есть проверяемое свойство: приговор зависит от того, что код делает, и
     не зависит от того, как он написан.
     """
-
-    # Не правила: общий разрешатель значений, на котором стоят все правила ниже (его
-    # доказывает каждая таблица разом), и сверка уже РАЗОБРАННОЙ таблицы — ей скармливают
-    # не исходник, а словарь.
-    NOT_RULES = {"_Values", "_msg_mismatch"}
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -6664,23 +6824,22 @@ class SourceMutationTest(unittest.TestCase):
                             "смотрите туда, где значение собирают, а не туда, где его "
                             "написали — ещё одна ветка `isinstance` кончится так же")
 
-    def test_у_каждого_правила_по_исходнику_есть_таблица_мутаций(self):
-        """Узда самой узды: новое правило по исходнику обязано попасть в таблицу.
+    def test_приговор_каждого_правила_проверен_на_обеих_сторонах(self):
+        """Контроль самой таблицы: у правила обязан быть и дефект, и хотя бы один честный
+        перенос. Запись без переписываний доказывает только то, что правило видит дефект
+        там, где он написан прямо, — а разъезжались правила именно на переносах.
 
-        Иначе следующее правило снова будет доказано только выдуманным образцом — тем
-        самым способом, которого хватило на два круга и не хватило на третий.
+        Кому таблица нужна — решает `_rules_without_tables`: правило, чей приговор доходит
+        до теста, обязано быть здесь.
         """
-        reading = SourceRuleTest._rules_without_samples(self.SUITE_SOURCE)[2]
-        missing = sorted(set(reading) - set(SOURCE_MUTATIONS) - self.NOT_RULES)
-        self.assertEqual(
-            missing, [],
-            "правило по исходнику без таблицы мутаций: впишите его в SOURCE_MUTATIONS — "
-            "приговор, дефект и правдоподобные переписывания, — иначе оно доказано только "
-            "тем, что сумел вообразить его автор")
-        stale = sorted(set(SOURCE_MUTATIONS) - set(reading))
-        self.assertEqual(stale, [],
-                         "в таблице мутаций правило, которому больше не дают настоящий "
-                         "исходник: сверьте таблицу с тем, что осталось")
+        for name, rule in SOURCE_MUTATIONS.items():
+            with self.subTest(узда=name):
+                self.assertTrue(callable(rule.verdict) and callable(rule.spoil))
+                self.assertGreaterEqual(
+                    len(rule.respellings), 2,
+                    "у правила нет ни одного переписывания кроме контрольного: "
+                    "перечислите правдоподобные переносы, иначе правило доказано только "
+                    "на той форме записи, в которой оно и написано")
 
 
 class QuotationMapTest(unittest.TestCase):
@@ -7264,24 +7423,47 @@ class DocumentedSurfaceTest(unittest.TestCase):
     """
 
     @staticmethod
-    def subcommands() -> list[str]:
-        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
-        return sorted({n.args[0].value for n in ast.walk(tree)
-                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                       and n.func.attr == "add_parser" and n.args
-                       and isinstance(n.args[0], ast.Constant)})
+    def subcommands(source: str) -> list[str]:
+        """Команды инструмента — из его исходника, а не из `--help`.
+
+        Имя команды читается там, где его СОБРАЛИ: имя, вынесенное в переменную, — та же
+        команда, и правило, знавшее один литерал в доводе, о ней бы не узнало. Исходник
+        правилу передают, а не читают внутри: иначе его нечем покормить, кроме уже
+        написанного кода, и мутацией оно не доказано.
+        """
+        vals = _Values(source)
+        out = set()
+        for n in ast.walk(vals.tree):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "add_parser" and n.args):
+                continue
+            try:
+                name = vals.literal(n.args[0])
+            except (ValueError, TypeError, SyntaxError):
+                continue
+            if isinstance(name, str):
+                out.add(name)
+        return sorted(out)
 
     def test_каждая_команда_инструмента_названа_в_skill_md(self):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         # Названа — значит показана КОМАНДОЙ: слова `version` и `hypotheses` встречаются в
         # прозе сами по себе, и правило, читающее их как упоминание команды, пропустило бы
         # обе (измерено на прежнем SKILL.md).
-        missing = [c for c in self.subcommands()
+        missing = [c for c in self.subcommands(TOOL.read_text(encoding="utf-8"))
                    if not re.search(rf"review(?:\.py)?\s+{re.escape(c)}\b", text)]
         self.assertEqual(
             missing, [],
             "команды инструмента, которых нет в SKILL.md: ведущая сессия читает его и точку "
             "входа — о том, чего там нет, она не узнает ниоткуда")
+
+    def test_узда_видит_команду_имя_которой_собрали_заранее(self):
+        """Обе стороны правила на исходниках, которых в инструменте нет: команда, чьё имя
+        вынесли в переменную, — та же команда; имя, которого в исходнике нет вовсе
+        (приходит доводом), правилу не видно, и это его известный предел."""
+        self.assertEqual(self.subcommands('sub.add_parser("check")\n'), ["check"])
+        self.assertEqual(self.subcommands('NAME = "check"\nsub.add_parser(NAME)\n'), ["check"])
+        self.assertEqual(self.subcommands("def add(name):\n    sub.add_parser(name)\n"), [])
 
     def test_точка_входа_знает_про_роли_и_ворота_инструмента(self):
         """Точку входа `setup` кладёт в проект, и дальше её читают вместо SKILL.md."""
