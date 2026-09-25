@@ -1821,6 +1821,16 @@ def cmd_import(args) -> int:
                     f"limit of {limit} — shorten it in the draft; the evidence belongs in the report")
         incoming.append(row)
 
+    # A row numbered for ANOTHER block (`V2-001` in the file of H1) is refused on every
+    # path: the top-up skipped it silently as "already known", and the plain import would
+    # file it under this block with a foreign number (the kit author's review, 24.09).
+    other = [f.get("id") for f in incoming
+             if isinstance(f.get("id"), str) and (m := re.fullmatch(r"(.+)-(\d+)", f["id"]))
+             and m.group(1) != args.block]
+    if other:
+        die(f"{src.name}: rows numbered for another block — {', '.join(other)}; a block's file "
+            f"holds that block's findings only: remove the rows or import them with their own block")
+
     existing = findings()
     if args.append:
         # TOP-UP IMPORT: findings found on top of what is already recorded. The regular
@@ -1842,7 +1852,8 @@ def cmd_import(args) -> int:
             # with their numbers — the top-up appends new lines to it. What is recorded is
             # skipped: the register knows more about it (status, fix), and the block's file
             # does not override it.
-            if f.get("id") in known:
+            fid = f.get("id")
+            if fid in known:
                 continue
             f.setdefault("block", args.block)
             if f["block"] != args.block:
@@ -1872,13 +1883,37 @@ def cmd_import(args) -> int:
         return 0
 
     mine = [f for f in existing if f.get("block") == args.block]
-    locked = [f for f in mine if f.get("status") not in ("open", "rejected")]
-    if locked and not args.force:
-        ids = ", ".join(f.get("id", "?") for f in locked)
-        die(
-            f"block {args.block} already has findings in progress ({ids}) — "
-            "a repeated import would wipe their state; use --force if this is deliberate"
-        )
+    if mine and not args.force:
+        # The plain import REPLACES the block's set with the file. A finding can be recorded
+        # against the block before its pass — handed over by another block's fixer, left by
+        # an earlier pass — and replacing wiped it: its id went to the hunter's new finding
+        # and `check` stayed green (the kit author's register: 26 such rows in 15 unstarted
+        # blocks). So the plain import refuses when the file would ERASE a recorded row or
+        # OVERTURN a recorded decision; the file may still change a decision nobody stamped
+        # — that is its own, not somebody else's.
+        in_file = {f.get("id"): f for f in incoming if f.get("id")}
+        missing = [f["id"] for f in mine if f.get("id") and f["id"] not in in_file]
+        overturned = []
+        for f in mine:
+            g = in_file.get(f.get("id"))
+            if g is None:
+                continue
+            stamped = bool(f.get("updated_at") or f.get("restamped_at"))
+            decided = f.get("status") not in ("open", "rejected")
+            if (stamped or decided) and any(
+                    (g.get(k) or None) != (f.get(k) or None)
+                    for k in ("status", "dup_of", "fix_commit", "defer_reason", "reject_reason")):
+                overturned.append(f["id"])
+        if missing or overturned:
+            parts = []
+            if missing:
+                parts.append(f"recorded but not in the file: {', '.join(missing)}")
+            if overturned:
+                parts.append(f"decided in the register, decided otherwise in the file: {', '.join(overturned)}")
+            die(f"block {args.block}: the plain import would replace what is recorded — "
+                f"{'; '.join(parts)}. Add the new findings with `{CLI} import {args.block} --append` "
+                f"(what is recorded stays, new rows get the next free numbers), or replace the "
+                f"whole set deliberately with --force")
 
     kept = [f for f in existing if f.get("block") != args.block]
     before = {f["id"]: f for f in mine if f.get("id")}

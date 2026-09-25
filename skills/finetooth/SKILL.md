@@ -84,7 +84,9 @@ one of your own:
    Rejected findings are not deleted — they stay with the reason. Then `review set-status <ID> verified`.
 4. **Acceptance.** Read both reports yourself and check them against the acceptance criterion.
    Coverage incomplete — the block goes back for another pass, not to closure.
-5. **Register.** `review import <ID>`, `review findings`, `review check`.
+5. **Register.** `review import <ID>`, `review findings`, `review check`. The plain import
+   refuses when the file would erase a finding already recorded against the block or overturn
+   a recorded decision — then `import <ID> --append` (or `--force`, deliberately).
 6. **Journal.** `review log <ID> "what was decided and why"` — right away: this cannot be recovered.
 7. **Fixing** — yet another agent: `review prompt <ID> --role fix`. Cut assignments by related
    areas, not one finding at a time. Run the gates and the revert check yourself after the
