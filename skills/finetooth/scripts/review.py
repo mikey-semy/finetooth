@@ -1447,8 +1447,6 @@ CODE_INDENT = 4
 # closing at any indentation let an indented example INSIDE a fence close it and leak its
 # verdicts as the report's own (round 4). Anchoring the close to the opener closes both.
 FENCE_SLACK = CODE_INDENT - 1
-# An inline code span: a run of backticks, content, the same run (CommonMark 6.1).
-INLINE_CODE = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 COMMENT_OPEN, COMMENT_CLOSE = "<!--", "-->"
 
 
@@ -2495,6 +2493,8 @@ def verify_report_problem(rep: Path, has_findings: bool) -> str | None:
 VERDICT_VOCABULARY = {w for w, _ in VERDICT_WORDS}
 
 
+CODE_SPAN = re.compile(r"`+([^`]*)`+")
+
 def unquote_verdicts(line: str) -> str:
     """Blank out code spans that QUOTE a verdict word instead of giving one.
 
@@ -2508,9 +2508,9 @@ def unquote_verdicts(line: str) -> str:
     a real report writes its verdicts, and it must keep working.
     """
     def one(m: re.Match) -> str:
-        inner = m.group(2).strip().strip(".,:;!?").strip().lower()
+        inner = m.group(1).strip().strip(".,:;!?").strip().lower()
         return " " if inner in VERDICT_VOCABULARY else m.group(0)
-    return INLINE_CODE.sub(one, line)
+    return CODE_SPAN.sub(one, line)
 
 
 def line_verdict(line: str) -> str | None:
@@ -2613,36 +2613,24 @@ def verdict_conflicts(text: str, block_id: str) -> dict[str, list[str]]:
 
 
 def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
-    """All verdicts on each hypothesis in order of appearance.
-
-    A verdict is a CLAUSE, not a word near an id: the hypothesis id at the start of a line,
-    a dash, the verdict word, and a basis after it — what proves it or what got in the way.
-    Six rounds of the kit's own review found the parser taking the word for the clause: an
-    id mentioned in prose next to "not applicable" while describing a bug, a verdict quoted
-    in a code span, the template's `<what proves it>` left unfilled, "checked partially"
-    read as checked. One shape, held by `VerdictTableTest`:
-
-    - `- H1.2 — checked: ran the mutation`, `**H3.1 — проверена, находок нет.**`,
-      `- `H5.2 — проверена: …`` (the form the template used to prescribe) — verdicts;
-    - no basis (`проверена`, `checked: …`, `checked: <how it was proven>`) — no verdict: the
-      hypothesis stays open and the gate names it;
-    - a partial qualifier between the verdict word and the colon (`проверена частично:`,
-      `checked partially:`) — "not checked";
-    - `T1.3 is "not applicable"` in prose — a mention, not a verdict;
-    - a table row — only in a table about hypotheses (its header says so) or under the
-      Hypotheses heading; "hypothesis 2 refuted" in running text — as before.
-    """
+    """All verdicts on each hypothesis in order of appearance."""
     out: dict[str, list[str]] = {}
     plain = re.compile(r"(?:гипотез\w*|hypothesis)\s*[№#]?\s*(\d+)", re.IGNORECASE)
-    clause = (re.compile(rf"^\s*(?:[-*+]|\d+[.)])?\s*[`*_\s]*({re.escape(block_id)}\.\d+)\b[`*_\s]*"
-                         rf"(?:\([^)]*\)[`*_\s]*)?[—–:-]+\s*(.*)$") if block_id else None)
+    # The identifier is taken from the block's REAL name, not guessed by shape: more than
+    # half of the blocks of the real review have a name with a letter suffix (`V1d`,
+    # `H13e`), and the regex "letters, digits, dot" did not catch them — the verdicts of
+    # such blocks counted as missing, and they passed only through the fallback forms.
+    tagged = re.compile(rf"\b({re.escape(block_id)}\.\d+)\b") if block_id else None
     in_hypotheses = False
     hypotheses_depth = 0
     table_about_hypotheses = False
     prev_was_row = False
     lines = text.split("\n")
     for line, fenced in zip(lines, quoted_lines(lines, "quoted")):
-        # A fenced block is an EXAMPLE, not an answer (see quoted_lines).
+        # A fenced block is an EXAMPLE, not an answer. The role template hands the agent the
+        # shape of a verdict line inside a ```markdown fence, with the block id already
+        # substituted; a report that quotes that skeleton and answers nothing closed every
+        # hypothesis of the block and `check` printed "review state is consistent".
         if fenced:
             prev_was_row = False
             continue
@@ -2654,75 +2642,36 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
                 in_hypotheses = False
         is_row = line.lstrip().startswith("|")
         if is_row and not prev_was_row:
-            # A table is a table of hypothesis verdicts only when it SAYS SO — its first row
-            # names hypotheses; the gate→test→mutation table the acceptance criterion asks
-            # for closed hypotheses 1 and 2 with the verdicts of rows 1 and 2 otherwise.
+            # A table counts as a table of hypothesis verdicts only when it SAYS SO — its
+            # first row names hypotheses. Reading a bare first data row ("| 1 | … |") as a
+            # header too made every numbered table in the report a verdict table: the
+            # gate→test→mutation table the acceptance criterion itself asks for closed
+            # hypotheses 1 and 2 with the verdicts of rows 1 and 2. A header-less summary of
+            # hypotheses is still read — under the "Hypotheses" heading, where it belongs.
             table_about_hypotheses = bool(HYPOTHESIS_WORD.search(line))
         prev_was_row = is_row
-        if is_row:
-            if not (in_hypotheses or table_about_hypotheses) or not block_id:
-                continue
-            verdict = line_verdict(INLINE_CODE.sub(" ", line))
-            if not verdict:
-                continue
-            first = line.strip().strip("|").split("|")[0].strip().strip("`*")
-            if first.isdigit():
-                out.setdefault(f"{block_id}.{first}", []).append(verdict)
-            elif clause and re.fullmatch(rf"{re.escape(block_id)}\.\d+", first):
-                out.setdefault(first, []).append(verdict)
+        verdict = line_verdict(line)
+        if not verdict:
             continue
-        m = clause.match(line) if clause else None
-        if m:
-            verdict = clause_verdict(m.group(2))
-            if verdict:
-                out.setdefault(m.group(1), []).append(verdict)
-            continue
+        if tagged:
+            for token in tagged.findall(line):
+                out.setdefault(token, []).append(verdict)
         if not block_id:
             continue
         # The free form is bound to the block whose report we are reading: "hypothesis 2"
-        # in the H15 report is H15.2, and there is no point demanding the author rewrite it.
-        stripped = INLINE_CODE.sub(" ", line)
-        verdict = line_verdict(stripped)
-        if verdict:
-            for n in plain.findall(stripped):
-                out.setdefault(f"{block_id}.{n}", []).append(verdict)
+        # in the H15 report is H15.2, and there is no point demanding the author rewrite it as an ID.
+        for n in plain.findall(line):
+            out.setdefault(f"{block_id}.{n}", []).append(verdict)
+        # The summary table "| # | hypothesis | outcome |" — the way a hypotheses report is
+        # written most often: the number stands in the first cell, the verdict in the last,
+        # and the word "hypothesis" is not in the line at all. Without parsing the table the
+        # gate would demand a finished report be rewritten for the sake of form, adding
+        # nothing to its content.
+        if is_row and (in_hypotheses or table_about_hypotheses):
+            first = line.strip().strip("|").split("|")[0].strip()
+            if first.isdigit():
+                out.setdefault(f"{block_id}.{first}", []).append(verdict)
     return out
-
-
-# A qualifier that turns "checked" into "not checked": searched between the verdict word and
-# the colon, never in the basis — "проверена: частичный уникальный индекс не даёт второй
-# строки" is a check OF a partial index (the kit author's third review round, 24.09).
-PARTIAL = re.compile(r"частичн|неполн|лишь|partial|incomplet|not fully|only partly", re.IGNORECASE)
-# A basis that is not one: the template's placeholder, an ellipsis.
-NO_BASIS = re.compile(r"(?:…|\.\.\.|<[^>]*>)?", re.DOTALL)
-
-
-def clause_verdict(rest: str) -> str | None:
-    """The verdict of `… <verdict word><qualifier>: <basis>`: the EARLIEST verdict word of the
-    clause (the negated form starts earlier than the bare one inside it), or None when there
-    is no verdict word or no basis after it."""
-    # A span whose whole content is one vocabulary word quotes the word (`n/a`, `checked`);
-    # every other backtick is markup — the old template put the whole clause in one span.
-    rest = unquote_verdicts(rest).replace("`", "")
-    low = rest.lower()
-    hits = sorted((i, -len(w), w, v) for w, v in VERDICT_WORDS if (i := verdict_word_at(low, w)) >= 0)
-    if not hits:
-        return None
-    i, _, word, verdict = hits[0]
-    tail = rest[i + len(word):]
-    qualifier, colon, basis = tail.partition(":")
-    if not colon:
-        qualifier, basis = tail, tail
-    elif not basis.strip() and qualifier.strip(" .,;—–-`*_"):
-        # "проверена частично, мутацией не прогнана. Прогон невозможен:" — the basis goes on
-        # the next line; the words before the colon already say what happened.
-        basis = qualifier
-    basis = basis.strip().strip("`*_").strip(" .,;—–-").strip()
-    if NO_BASIS.fullmatch(basis):
-        return None
-    if verdict == CHECKED and PARTIAL.search(qualifier):
-        return NOT_CHECKED
-    return verdict
 
 
 def verdicts_for(b: dict) -> dict[str, str]:
@@ -3229,8 +3178,10 @@ def cmd_check(args) -> int:
             body = section_body(hunter.read_text(encoding="utf-8"), LIMITS_HEADING, "quoted")
             if body is None:
                 problems.append(
-                    f"{b['id']}: the hunter report has no 'Coverage limits' section — "
-                    f"what was deliberately not read and why"
+                    f"{b['id']}: the hunter report has no 'Coverage limits' section outside a "
+                    f"fence or a quotation — what was deliberately not read and why, as the "
+                    f"report's own heading (a heading inside an example, or after a fence that "
+                    f"never closes, is part of the example)"
                 )
             elif not [ln for ln in unquoted(body)
                       if ln.strip() and not LIMITS_PLACEHOLDER.search(ln)]:

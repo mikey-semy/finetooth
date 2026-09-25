@@ -82,14 +82,9 @@ Report structure:
 The manifest's hypotheses are numbered in order: the first is `{{BLOCK_ID}}.1`, the second
 `{{BLOCK_ID}}.2` and so on. **Each must get exactly one verdict**, as a line:
 
-- {{BLOCK_ID}}.1 — checked: <what exactly proves it>
-- {{BLOCK_ID}}.2 — not checked: <what got in the way>
-- {{BLOCK_ID}}.3 — not applicable: <why the question is not about this code>
-
-**A verdict is a clause: the hypothesis id at the start of the line, a dash, the verdict word
-and the basis** — what proves it or what got in the way. "checked" alone, "checked: …" or the
-template's `<…>` left unfilled is not a verdict; "checked partially: …" is "not checked".
-Write it as plain text; an id mentioned in the middle of a sentence is not an answer.
+- `{{BLOCK_ID}}.1 — checked: <what exactly proves it>`
+- `{{BLOCK_ID}}.2 — not checked: <what got in the way>`
+- `{{BLOCK_ID}}.3 — not applicable: <why the question is not about this code>`
 
 A hypothesis without a verdict fails the state check: this is the second denominator of
 coverage next to the file map. A file can be opened and nothing understood — but the
@@ -99,8 +94,8 @@ question "can an organization member invite the owner" either has an answer or i
 Everything markdown treats as quoted is read as an example, not as an answer — a ``` or ~~~
 fence, a block indented by four spaces, a line behind `>`, an `<!-- html comment -->` —
 including the three lines above, if you copy them across as they stand. A verdict word
-alone in backticks (`` `checked` ``) is a quotation of the word, not a verdict either (a line
-written in the older form, the whole clause in backticks, is still read). A sub-item under your own verdict is not a
+alone in backticks (`` `checked` ``) is a quotation of the word, not a verdict either; a
+whole verdict line in backticks is one. A sub-item under your own verdict is not a
 quotation: proof written indented under the line still belongs to it. The same holds for
 **everything the state check reads in the report**, the coverage-limits section below
 included — a section holding only a quoted example is read as an empty one.

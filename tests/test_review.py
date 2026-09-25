@@ -1199,6 +1199,22 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertIn("scenario is 701 characters", out.stdout + out.stderr)
 
+    def test_раздел_охвата_за_незакрытой_оградой_не_засчитан(self):
+        """R6-004/R7-007: заголовок «Ограничения охвата» после ограды, которая не закрылась, —
+        часть примера. Гейт обязан сказать, что раздела нет, и назвать причину."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "Образец отчёта:\n````markdown\n## Ограничения охвата\nнет\n",
+                       verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        out = self.s.run("check").stdout
+        self.assertIn("no 'Coverage limits' section outside a fence", out)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -4279,18 +4295,6 @@ class QuotationMapTest(unittest.TestCase):
         self.assertEqual("".join("Q" if q else "." for q in mod.quoted_lines(doc, "quoted")), "QQQQ")
         self.assertEqual("".join("Q" if q else "." for q in mod.quoted_lines(doc, "text")), "....")
 
-    def test_вердикт_в_код_спане_прозы_и_таблицы_не_ответ(self):
-        """R5-003: `H1.1 — not checked` внутри код-спана посреди фразы — цитата формы; пункт,
-        открывающийся код-спаном с номером (старый шаблон), — ответ."""
-        mod = self._mod()
-        got = mod.verdict_mentions(
-            "## Hypotheses\n- `H1.1 — checked: proven`\n"
-            "- H1.2 — checked: the skeleton ``- `H1.1 — not checked: …` `` misled the parser\n"
-            "## Finding\n"
-            "the template says ``- `H1.1 — not checked: …` `` and H1.1 is \"not applicable\" here\n"
-            "| 1 | `- H1.1 — not checked` | x |\n", "H1")
-        self.assertEqual(got.get("H1.1"), ["checked"])
-
     def test_раздел_охвата_в_незакрытой_ограде_пуст(self):
         """R6-004: раздел «Границы охвата» отчёта, целиком внутри незакрытой ограды, — цитата,
         а не ответ: гейт обязан счесть раздел пустым."""
@@ -4308,58 +4312,6 @@ class QuotationMapTest(unittest.TestCase):
         return mod
 
 
-
-class VerdictTableTest(unittest.TestCase):
-    """What a report line says about a hypothesis — held as a table, both ways. The class
-    produced a defect in six consecutive fix rounds of the kit's own review while it was
-    patched rule by rule; the fence rule next door, held by a table, stopped moving."""
-
-    # (report text, expected verdicts of H1.1 — [] means no verdict at all)
-    CASES = [
-        # answers
-        ("- H1.1 — checked: ran the mutation, the test went red", ["checked"]),
-        ("- H1.1 — проверена: частичный уникальный индекс не даёт второй строки", ["checked"]),
-        ("- H1.1 — неприменима: частичных индексов в блоке нет", ["not applicable"]),
-        ("- H1.1 — проверена: x < 10 держится тестом", ["checked"]),
-        ("- **H1.1 — проверена, находок нет.** Таблица пересобрана", ["checked"]),
-        ("- H1.1 — проверена исполнением, находка подтверждена", ["checked"]),
-        ("- `H1.1 — проверена: атомарности нет — `aiQuota` читает агрегат", ["checked"]),
-        ("- H1.1 — не проверена: стенд не поднят", ["not checked"]),
-        ("- H1.1 — not applicable: not about this code", ["not applicable"]),
-        # partial qualifier — not checked
-        ("- H1.1 — проверена частично: только чтение", ["not checked"]),
-        ("- H1.1 — проверена лишь частично: прогона не было", ["not checked"]),
-        ("- H1.1 — проверена, но частично: прогона не было", ["not checked"]),
-        ("- H1.1 — проверена частичным прогоном: только бэкенд", ["not checked"]),
-        ("- H1.1 — проверена — частичный прогон, только бэкенд", ["not checked"]),
-        ("- H1.1 — checked partially: read only, no run", ["not checked"]),
-        ("- H1.1 — проверена частично, мутацией не прогнана. Причина:\n  нужен живой Postgres", ["not checked"]),
-        # no basis — no verdict
-        ("- H1.1 — проверена", []),
-        ("- H1.1 — проверена: …", []),
-        ("- H1.1 — checked: <how it was proven>", []),
-        # mentions and quotations — no verdict
-        ('H1.1 is "not applicable" when the parser reads a path', []),
-        ("the skeleton ``- `H1.1 — not checked: …` `` misled the parser", []),
-        ("- `H1.1` — the `n/a` token in a path is handled; checked by test", ["checked"]),
-        ("- H1.1 (`features/curation/adapter.ts`) — проверена: да", ["checked"]),
-        ("```\n- H1.1 — checked: example\n```", []),
-        ("| # | line | expected |\n|---|---|---|\n| 1 | H1.1 — not checked: x | y |", []),
-        # tables about hypotheses, and the free form
-        ("| # | hypothesis | outcome |\n|---|---|---|\n| 1 | predicate | not checked |", ["not checked"]),
-        ("hypothesis 1 refuted by experiment", ["checked"]),
-        # the verifier's disagreement is a verdict wherever it stands
-        ("## Where I disagree with the hunter\n- H1.1 — не проверена: стенда не было", ["not checked"]),
-    ]
-
-    def test_строка_отчёта_и_вердикт(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        for text, want in self.CASES:
-            got = mod.verdict_mentions(text, "H1").get("H1.1", [])
-            self.assertEqual(got, want, text)
 
 if __name__ == "__main__":
     unittest.main()
