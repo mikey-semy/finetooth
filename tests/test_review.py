@@ -3346,19 +3346,27 @@ def body_stand(s: Stand) -> None:
     доводит каждую команду до её РАБОТЫ, а не до отказа перед ней.
 
     Реестр с находкой `H1-001`: её вносит `import`, двигает `set-finding`, переснимает
-    `restamp`. Файл находки после ввоза уезжает вперёд отпечатка — иначе `restamp`
-    печатает «отпечаток уже совпадает» и не пишет ничего, а обход снова перечисляет
-    команду, не запуская её записи.
+    `restamp`. Каждой из трёх оставлена работа, которую видно в самом реестре, а не по
+    времени записи: в черновике ждёт непронумерованная вторая находка (её внесёт `import`),
+    у `H1-001` нет отметки о переводе (её поставит `set-finding`), а файл находки уехал
+    вперёд отпечатка (его переснимет `restamp`). Иначе команда доходит до записи и пишет
+    те же байты — и «реестр не изменился» означало бы то же, что отказ до записи.
     """
-    s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+    draft = json.dumps({
         "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
         "file": "src/one.ts", "claim": "тут дефект",
-        "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n")
+        "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n"
+    s.write("docs/review/reports/H1-findings.jsonl", draft)
     s.commit("черновик находок")
     imported = s.run("import", "H1")
     assert imported.returncode == 0, imported.stderr
+    # Вторая находка дописывается ПОСЛЕ ввоза: номер ей выдаст тот `import`, который
+    # зовёт обход, и выданный номер — это его запись в реестр.
+    numbered = (s.root / "docs/review/reports/H1-findings.jsonl").read_text(encoding="utf-8")
+    s.write("docs/review/reports/H1-findings.jsonl", numbered + draft.replace(
+        "тут дефект", "тут второй дефект"))
     s.write("src/one.ts", "a\nб\n")
-    s.commit("файл находки уехал вперёд отпечатка")
+    s.commit("вторая находка в черновике; файл находки уехал вперёд отпечатка")
 
 
 class WriteBoundaryTest(unittest.TestCase):
