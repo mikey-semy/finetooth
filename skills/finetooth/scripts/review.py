@@ -492,9 +492,27 @@ BLOCK_FIELDS = ("id", "slug", "phase", "title", "role", "goal")
 
 
 def check_definition(defn: dict) -> None:
+    example = SKILL_DIR / "assets" / "blocks.example.json"
+    # `review_id` is read on the one path that WRITES the state, so a definition without it
+    # passed every other command and answered `init` — the first command anyone runs — with
+    # a traceback.
+    if not isinstance(defn.get("review_id"), str) or not defn["review_id"].strip():
+        die(f"docs/review/blocks.json: no `review_id` — it is the review's name in "
+            f"docs/review/state.json, written there by `init`; give it any short string "
+            f"(the example is {example})")
     if not isinstance(defn.get("blocks"), list):
         die(f"docs/review/blocks.json: the `blocks` field must be an array — "
-            f"the example is {SKILL_DIR / 'assets' / 'blocks.example.json'}")
+            f"the example is {example}")
+    # The exclusion list is walked as `e["pattern"]` by six commands: an entry written with
+    # `reason` alone, or the whole list written as one object, reached git as a traceback.
+    if "exclusions" in defn and not isinstance(defn["exclusions"], list):
+        die(f"docs/review/blocks.json: the `exclusions` field must be an array of "
+            f"`{{\"pattern\": …, \"reason\": …}}` objects — the example is {example}")
+    for i, e in enumerate(defn.get("exclusions", []), 1):
+        if not isinstance(e, dict) or not isinstance(e.get("pattern"), str) or not e["pattern"].strip():
+            die(f"docs/review/blocks.json: exclusion #{i} has no `pattern` — an exclusion is "
+                f"`{{\"pattern\": \"dist/**\", \"reason\": \"why\"}}`, and the pattern is what "
+                f"is subtracted from the blocks' files; the example is {example}")
     seen: set[str] = set()
     for i, b in enumerate(defn["blocks"], 1):
         where = f"block {b['id']}" if isinstance(b, dict) and b.get("id") else f"block #{i}"
@@ -506,13 +524,22 @@ def check_definition(defn: dict) -> None:
                 if not isinstance(value, int) or isinstance(value, bool):
                     die(f"docs/review/blocks.json: {where} has no whole-number `phase` — "
                         f"the phase orders the array (1 cross-cutting, 2 vertical slices, "
-                        f"3 live-system); the example is "
-                        f"{SKILL_DIR / 'assets' / 'blocks.example.json'}")
+                        f"3 live-system); the example is {example}")
                 continue
             if not isinstance(value, str) or not value.strip():
                 die(f"docs/review/blocks.json: {where} has no `{field}` — every block needs "
-                    f"{', '.join(BLOCK_FIELDS)}; the example is "
-                    f"{SKILL_DIR / 'assets' / 'blocks.example.json'}")
+                    f"{', '.join(BLOCK_FIELDS)}; the example is {example}")
+        # Both lists go to git as pathspecs. Written as one string they were spliced into
+        # the pathspec list a character at a time; an entry that is not a string reached
+        # `subprocess` as an argument it cannot pass.
+        for field in ("paths", "ref_paths"):
+            value = b.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, list) or not all(isinstance(p, str) and p.strip() for p in value):
+                die(f"docs/review/blocks.json: {where} has `{field}` that is not a list of "
+                    f"patterns — write it as [\"src/api/**\"] even for a single one; "
+                    f"the example is {example}")
         # `id` and `slug` become file names (docs/review/blocks/<id>-<slug>.md and the
         # reports): a separator in them would write the manifest outside docs/review/.
         for field in ("id", "slug"):

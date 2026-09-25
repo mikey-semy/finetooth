@@ -3056,20 +3056,90 @@ class HandWrittenInputTest(unittest.TestCase):
         self.assertNotIn("{{FILES}}", out)
         self.assertNotIn("{{BLOCK_ID}}", out)
 
-    def test_ни_одна_команда_не_роняет_трейсбек_на_битом_определении(self):
-        """Узда класса: список подкоманд берётся у самого инструмента, так что новая
-        команда попадает под правило сама, без правки теста."""
-        self._stand()
-        self._add_block(id="H2", title="Платежи", paths=["src/one.ts"])
+    # Порча определения — таблицей, а не одним случаем: стенд всегда писал верхнеуровневые
+    # поля сам, поэтому `review_id`, `exclusions` и `paths` не проверял никто, и `init`
+    # отвечал трейсбеком на определение, которое человек пишет руками.
+    DAMAGE = {
+        "блок без обязательных полей":
+            lambda d: d["blocks"].append({"id": "H2", "title": "Платежи",
+                                          "paths": ["src/one.ts"]}),
+        "нет review_id": lambda d: d.pop("review_id"),
+        "review_id пустой": lambda d: d.update(review_id="  "),
+        "review_id не строка": lambda d: d.update(review_id=7),
+        "исключение без pattern": lambda d: d["exclusions"].append({"reason": "сборка"}),
+        "исключения не списком": lambda d: d.update(exclusions={"pattern": "dist/**"}),
+        "pattern не строка": lambda d: d["exclusions"].append({"pattern": 7}),
+        "paths строкой": lambda d: d["blocks"][0].update(paths="src/one.ts"),
+        "paths с числом": lambda d: d["blocks"][0].update(paths=["src/one.ts", 7]),
+        "ref_paths строкой": lambda d: d["blocks"][0].update(ref_paths="src/one.ts"),
+        "blocks не списком": lambda d: d.update(blocks={"id": "H1"}),
+    }
+
+    def _damage(self, how) -> None:
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        how(d)
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _subcommands(self) -> list[str]:
         helped = self.s.run("--help").stdout
         names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
         self.assertTrue(names, helped)
         commands = names.group(1).split(",")
         self.assertIn("check", commands)
-        for cmd in commands:
-            out = self.s.run(cmd, "H1", "s.md")
-            with self.subTest(cmd=cmd):
-                self.assertNotIn("Traceback", out.stderr, f"{cmd}: {out.stderr[-400:]}")
+        return commands
+
+    def test_ни_одна_команда_не_роняет_трейсбек_на_битом_определении(self):
+        """Узда класса: список подкоманд берётся у самого инструмента, а порча определения —
+        таблицей, так что и новая команда, и новое поле попадают под правило сами.
+
+        Команда зовётся И с лишними доводами, И без них: пока звали только с `H1 s.md`,
+        `init` до своего кода не доходил — argparse отвергал позиционные доводы раньше, —
+        и трейсбек `KeyError: 'review_id'` проходил мимо узды.
+        """
+        self._stand()
+        commands = self._subcommands()
+        for name, how in self.DAMAGE.items():
+            with self.subTest(порча=name):
+                self._stand()
+                self._damage(how)
+                for cmd in commands:
+                    for args in ((), ("H1", "s.md")):
+                        out = self.s.run(cmd, *args)
+                        with self.subTest(cmd=cmd, args=args):
+                            self.assertNotIn("Traceback", out.stderr,
+                                             f"{name} / {cmd} {args}: {out.stderr[-400:]}")
+
+    def test_отказ_на_битом_определении_называет_поле_и_файл(self):
+        """Отказ читает тот, кто видит инструмент впервые: он обязан назвать, что править."""
+        for name, how, field in (
+                ("нет review_id", self.DAMAGE["нет review_id"], "review_id"),
+                ("исключение без pattern", self.DAMAGE["исключение без pattern"], "pattern"),
+                ("paths строкой", self.DAMAGE["paths строкой"], "paths")):
+            with self.subTest(порча=name):
+                self._stand()
+                self._damage(how)
+                out = self.s.run("init")
+                self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+                self.assertNotIn("Traceback", out.stderr)
+                self.assertIn(field, out.stderr)
+                self.assertIn("blocks.json", out.stderr)
+
+    def test_целое_определение_по_прежнему_принимается(self):
+        """Обратная сторона: проверка не должна отнимать то, что было разрешено, —
+        исключение с лишними ключами, блок без `paths`, определение без `exclusions`."""
+        self._stand()
+        self._damage(lambda d: d["exclusions"].append(
+            {"pattern": "dist/**", "reason": "сборка", "кем": "человеком"}))
+        self._damage(lambda d: d["blocks"].append(
+            {"id": "H2", "slug": "two", "phase": 1, "title": "Платежи", "role": "demo",
+             "goal": "проверить"}))
+        out = self.s.run("init")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self._damage(lambda d: d.pop("exclusions"))
+        out = self.s.run("status")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("Платежи", out.stdout)
 
 
 class IdempotenceTest(unittest.TestCase):
