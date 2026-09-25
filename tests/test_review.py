@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import collections
+import concurrent.futures
 import datetime as dt
 import json
 import re
@@ -28,7 +29,10 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
 SKILL = KIT / "skills" / "finetooth"
-TOOL = SKILL / "scripts" / "review.py"
+# Обычно — инструмент из скилла. Переменной окружения его подменяет мутационная узда
+# (GateMutationTest): она глушит одни ворота в копии инструмента и требует, чтобы
+# названный рядом с ними тест на этой копии покраснел.
+TOOL = Path(os.environ.get("FINETOOTH_TOOL", SKILL / "scripts" / "review.py"))
 
 
 class Stand:
@@ -115,6 +119,33 @@ class Stand:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
+def refused(out: subprocess.CompletedProcess) -> str:
+    """Что `check` записал в ОТКАЗЫ: раздел CHECK FAILED — и только если прогон упал.
+
+    Отказ и предупреждение печатаются одним и тем же предложением, а различает их код
+    возврата. Тест, который ищет сообщение во всём выводе, этой разницы не видит:
+    измерено мутацией — ворота, перенесённые из `problems` в `warnings`, оставляли
+    сорок семь тестов зелёными, а `check` выходил с нулём на состоянии, которое сам же
+    отказался принять.
+    """
+    if out.returncode != 1:
+        return ""
+    _, _, failed = out.stdout.partition("CHECK FAILED:")
+    return failed
+
+
+def warned(out: subprocess.CompletedProcess) -> str:
+    """Что `check` сказал вслух, НЕ уронив прогон: раздел предупреждений при коде 0.
+
+    Обратная сторона `refused`: предупреждение, ставшее отказом, — это остановленная
+    работа на состоянии, которое договор принимает.
+    """
+    if out.returncode != 0:
+        return ""
+    _, _, rest = out.stdout.partition("WARNINGS (do not fail the check):")
+    return rest
+
+
 FULL_HUNTER = """# отчёт охотника
 
 ## Гипотезы
@@ -177,7 +208,7 @@ class ReviewToolTest(unittest.TestCase):
 
         self.s.write("src/two.ts", "b\n")
         self.s.commit("новый файл после карты")
-        self.assertIn("coverage.tsv is stale", self.s.run("check").stdout)
+        self.assertIn("coverage.tsv is stale", refused(self.s.run("check")))
         self.s.run("coverage")
         self.assertNotIn("coverage.tsv is stale", self.s.run("check").stdout)
 
@@ -317,7 +348,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "running")
         out = self.s.run("check")
-        self.assertIn("has no hypotheses", out.stdout)
+        self.assertIn("has no hypotheses", refused(out), out.stdout)
 
     def test_отчёт_без_раздела_про_непросмотренное_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -330,7 +361,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
         out = self.s.run("check")
-        self.assertIn("coverage limits", out.stdout.lower())
+        self.assertIn("coverage limits", refused(out).lower(), out.stdout)
 
     def test_пустой_раздел_ограничений_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -345,7 +376,7 @@ class ReviewToolTest(unittest.TestCase):
             self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n" + limits
                                   + "## Прочее\nтекст другого раздела\n", verify=FULL_VERIFY)
             self.assertIn("'Coverage limits' section of the hunter report is empty",
-                          self.s.run("check").stdout, limits)
+                          refused(self.s.run("check")), limits)
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
                               "## Ограничения охвата\n### Не дошёл\nдо почтовых шаблонов\n",
                        verify=FULL_VERIFY)
@@ -538,7 +569,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit("правка после ревью")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("changed after the review", out.stdout)
+        self.assertIn("changed after the review", refused(out), out.stdout)
         self.assertIn("restamp", out.stdout, "отказ обязан говорить, что делать")
 
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
@@ -604,9 +635,9 @@ class ReviewToolTest(unittest.TestCase):
         f_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
                           encoding="utf-8")
 
-        out = self.s.run("check").stdout
-        self.assertIn("without a fingerprint of what was reviewed", out)
-        self.assertIn("no code fingerprint", out)
+        out = self.s.run("check")
+        self.assertIn("without a fingerprint of what was reviewed", refused(out), out.stdout)
+        self.assertIn("no code fingerprint", refused(out), out.stdout)
 
         self.assertEqual(self.s.run("backfill").returncode, 0)
         out = self.s.run("check").stdout
@@ -639,8 +670,8 @@ class ReviewToolTest(unittest.TestCase):
         m = self.s.root / "docs/review/blocks/H1-demo.md"
         m.write_text(m.read_text(encoding="utf-8").replace(
             "2. Гипотеза номер 2:", "2. Совсем другой вопрос:"), encoding="utf-8")
-        out = self.s.run("check").stdout
-        self.assertIn("manifest hypotheses changed", out)
+        out = self.s.run("check")
+        self.assertIn("manifest hypotheses changed", refused(out), out.stdout)
         self.assertEqual(self.s.run("restamp", "H1").returncode, 0)
         self.assertNotIn("manifest hypotheses changed", self.s.run("check").stdout)
 
@@ -711,20 +742,21 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         self.s.run("set-status", "H1", "verified")
-        self.assertIn("is empty — there is a file, there is no verification", self.s.run("check").stdout)
+        self.assertIn("is empty — there is a file, there is no verification",
+                      refused(self.s.run("check")))
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n## Вердикты\n## Охват\n")
-        self.assertIn("is empty — there is a file, there is no verification", self.s.run("check").stdout,
-                      "одни заголовки — тоже пустой отчёт")
+        self.assertIn("is empty — there is a file, there is no verification",
+                      refused(self.s.run("check")), "одни заголовки — тоже пустой отчёт")
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\nПосмотрел, всё хорошо, охват полный.\n")
-        self.assertIn("no verdict on any finding", self.s.run("check").stdout)
+        self.assertIn("no verdict on any finding", refused(self.s.run("check")))
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
                      "# проверяющий\n| H1-001 | confirmed | прогнал тест, падает |\n")
-        self.assertIn("no coverage verdict", self.s.run("check").stdout,
+        self.assertIn("no coverage verdict", refused(self.s.run("check")),
                       "вердикты по находкам не говорят, что осталось непросмотренным")
 
         self.s.write("docs/review/reports/H1-demo.verify.md",
@@ -759,9 +791,9 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
-        out = self.s.run("check").stdout
-        self.assertIn("different verdicts", out)
-        self.assertIn("H1.1", out)
+        out = self.s.run("check")
+        self.assertIn("different verdicts", refused(out), out.stdout)
+        self.assertIn("H1.1", out.stdout)
 
     def test_нумерованная_таблица_приёмки_не_вердикт_гипотезы(self):
         """Живой отчёт: таблица «onConflict → ограничение» с номерами строк 4 и 5 считалась
@@ -851,9 +883,9 @@ class ReviewToolTest(unittest.TestCase):
         rows[0]["imported_at"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=10)).isoformat()
         reg.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         self.s.run("findings")
-        out = self.s.run("check").stdout
-        self.assertIn("older than 7 days", out)
-        self.assertIn("H1-001 (10d)", out)
+        out = self.s.run("check")
+        self.assertIn("older than 7 days", warned(out), out.stdout)
+        self.assertIn("H1-001 (10d)", warned(out), out.stdout)
 
     # ------------------------------------------------------------- карта стыков
 
@@ -1235,7 +1267,7 @@ class ReviewToolTest(unittest.TestCase):
         self.assertNotIn("H1-999", out.stdout)
         self.assertNotIn("H1-0012", out.stdout)
         self.assertNotIn("docs/review/", out.stdout.split("\n\n")[0])   # the register itself is not a reference
-        self.assertIn("reference(s) to findings in the code", self.s.run("check").stdout)
+        self.assertIn("reference(s) to findings in the code", warned(self.s.run("check")))
 
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1264,7 +1296,7 @@ class ReviewToolTest(unittest.TestCase):
         rows[1]["dup_of"] = "H1-777"  # вписано руками мимо set-finding
         f_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
                           encoding="utf-8")
-        self.assertIn("duplicate of nonexistent H1-777", self.s.run("check").stdout)
+        self.assertIn("duplicate of nonexistent H1-777", refused(self.s.run("check")))
 
     def test_живая_находка_на_изменённом_файле_перештамповывается(self):
         """Файл меняют и соседней починкой — подтвердить живой дефект должно быть чем."""
@@ -1392,7 +1424,7 @@ class ReviewToolTest(unittest.TestCase):
         r = row()
         r.update(status="rejected", reject_reason="вписано руками", confidence="confirmed")
         f_path.write_text(json.dumps(r, ensure_ascii=False) + "\n", encoding="utf-8")
-        self.assertIn("status rejected but confidence confirmed", self.s.run("check").stdout)
+        self.assertIn("status rejected but confidence confirmed", refused(self.s.run("check")))
 
     def test_отвергнутая_находка_без_причины_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1407,7 +1439,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("reject reason is not recorded", out.stdout)
+        self.assertIn("reject reason is not recorded", refused(out), out.stdout)
 
     def test_идентификаторы_находок_не_разъезжаются_при_повторном_импорте(self):
         """Id раздаются по позиции — инструмент обязан писать их обратно в файл блока."""
@@ -1455,7 +1487,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("src/one.ts", "стало, починено\n")
         self.s.commit("починка")
         out = self.s.run("check")
-        self.assertIn("changed since import", out.stdout)
+        self.assertIn("changed since import", refused(out), out.stdout)
         self.assertIn("set-finding", out.stdout, "отказ обязан говорить, что делать")
 
     def test_повторный_импорт_не_переснимает_отпечаток_находки(self):
@@ -1500,7 +1532,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("line 900 is cited", out.stdout)
+        self.assertIn("line 900 is cited", refused(out), out.stdout)
 
     def test_коммит_починки_обязан_касаться_файла_находки(self):
         """Отметка «починено» проверяется коммитом, а не словом."""
@@ -1523,7 +1555,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", wrong)
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertIn("does not touch src/one.ts", out.stdout)
+        self.assertIn("does not touch src/one.ts", refused(out), out.stdout)
 
         # а теперь коммит, которого в репозитории нет вовсе
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
@@ -1590,7 +1622,7 @@ class ReviewToolTest(unittest.TestCase):
         # без пометки репозитория проверка честно говорит, что коммита нет
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "0123456789abcdef")
         self.s.run("findings")
-        self.assertIn("is not in the repository", self.s.run("check").stdout)
+        self.assertIn("is not in the repository", refused(self.s.run("check")))
 
         # с пометкой — принимается
         self.s.run("set-finding", "H1-001", "fixed", "--commit", "ядро:0123456789abcdef")
@@ -1610,7 +1642,7 @@ class ReviewToolTest(unittest.TestCase):
         data = json.loads(st.read_text(encoding="utf-8"))
         data["blocks"]["H1"]["status"] = "почти готово"
         st.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.assertIn("is not in the vocabulary", self.s.run("check").stdout)
+        self.assertIn("is not in the vocabulary", refused(self.s.run("check")))
 
     def test_куцый_манифест_роняет_проверку(self):
         self.s.write("src/one.ts", "a\n")
@@ -1619,7 +1651,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         self.s.run("set-status", "H1", "running")
-        self.assertIn("is empty or nearly empty", self.s.run("check").stdout)
+        self.assertIn("is empty or nearly empty", refused(self.s.run("check")))
 
     def test_добор_не_затирает_починенное(self):
         """Штатный импорт заменяет находки блока целиком — у блока в работе это потеря."""
@@ -1672,7 +1704,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("coverage")
         out = self.s.run("check")
         self.assertIn("ceiling 100", out.stdout, "проектный порог должен применяться")
-        self.assertIn("cannot be read in one session", out.stdout)
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
 
     # ----------------------------------------------------------------- корни и узды
 
@@ -1697,7 +1729,7 @@ class ReviewToolTest(unittest.TestCase):
         """Класс, повторившийся трижды, закрывается правилом, а не списком правок."""
         self._three_of_one_root()
         out = self.s.run("check")
-        self.assertIn("and no guard", out.stdout)
+        self.assertIn("and no guard", refused(out), out.stdout)
         self.assertIn("рукописная копия предиката", out.stdout)
         self.assertIn("--rule", out.stdout, "отказ обязан говорить, что делать")
 
@@ -1737,7 +1769,7 @@ class ReviewToolTest(unittest.TestCase):
 
         self.s.git("rm", "-q", "tests/predicate.test.ts")
         self.s.commit("узду удалили")
-        self.assertIn("no such file", self.s.run("check").stdout,
+        self.assertIn("no such file", refused(self.s.run("check")),
                       "удалённая узда не должна держать класс закрытым")
 
     def test_два_экземпляра_узду_ещё_не_требуют(self):
@@ -1799,7 +1831,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         out = self.s.run("check")
-        self.assertIn("cannot be read in one session", out.stdout)
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
 
     def test_порог_размера_не_считает_исключённое(self):
         """Исключённый кодоген не должен требовать резать блок."""
@@ -1821,7 +1853,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         out = self.s.run("check")
-        self.assertIn("silently shrank", out.stdout)
+        self.assertIn("silently shrank", refused(out), out.stdout)
 
     def test_шаблон_по_нетрекнутым_файлам_зовёт_git_add(self):
         """`npx skills add` кладёт файлы мимо индекса — без подсказки «не матчит» читается как
@@ -1833,7 +1865,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.write("vendor/tool.py", "x\n")
         self.s.run("init")
         out = self.s.run("check")
-        self.assertIn("matches only untracked files (1)", out.stdout)
+        self.assertIn("matches only untracked files (1)", refused(out), out.stdout)
         self.assertIn("git add -- vendor/**", out.stdout)
         self.assertNotIn("silently shrank", out.stdout)
 
@@ -1878,7 +1910,7 @@ class ReviewToolTest(unittest.TestCase):
         self.s.git("fetch", "-q", "origin")
 
         out = self.s.run("check")
-        self.assertIn("behind", out.stdout)
+        self.assertIn("behind", refused(out), out.stdout)
         self.assertIn("days", out.stdout)
         self.assertIn("fetch", out.stdout, "отказ обязан говорить, что делать")
 
@@ -2022,7 +2054,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertNotIn("is not in the repository", self.s.run("check").stdout)
         rows = self._rows(); rows[0]["status"] = "open"; rows[0].pop("code_sha", None)
         self._write_rows(rows)
-        self.assertIn("is not in the repository", self.s.run("check").stdout,
+        self.assertIn("is not in the repository", refused(self.s.run("check")),
                       "а открытая находка на пропавший файл — по-прежнему отказ")
 
     def test_отложенная_находка_требует_причину(self):
@@ -2040,7 +2072,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("findings")
         self.assertNotIn("deferred without a reason", self.s.run("check").stdout)
         rows = self._rows(); rows[0].pop("defer_reason"); self._write_rows(rows)
-        self.assertIn("deferred without a reason", self.s.run("check").stdout)
+        self.assertIn("deferred without a reason", refused(self.s.run("check")))
 
     def test_фазы_в_массиве_не_убывают(self):
         self.s.write("src/one.ts", "a\n")
@@ -2053,7 +2085,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
         self.s.commit()
         self.s.run("init")
-        self.assertIn("phase 1 comes after phase 2", self.s.run("check").stdout)
+        self.assertIn("phase 1 comes after phase 2", refused(self.s.run("check")))
 
     def test_заблокированный_блок_не_значит_закончено(self):
         self.s.write("src/one.ts", "a\n")
@@ -2062,7 +2094,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.commit()
         self.s.run("init")
         self.s.run("set-status", "H1", "blocked")
-        self.assertIn("blocked without a note", self.s.run("check").stdout)
+        self.assertIn("blocked without a note", refused(self.s.run("check")))
         self.s.run("set-status", "H1", "blocked", "--note", "ждёт стенда")
         self.assertNotIn("blocked without a note", self.s.run("check").stdout)
         out = self.s.run("status").stdout
@@ -2136,10 +2168,10 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
         self.s.run("set-status", "H1", "verified")
-        out = self.s.run("check").stdout
-        self.assertIn("not named by full path", out)
-        self.assertIn("src/a/page.tsx", out, "базового имени мало — одноимённых файлов много")
-        self.assertNotIn("vendor.min.js", out, "исключённое называть не требуется")
+        out = self.s.run("check")
+        self.assertIn("not named by full path", refused(out), out.stdout)
+        self.assertIn("src/a/page.tsx", out.stdout, "базового имени мало — одноимённых файлов много")
+        self.assertNotIn("vendor.min.js", out.stdout, "исключённое называть не требуется")
         self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
                               "## Прочитано\n- src/a/page.tsx\n## Ограничения охвата\n"
                               "не дочитал src/b/page.tsx\n")
@@ -2184,7 +2216,7 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.s.run("set-finding", "H1-001", "fixed", "--commit", sha)
         self.s.run("coverage")
         self.s.run("set-status", "H1", "closed")
-        self.assertIn("no fix reviewer report", self.s.run("check").stdout)
+        self.assertIn("no fix reviewer report", refused(self.s.run("check")))
         self.s.write("docs/review/reports/H1-demo.fixreview-1.md", "# ревью правок\nнаходок нет\n")
         self.assertNotIn("no fix reviewer report", self.s.run("check").stdout)
 
@@ -3670,7 +3702,7 @@ class GateCoverageTest(unittest.TestCase):
         (self.s.root / "docs/review/blocks/H1-demo.md").unlink()
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("no manifest", out.stdout)
+        self.assertIn("no manifest", refused(out), out.stdout)
 
     def test_пройденный_блок_без_отчёта_проверяющего(self):
         self._green()
@@ -3739,14 +3771,14 @@ class GateCoverageTest(unittest.TestCase):
         self.s.run("findings")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("duplicate id", out.stdout)
+        self.assertIn("duplicate id", refused(out), out.stdout)
 
     def test_пустое_обязательное_поле_находки(self):
         self._green()
         self._register(claim="")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("field claim is empty", out.stdout)
+        self.assertIn("field claim is empty", refused(out), out.stdout)
 
     def test_находка_ссылается_на_несуществующий_блок(self):
         self._green()
@@ -3760,63 +3792,63 @@ class GateCoverageTest(unittest.TestCase):
         self._register(severity="катастрофа")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("severity=катастрофа is not in the vocabulary", out.stdout)
+        self.assertIn("severity=катастрофа is not in the vocabulary", refused(out), out.stdout)
 
     def test_confidence_вне_словаря(self):
         self._green()
         self._register(confidence="наверное")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("confidence=наверное is not in the vocabulary", out.stdout)
+        self.assertIn("confidence=наверное is not in the vocabulary", refused(out), out.stdout)
 
     def test_статус_находки_вне_словаря(self):
         self._green()
         self._register(status="почти")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("status=почти is not in the vocabulary", out.stdout)
+        self.assertIn("status=почти is not in the vocabulary", refused(out), out.stdout)
 
     def test_внешний_коммит_починки_написан_не_по_форме(self):
         self._green()
         self._register(status="fixed", fix_commit="соседний-репозиторий:")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("an external fix is written as", out.stdout)
+        self.assertIn("an external fix is written as", refused(out), out.stdout)
 
     def test_починено_без_коммита(self):
         self._green()
         self._register(status="fixed", fix_commit=None)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("marked fixed, but no fix commit", out.stdout)
+        self.assertIn("marked fixed, but no fix commit", refused(out), out.stdout)
 
     def test_дубль_без_указания_чего(self):
         self._green()
         self._register(status="duplicate", dup_of=None)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("marked duplicate, but not of what exactly", out.stdout)
+        self.assertIn("marked duplicate, but not of what exactly", refused(out), out.stdout)
 
     def test_отвергнутая_проверяющим_но_открытая(self):
         self._green()
         self._register(confidence="rejected", status="open")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("rejected by the verifier, but still open", out.stdout)
+        self.assertIn("rejected by the verifier, but still open", refused(out), out.stdout)
 
     def test_заголовок_находки_длиннее_потолка(self):
         self._green()
         self._register(claim="и" * 260)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("against a limit of 220", out.stdout)
+        self.assertIn("against a limit of 220", refused(out), out.stdout)
 
     def test_сценарий_длиннее_потолка(self):
         self._green()
         self._register(scenario="и" * 800)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("against a limit of 700", out.stdout)
+        self.assertIn("against a limit of 700", refused(out), out.stdout)
 
     def test_номер_строки_строкой_а_не_числом(self):
         """Черновик находок пишется руками, и `"line": "9999"` — обычная описка. Ворота
@@ -3826,7 +3858,7 @@ class GateCoverageTest(unittest.TestCase):
         self._register(line="9999")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("is not a number", out.stdout)
+        self.assertIn("is not a number", refused(out), out.stdout)
 
     def test_число_в_пределах_файла_по_прежнему_проходит(self):
         self._green()
@@ -3865,7 +3897,7 @@ class GateCoverageTest(unittest.TestCase):
         md.write_text(md.read_text(encoding="utf-8") + "\n| дописано руками |\n", encoding="utf-8")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("findings.md diverged", out.stdout)
+        self.assertIn("findings.md diverged", refused(out), out.stdout)
 
     def test_ничей_файл_роняет_не_только_карту_но_и_проверку(self):
         self._green()
@@ -3897,8 +3929,53 @@ class GateCoverageTest(unittest.TestCase):
         self.assertIn("is not in the vocabulary", out.stdout)
 
 
-def _check_gates(source: str | None = None) -> list[tuple[int, str, str]]:
-    """Все ворота `cmd_check`: (строка, problems|warnings, ключ ворот).
+class UnknownGateSpelling(Exception):
+    """Строка `cmd_check`, которая что-то делает со списком отказов, а реестр её не понял."""
+
+
+# Ворота: где они написаны (первая и последняя строка ЦЕЛОГО оператора — мутация вырезает
+# его целиком), в какой список пишут и под каким ключом записаны в реестре.
+Gate = collections.namedtuple("Gate", "lineno end_lineno lst key")
+
+
+def _gate_messages(stmt) -> tuple[str, list]:
+    """Сообщения, которые оператор дописывает в problems/warnings, и имя списка.
+
+    Форм записи несколько, и реестр обязан знать их все: пока он видел только
+    `problems.append(x)`, ворота, написанные `problems += [...]` или
+    `problems.extend([...])`, не давали ключа — а значит, не требовали ни записи, ни
+    теста, и снимались потом при зелёном прогоне. Разбить пятисотстрочный `cmd_check` на
+    части, собирая отказы списком, — очевидный следующий шаг, и он не должен выносить
+    ворота из-под правила. Оператор, который трогает список неизвестным способом
+    (`insert`, присваивание целиком), — не молчание, а отказ: см. UnknownGateSpelling.
+    """
+    def listed(value) -> list:
+        return list(value.elts) if isinstance(value, (ast.List, ast.Tuple)) else [value]
+
+    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+        call = stmt.value
+        if (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+                and call.func.value.id in ("problems", "warnings") and call.args):
+            if call.func.attr == "append":
+                return call.func.value.id, [call.args[0]]
+            if call.func.attr == "extend":
+                return call.func.value.id, listed(call.args[0])
+    if (isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name)
+            and stmt.target.id in ("problems", "warnings") and isinstance(stmt.op, ast.Add)):
+        return stmt.target.id, listed(stmt.value)
+    if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id in ("problems", "warnings")
+            and isinstance(stmt.value, ast.BinOp) and isinstance(stmt.value.op, ast.Add)):
+        # problems = problems + [...]
+        side = [stmt.value.left, stmt.value.right]
+        return stmt.targets[0].id, [m for s in side if not isinstance(s, ast.Name)
+                                    for m in listed(s)]
+    return "", []
+
+
+def _check_gates(source: str | None = None) -> list[Gate]:
+    """Все ворота `cmd_check`.
 
     Ключ — это литеральные куски f-строки, склеенные и ужатые по пробелам: он переживает
     правку подставляемых значений и меняется, когда меняется сама формулировка.
@@ -3922,19 +3999,64 @@ def _check_gates(source: str | None = None) -> list[tuple[int, str, str]]:
         return ""
 
     out = []
-    for node in ast.walk(fn):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "append"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("problems", "warnings")):
-            key = re.sub(r"\s+", " ", literal(node.args[0])).strip()[:46]
+    for stmt in ast.walk(fn):
+        if not isinstance(stmt, ast.stmt):
+            continue
+        lst, messages = _gate_messages(stmt)
+        if not lst:
+            _refuse_unknown_spelling(stmt)
+            continue
+        for msg in messages:
+            key = re.sub(r"\s+", " ", literal(msg)).strip()[:46]
             if not re.search(r"[A-Za-zА-Яа-я]", key):
                 # Quotes dropped: `ast.unparse` picks the quote style by Python version
                 # (3.14 writes f"{b['id']}…", earlier versions f'{b['id']}…'), and the
                 # registry went red in CI on a key nobody had changed.
-                key = "= " + re.sub(r"\s+", " ", re.sub(r"[\"']", "", ast.unparse(node.args[0])))[:44]
-            out.append((node.lineno, node.func.value.id, key))
+                key = "= " + re.sub(r"\s+", " ", re.sub(r"[\"']", "", ast.unparse(msg)))[:44]
+            out.append(Gate(stmt.lineno, stmt.end_lineno, lst, key))
     return sorted(out)
+
+
+def _own_nodes(stmt) -> list:
+    """Узлы самого оператора, без вложенных операторов: у `for` — только его заголовок.
+
+    Иначе любой объемлющий цикл «трогал бы» список отказов теми воротами, что лежат
+    внутри него, и правило ниже ловило бы их дважды.
+    """
+    out, stack = [], [stmt]
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        stack += [c for c in ast.iter_child_nodes(node) if not isinstance(c, ast.stmt)]
+    return out
+
+
+def _refuse_unknown_spelling(stmt) -> None:
+    """Оператор, который трогает список отказов способом, которого реестр не знает.
+
+    Чтение (`if problems:`, `for p in problems`) и заведение списка — не ворота. Всё
+    остальное — ворота незнакомой формы, и молчать о них нельзя: молчание здесь значит
+    ворота без теста.
+    """
+    declares = (isinstance(stmt, (ast.Assign, ast.AnnAssign))
+                and isinstance(stmt.value, (ast.List, ast.Tuple)) and not stmt.value.elts)
+    if declares:
+        return                                        # заведение пустого списка
+    touched = []
+    for node in _own_nodes(stmt):
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id in ("problems", "warnings")):
+            touched.append(f"{node.value.id}.{node.attr}()")
+    targets = (stmt.targets if isinstance(stmt, ast.Assign)
+               else [stmt.target] if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)) else [])
+    for t in targets:
+        if isinstance(t, ast.Name) and t.id in ("problems", "warnings"):
+            touched.append(f"{t.id} = …")
+    if touched:
+        raise UnknownGateSpelling(
+            f"cmd_check, строка {stmt.lineno}: {', '.join(sorted(set(touched)))} — такой "
+            f"формы записи реестр ворот не знает и пропустил бы эти ворота без теста. "
+            f"Научите _gate_messages читать её или пишите ворота `problems.append(...)`.")
 
 
 class GateRegistryTest(unittest.TestCase):
@@ -4018,7 +4140,7 @@ class GateRegistryTest(unittest.TestCase):
         # Сравниваются не множества, а СЧЁТЫ: два разных гейта могут дать один ключ
         # (сообщение целиком из переменной), и на множествах второй такой гейт совпадал
         # бы с первым и проходил без теста — измерено мутацией.
-        in_source = collections.Counter(key for _, _, key in _check_gates())
+        in_source = collections.Counter(g.key for g in _check_gates())
         registered = collections.Counter(key for key, _ in self.GATES)
         missing = sorted((in_source - registered).elements())
         extra = sorted((registered - in_source).elements())
@@ -4063,8 +4185,7 @@ def cmd_check(args):
         добавленные в `cmd_check` ворота с `problems.append(msg)` оставляли и этот класс,
         и весь прогон зелёными.
         """
-        gates = _check_gates(self.VARIABLE_MESSAGE_GATE)
-        keys = [key for _, _, key in gates]
+        keys = [g.key for g in _check_gates(self.VARIABLE_MESSAGE_GATE)]
         self.assertEqual(len(keys), 2, "оба гейта обязаны быть видны")
         self.assertEqual(len(set(keys)), 2, f"ворота слились в один ключ: {keys}")
         registered = collections.Counter(key for key, _ in self.GATES)
@@ -4078,7 +4199,135 @@ def cmd_check(args):
         source = ('def cmd_check(args):\n'
                   '    problems = []\n'
                   '    problems.append(f"{bid}: no manifest {path}")\n')
-        self.assertEqual([key for _, _, key in _check_gates(source)], [": no manifest"])
+        self.assertEqual([g.key for g in _check_gates(source)], [": no manifest"])
+
+    # Ворота пишут не только `append`: `cmd_check` в пятьсот строк рано или поздно
+    # разберут на части, а части собирают отказы списком. Обе формы измерены — при
+    # реестре, знавшем один `append`, ворота, написанные так, не давали ключа, не требовали
+    # ни записи, ни теста, и снимались потом при зелёном прогоне.
+    LIST_FORM_GATES = {
+        "+=": 'def cmd_check(args):\n'
+              '    problems = []\n'
+              '    if bad:\n'
+              '        problems += [f"{bid}: role `__never__` is reserved"]\n',
+        "extend": 'def cmd_check(args):\n'
+                  '    problems = []\n'
+                  '    if bad:\n'
+                  '        problems.extend([f"{bid}: role `__never__` is reserved"])\n',
+        "сложение": 'def cmd_check(args):\n'
+                    '    problems = []\n'
+                    '    if bad:\n'
+                    '        problems = problems + [f"{bid}: role `__never__` is reserved"]\n',
+    }
+
+    def test_ворота_написанные_списком_видны_реестру(self):
+        for how, source in self.LIST_FORM_GATES.items():
+            with self.subTest(форма=how):
+                gates = _check_gates(source)
+                self.assertEqual([g.key for g in gates],
+                                 [": role `__never__` is reserved"],
+                                 f"ворота, написанные через {how}, реестр не увидел")
+                self.assertEqual([g.lst for g in gates], ["problems"])
+
+    def test_незнакомая_форма_записи_отказ_а_не_молчание(self):
+        """Обратная сторона: форма, которой реестр не знает, обязана ронять прогон, а не
+        проходить как «ворот здесь нет». Молчание здесь — это ворота без теста."""
+        source = ('def cmd_check(args):\n'
+                  '    problems = []\n'
+                  '    if bad:\n'
+                  '        problems.insert(0, f"{bid}: role `__never__` is reserved")\n')
+        with self.assertRaises(UnknownGateSpelling) as e:
+            _check_gates(source)
+        self.assertIn("problems.insert()", str(e.exception))
+        # а чтение списка воротами не считается
+        reading = ('def cmd_check(args):\n'
+                   '    problems = []\n'
+                   '    if problems:\n'
+                   '        for p in problems:\n'
+                   '            print(f"  · {p}")\n'
+                   '        return 1\n'
+                   '    return 0\n')
+        self.assertEqual(_check_gates(reading), [])
+
+
+@unittest.skipIf(os.environ.get("FINETOOTH_TOOL"),
+                 "прогон уже идёт на мутанте: мутировать мутанта незачем")
+class GateMutationTest(unittest.TestCase):
+    """УЗДА КЛАССА «ворота, которые нечем уронить» — измерением, а не списком.
+
+    Реестр выше называет рядом с каждыми воротами тест, но что тест держит ИМЕННО ЭТИ
+    ворота, не проверял никто: запись, переставленная на любой существующий тест, проходила
+    обе проверки реестра. Здесь каждые ворота по очереди глушатся в копии инструмента, и
+    названный тест обязан на этой копии покраснеть. Второй мутацией ворота переносятся из
+    `problems` в `warnings` и обратно: сообщение остаётся тем же, а код возврата меняется,
+    и тест, который смотрит только на текст, этого не замечает — `check` печатает ту же
+    фразу и выходит с нулём на состоянии, которое сам же отказался принять.
+
+    Мутации независимы и каждая живёт в своём процессе, поэтому идут пачкой.
+    """
+
+    # Мутации ждут не процессора, а своих подпроцессов (git, инструмент): восьми хватает,
+    # чтобы все ворота уложились в те же секунды, что один тест набора.
+    WORKERS = 8
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.lines = TOOL.read_text(encoding="utf-8").split("\n")
+        cls.gates = _check_gates()
+        cls.registered = dict(GateRegistryTest.GATES)
+
+    def _silenced(self, gate: Gate) -> str:
+        """Ворота сняты: оператор целиком заменён на `pass` — мутант обязан собираться,
+        иначе «ни одного упавшего теста» читается как «тест не зависит от ворот»."""
+        head = self.lines[gate.lineno - 1]
+        indent = head[:len(head) - len(head.lstrip())]
+        return "\n".join(self.lines[:gate.lineno - 1] + [indent + "pass"]
+                         + self.lines[gate.end_lineno:])
+
+    def _flipped(self, gate: Gate) -> str:
+        """Ворота переставлены в соседний список: отказ становится предупреждением."""
+        other = "warnings" if gate.lst == "problems" else "problems"
+        line = self.lines[gate.lineno - 1].replace(gate.lst, other, 1)
+        return "\n".join(self.lines[:gate.lineno - 1] + [line] + self.lines[gate.lineno:])
+
+    def _goes_red(self, gate: Gate, mutant: str) -> str:
+        """Прогоняет названный рядом с воротами тест на мутанте. Возвращает пустую строку,
+        если тест покраснел (так и надо), и жалобу, если прогон остался зелёным."""
+        name = self.registered.get(gate.key)
+        if name is None:
+            return f"ворота не записаны в реестр: {gate.key}"
+        with tempfile.TemporaryDirectory(prefix="finetooth-mutant-") as d:
+            tool = Path(d, "review.py")
+            tool.write_text(mutant, encoding="utf-8")
+            out = subprocess.run(
+                [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests"),
+                 "-k", name],
+                cwd=KIT, capture_output=True, text=True,
+                env=dict(os.environ, FINETOOTH_TOOL=str(tool)))
+        if "Ran 1 test" not in out.stderr:
+            return (f"по имени `{name}` запустился не один тест, а "
+                    f"{out.stderr.strip().splitlines()[-3:]}")
+        if out.returncode != 0:
+            return ""
+        return (f"тест `{name}` зелёный на снятых воротах — он их не держит; "
+                f"напишите тест, который краснеет, или укажите в реестре тот, который "
+                f"краснеет")
+
+    def _all(self, mutate) -> None:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
+            verdicts = list(pool.map(lambda g: self._goes_red(g, mutate(g)), self.gates))
+        for gate, complaint in zip(self.gates, verdicts):
+            with self.subTest(gate=gate.key):
+                self.assertEqual(complaint, "", f"{TOOL.name}:{gate.lineno}: {complaint}")
+
+    def test_названный_тест_краснеет_когда_ворота_сняты(self):
+        self._all(self._silenced)
+
+    def test_названный_тест_краснеет_когда_ворота_сменили_строгость(self):
+        """Отказ, ставший предупреждением, — самый дешёвый способ провести состояние,
+        которое инструмент отказался принять: сообщение печатается прежнее, а код
+        возврата нулевой. Тест ворот обязан смотреть и на код возврата тоже."""
+        self._all(self._flipped)
 
 
 class SourceRuleTest(unittest.TestCase):
