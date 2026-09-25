@@ -15,12 +15,12 @@ and three guards that were green on exactly the state they were written to forbi
 |---|---|---|---|
 | T4-019 · medium · unescaped address in `dco.sh` | closed | `f9adc2f` | `DcoGateTest` (9 tests) |
 | T4-026 · medium · `dco.sh` green on an unresolvable range | closed | `f9adc2f` | `ShellGateMutationTest` |
-| T4-020 · medium · the register's guard for two classes | closed | `4ab7c1e` | — (bookkeeping; see below) |
+| T4-020 · medium · the register's guard for two classes | closed | `5bf74c5` + the register | — (bookkeeping; see below) |
 | T4-021 · medium · CI-gate guard keyed on two words | closed | `455e727` | `SourceRuleTest` |
 | T4-023 · low · the write-boundary sweep missed three commands | closed | `aacc9b7` | `CommandSweepRuleTest` |
 | T4-022 · low · a paragraph glued to a list item | closed | `455e727` | `RepositoryContractTest::test_в_документах_нет_абзаца_приклеенного_к_пункту_списка` |
 | T4-024 · low · the scenario count as a band | closed | `455e727` | `RepositoryContractTest::test_число_сценариев_в_документах_равно_настоящему` |
-| T4-025 · low · the fix report names a guard that does not exist | closed | `4ab7c1e` | — (a document; see below) |
+| T4-025 · low · the fix report names a guard that does not exist | closed | `5bf74c5` | — (a document; see below) |
 
 All guards live in `tests/test_review.py`.
 
@@ -483,10 +483,18 @@ Twenty-three of those 341 are this round's. The relevant suites were also run on
 after each fix (`DcoGateTest`, `GuardGrepTest`, `ShellGateMutationTest`, `CommandSweepRuleTest`,
 `WriteBoundaryTest`, `HandWrittenInputTest`, `SourceRuleTest`, `RepositoryContractTest`).
 
-**The skill format.** `skills-ref` is not installed on this machine and installing it is
-refused by this environment (the same limit as in round 1). This round changes nothing under
-`skills/finetooth/` — `git diff d33527c..HEAD -- skills/` is empty — so the validator's verdict
-cannot have moved; the last run of it is round 1's, over the same bytes.
+**The skill format.** Run for real this round — the validator was installed into a throwaway
+venv from the commit CI pins (`agentskills@69ef37e…`, nothing installed into the project):
+
+```
+$ skills-ref validate skills/finetooth
+Valid skill: skills/finetooth
+exit: 0
+```
+
+(Round 1 could not run it and reasoned about the bytes instead. This round changes nothing under
+`skills/finetooth/` either — `git diff d33527c..HEAD -- skills/` is empty — so the verdict is
+also the verdict for the code round 1 shipped.)
 
 **The sign-off gate over this round's own commits** — the gate that was fixed, run on the work
 that fixed it:
@@ -497,4 +505,31 @@ all commits in d33527c..HEAD are signed off
 exit: 0
 ```
 
-**The state check**: `STATECHECK`
+**The state check.** `review check` names no T4 finding any more (before this round's register
+entries it named all eight — the `code_sha` of every file the round touched). What is left for
+T4 is the two staleness lines, and they are the lead's call after the fix review, not the
+fixer's:
+
+```
+WARNINGS:  · T4: context files (ref_paths) changed after verification — … restamp T4
+CHECK FAILED:
+  · T4: block files changed after the review — … re-run it or … restamp T4
+  (the same two lines for T1, T2 and T3, plus the open findings of T1 and T2 — other blocks')
+```
+
+**`review roots T4`** after the register entries, with each root's guard now the one that fires:
+
+```
+4 × a number in a public document not checked against its source
+      — guard: …::test_число_сценариев_в_документах_равно_настоящему   T4-004, T4-005, T4-006, T4-024
+3 × a rule declared enforced with nothing enforcing it
+      — guard: …::test_каждые_объявленные_ворота_гоняет_ci             T4-009, T4-010, T4-017
+1 × a gate that cannot go red          — guard: …::ShellGateMutationTest    T4-026
+1 × guard enumerates its subject…      — guard: …::CommandSweepRuleTest     T4-023
+1 × class guard keyed on incidental syntax — guard: …::SourceRuleTest       T4-021
+1 × a value interpolated into a pattern language unescaped — guard: …::DcoGateTest   T4-019
+```
+
+(`roots` prints one guard per root, and for the two four- and three-instance roots the value
+printed is now the one that holds the printed instance; the register carries the specific guard
+of every instance — see "found, not fixed" for what the tool cannot yet check here.)

@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **15** of 131 records.
+Open: **7** of 131 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **15** of 131 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (6 open / 43)
+## medium (2 open / 43)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -58,12 +58,12 @@ Open: **15** of 131 records.
 | T4-001 | T4 | fixed | `skills/finetooth/SKILL.md:4` | The skill's frontmatter still says the base was handed over without a license, which LICENSE and NOTICE.md retired on 24.09.2026 |
 | T4-003 | T4 | fixed | `SECURITY.md:3` | The stated security boundary ('writes to docs/review/', 'sends nothing over the network') is false for `summary` and for assets/run-role.sh |
 | T4-016 | T4 | fixed | `skills/finetooth/scripts/review.py:564` | `init` answers a Python traceback on a blocks.json without the top-level review_id, and the guard test that forbids exactly that stays green |
-| T4-019 | T4 | open | `.github/dco.sh:25` | dco.sh interpolates the author's email unescaped into a grep -E pattern, so a signed commit from an address with + is refused and a sign-off with a different address can match via . (fix review round 1, R1-001) |
-| T4-020 | T4 | open | `docs/review/findings.jsonl:107` | The register's rule for T4-009, T4-010, T4-017 (and T4-004) names a guard covering one instance of the class, so the class is recorded closed yet reopens with the guard green (fix review round 1, R1-002) |
-| T4-021 | T4 | open | `tests/test_review.py:5233` | test_каждые_объявленные_ворота_гоняет_ci matches each CONTRIBUTING command by two anchors anywhere in the workflow text, so CI can stop running the unittest suite with the guard green (fix review round 1, R1-003) |
-| T4-026 | T4 | open | `.github/dco.sh:31` | dco.sh feeds git rev-list through process substitution, so an unresolvable range examines no commits and the script prints 'all commits are signed off' with exit 0 (fix review round 1, R1-008) |
+| T4-019 | T4 | fixed | `.github/dco.sh:25` | dco.sh interpolates the author's email unescaped into a grep -E pattern, so a signed commit from an address with + is refused and a sign-off with a different address can match via . (fix review round 1, R1-001) |
+| T4-020 | T4 | fixed | `docs/review/findings.jsonl:107` | The register's rule for T4-009, T4-010, T4-017 (and T4-004) names a guard covering one instance of the class, so the class is recorded closed yet reopens with the guard green (fix review round 1, R1-002) |
+| T4-021 | T4 | fixed | `tests/test_review.py:5233` | test_каждые_объявленные_ворота_гоняет_ci matches each CONTRIBUTING command by two anchors anywhere in the workflow text, so CI can stop running the unittest suite with the guard green (fix review round 1, R1-003) |
+| T4-026 | T4 | fixed | `.github/dco.sh:31` | dco.sh feeds git rev-list through process substitution, so an unresolvable range examines no commits and the script prints 'all commits are signed off' with exit 0 (fix review round 1, R1-008) |
 
-## low (9 open / 83)
+## low (5 open / 83)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -146,8 +146,8 @@ Open: **15** of 131 records.
 | T4-015 | T4 | fixed | `.github/workflows/tests.yml:16` | The CI workflow's step names and comments are in Russian, against AGENTS.md rule 7 and the 0.7.0 English-primary release |
 | T4-017 | T4 | fixed | `skills/finetooth/SKILL.md:5` | SKILL.md states the tool is tested on Python 3.12 and 3.14, while the CI workflow pins no Python version and runs the suite on one |
 | T4-018 | T4 | fixed | `CODE_OF_CONDUCT.md:1` | Neither code of conduct links to its other-language copy, against the 0.7.0 claim that the Russian copies are cross-linked at the top of each file |
-| T4-022 | T4 | open | `CHANGELOG.md:76` | The T2 section's opening paragraph is swallowed into the preceding T4 NOTICE.md bullet in both CHANGELOGs for lack of a blank line (fix review round 1, R1-004) |
-| T4-023 | T4 | open | `tests/test_review.py:3323` | WriteBoundaryTest calls each subcommand with () and ('H1',), so set-status, set-finding and log never get past argparse and are outside the write-boundary guard (fix review round 1, R1-005) |
-| T4-024 | T4 | open | `README.md:281` | All five places stating the scenario count said 270 while the merged suite ran 296, and the guard was loosened to a nine-tenths band in the same range (fix review round 1, R1-006) |
-| T4-025 | T4 | open | `docs/review/reports/T4-repo-contract.fix.md:16` | The T4 fix report names the guard test_число_сценариев_в_документах_равно_настоящему, which does not exist on HEAD after 2f29968 renamed it, and quotes 270 tests against the range's 296 (fix review round 1, R1-007) |
+| T4-022 | T4 | fixed | `CHANGELOG.md:76` | The T2 section's opening paragraph is swallowed into the preceding T4 NOTICE.md bullet in both CHANGELOGs for lack of a blank line (fix review round 1, R1-004) |
+| T4-023 | T4 | fixed | `tests/test_review.py:3323` | WriteBoundaryTest calls each subcommand with () and ('H1',), so set-status, set-finding and log never get past argparse and are outside the write-boundary guard (fix review round 1, R1-005) |
+| T4-024 | T4 | fixed | `README.md:281` | All five places stating the scenario count said 270 while the merged suite ran 296, and the guard was loosened to a nine-tenths band in the same range (fix review round 1, R1-006) |
+| T4-025 | T4 | fixed | `docs/review/reports/T4-repo-contract.fix.md:16` | The T4 fix report names the guard test_число_сценариев_в_документах_равно_настоящему, which does not exist on HEAD after 2f29968 renamed it, and quotes 270 tests against the range's 296 (fix review round 1, R1-007) |
 
