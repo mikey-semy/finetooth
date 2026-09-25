@@ -280,7 +280,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-413 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+421 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -370,6 +370,15 @@ merge". By our estimate such a block costs about twelve agents against two for a
 Convergence is the only honest sign that it is time to stop — the stopping rule is set in
 advance, and not by the number of findings but by their kind.
 
+The kit's own review showed where rounds stop converging: from round 2 on, the fix reviewer's
+top finding kept landing in the code the previous round had written — usually in the guard
+that round added — and only a human's decision ended it. So the stop is mechanical. `import
+--append --round N --diff <range>` records which review found a finding (`found_in`, the
+range pinned to commit ids); when the top finding of review N−1, medium or higher, lies on a
+line fix round N−1 wrote (by the lines of `git diff -U0`, not by file), `prompt --role fix
+--round N` refuses and `check` warns until `review decide <ID> "<decision>"` is recorded —
+and the decision goes into the next fix and fix-review prompts.
+
 ## Where it is going
 
 The detailed roadmap — with measurements, sources and the order of work — lives in the
@@ -449,7 +458,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 413 scenarios
+tests/                            tests of the tool and the skill format: 421 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO

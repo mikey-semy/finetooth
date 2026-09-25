@@ -25,6 +25,7 @@ session that knows nothing runs one command and sees the full picture.
 | `findings.md` | human-readable summary, **generated** from the jsonl |
 | `coverage.tsv` | the coverage map, **generated**; the proof that the review is complete |
 | `journal.md` | the decisions journal: what was decided and why. Cannot be recovered — write it right away |
+| `decisions.jsonl` | a human's decisions on a block after the loop signal (`decide`), one line each; the fix prompts carry them. Edited by the tool |
 | `prompts/` | optional: your own version of a role template (`hunter.md`, `verify.md`, `fix.md`, `fixreview.md`). No file — the skill's template is used |
 | `reports/` | agent reports, named by the tool: `<ID>-<slug>.hunter.md`, `.verify.md`, `.fix.md` (`.fix-N.md` from round 2), `.fixreview-N.md`. The agent writes them itself, not the lead session |
 
@@ -60,8 +61,10 @@ session that knows nothing runs one command and sees the full picture.
    fresh agent that did not write the fixes, **before** the change is opened. Its report is
    `reports/<ID>-<slug>.fixreview-<N>.md`, and a block with fixed findings does not pass
    `check` without one. Its confirmed findings go into the register as a top-up
-   (`import <ID> --append`), even the ones already fixed. A new round only for a finding of
-   medium or higher; low ones are fixed without one.
+   (`import <ID> --append --round N --diff <range>`, as its prompt names it), even the ones
+   already fixed. A new round only for a finding of medium or higher; low ones are fixed
+   without one. When the top finding lies on a line the previous round wrote, the next fix
+   round is refused until a human decides: `decide <ID> "<decision>"`.
 9. Only after that `set-status <ID> closed`.
 
 ⚠️ One agent does not hunt and fix at the same time. ⚠️ A block is not closed without the

@@ -57,9 +57,12 @@ defects; you are the check it does not have.
     starting to work for itself. **Another round is needed only for a finding of medium or
     higher** (wrong behaviour, a test that does not go red without the fix, a fix that missed
     an address of the defect, a bloated fix); low findings are fixed by the fixer or the lead
-    without a new round. Say how many of your findings sit inside the code the previous round
-    changed: when the top finding is there two rounds in a row, in one class, the next move is
-    a human's, not another round.
+    without a new round. Say how many of your findings sit inside the code this round's diff
+    wrote. **The stop is mechanical:** when your top finding — medium or higher — lies on a
+    line this diff wrote, the tool refuses the next fix round and `check` warns until a human
+    records a decision (`decide`); a round that keeps fixing its own previous fix is a loop,
+    not progress. The tool reads the finding's `file` and `line`, so give each the exact line
+    in the code as it stands after this diff.
 12. **Write the report as you go.** Put what you have established into `{{REPORT_PATH}}` as
     soon as it is established and extend it; a run cut off at a limit keeps what is on disk
     and loses what was only in your head.
@@ -71,6 +74,13 @@ defects; you are the check it does not have.
     files:
 
     {{COMMIT_RULES}}
+
+# Decisions of the human on this block
+
+{{DECISIONS}}
+
+A decision is the assignment the fixer worked to, not a suggestion: judge the fixes against
+it, and a fix that ignores it is a finding.
 
 # Project invariants
 
@@ -116,9 +126,9 @@ them is a finding.
 Fixes that looked suspicious but turned out to be right — with an explanation.
 
 ## Is another round needed
-Yes/no and why — by the measure from rule 11. Of the findings above: N inside the code the
-previous round changed, M outside it — the number a human needs to call the stop: rounds
-that keep finding defects in the previous round's changes are a loop, not progress.
+Yes/no and why — by the measure from rule 11. Of the findings above: N inside the code this
+round's diff wrote, M outside it, and whether the top one is inside — then the next move is a
+human's decision, and the tool will ask for it.
 ```
 
 Severity scale — the same as the hunter's: **critical** — data leak or corruption,
@@ -126,9 +136,12 @@ permission bypass, loss of the user's work; **high** — a function works incorr
 normal scenario; **medium** — an edge case, degradation, an invariant violation without
 immediate consequences; **low** — a minor defect, a future risk.
 
-The lead session puts the confirmed findings into the register as a top-up import
-(`docs/review/reports/{{BLOCK_ID}}-findings.jsonl`, then `import {{BLOCK_ID}} --append`),
-even the ones already fixed: the register is the review's memory.
+The lead session puts the confirmed findings into the register as a top-up import, even the
+ones already fixed: the register is the review's memory. The draft goes to
+`docs/review/reports/{{BLOCK_ID}}-findings.jsonl`, then
+`import {{BLOCK_ID}} --append --round {{ROUND}} --diff {{DIFF_PINNED}}` — the two flags
+record which review found the rows and which diff it read (`found_in`, pinned to commit ids),
+and that is what the loop signal reads.
 
 ## 2. Reply to me
 

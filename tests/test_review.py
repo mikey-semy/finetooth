@@ -3905,6 +3905,7 @@ BODY_ARGV = {
     "restamp": ("H1-001",), "backfill": (), "inventory": (), "sizes": (),
     "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
     "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
+    "decide": ("H1", "решение"),
     # Без `--out`: поток — поведение по умолчанию, и обход границы записи проверяет, что оно
     # ничего не пишет. `--out` — просьба человека, её держит отдельный тест.
     "sarif": (),
@@ -5490,6 +5491,7 @@ class GateRegistryTest(unittest.TestCase):
         ("findings/fix-debt-age",               "test_check_предупреждает_о_находке_старше_недели"),
         ("sweep/undeclared",                    "test_перечисление_без_sweep_краснеет"),
         ("sweep/no-script",                     "test_sweep_без_скрипта_после_охоты_краснеет"),
+        ("loop/top-finding-in-own-diff",        "test_главная_находка_внутри_диффа_прошлого_круга_останавливает_круг"),
     ]
 
     def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):
@@ -8734,7 +8736,7 @@ class TemplateContractTest(unittest.TestCase):
 
     # Поля, которые проставляет сам инструмент: шаблону о них говорить нечего.
     TOOL_FIELDS = {"id", "code_sha", "imported_at", "updated_at", "restamped_at",
-                   "fix_commit", "fixed_in", "rule"}
+                   "fix_commit", "fixed_in", "rule", "found_in"}
     # Поля черновика: агент пишет их строкой JSON. Шаблон обязан назвать каждое КЛЮЧОМ
     # схемы (`"поле":`) и внутри кода — в огороженном блоке или в обратных кавычках.
     DRAFT_FIELDS = {"block", "severity", "confidence", "status", "file", "line", "claim",
@@ -9859,6 +9861,180 @@ class DocumentedSurfaceTest(unittest.TestCase):
                        "--round", "2").stdout
         self.assertIn("H1-demo.fix-2.md", review.split("````diff")[0],
                       "ревьюер правок круга 2 читает отчёт исполнителя того же круга")
+
+
+class LoopSignalTest(unittest.TestCase):
+    """Сигнал петли: главная находка ревью правок лежит в коде, который написал прошлый круг
+    (see #9).
+
+    Ревью самого набора провело три блока через два-три круга починки, и со второго круга
+    почти каждая находка проверки лежала в коде предыдущего круга — чаще всего в новом
+    страже класса. Остановило это только решение человека, а решению некуда было лечь:
+    его дописывали к собранному заданию руками. Теперь находка знает, какая проверка её
+    нашла и по какому диффу (`found_in`), следующий круг без решения не собирается, а
+    записанное решение приходит в задание исполнителю и ревьюеру правок.
+    """
+
+    CHANGED = (3, 4)          # строки one.ts, которые переписал первый круг починки
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "".join(f"строка {i}\n" for i in range(1, 11)))
+        self.s.write("src/two.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        self.base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        lines = [f"строка {i}\n" for i in range(1, 11)]
+        for n in self.CHANGED:
+            lines[n - 1] = f"страж {n}\n"
+        self.s.write("src/one.ts", "".join(lines))
+        self.s.commit("круг починки 1")
+        self.head = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.round1 = f"{self.base}...HEAD"
+
+    @staticmethod
+    def _finding(line: int, severity: str = "medium") -> dict:
+        return {"block": "H1", "severity": severity, "confidence": "confirmed",
+                "status": "open", "file": "src/one.ts", "line": line,
+                "claim": "страж класса пропускает соседнюю форму записи",
+                "scenario": "форму записи переносят в переменную — страж молчит, дефект проходит"}
+
+    def _draft(self, *rows: dict) -> None:
+        """Дописывает строки в черновик блока — так ведущая заносит находки проверки."""
+        path = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        had = path.read_text(encoding="utf-8") if path.exists() else ""
+        self.s.write("docs/review/reports/H1-findings.jsonl",
+                     had + "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+    def _review_found(self, *rows: dict, rnd: int = 1) -> None:
+        self._draft(*rows)
+        out = self.s.run("import", "H1", "--append", "--round", str(rnd), "--diff", self.round1)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def _register(self) -> list[dict]:
+        return [json.loads(ln) for ln in (self.s.root / "docs/review/findings.jsonl")
+                .read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    def _fix2(self) -> subprocess.CompletedProcess:
+        return self.s.run("prompt", "H1", "--role", "fix", "--round", "2")
+
+    def test_главная_находка_внутри_диффа_прошлого_круга_останавливает_круг(self):
+        self._review_found(self._finding(3))
+        fix = self._fix2()
+        self.assertEqual(fix.returncode, 2, "второй круг собрался поверх петли: " + fix.stdout[-300:])
+        self.assertIn("loop signal", fix.stderr)
+        self.assertIn("H1-001", fix.stderr, "отказ называет находку")
+        self.assertIn('decide H1 "<decision>"', fix.stderr, "отказ называет команду решения")
+        self.assertEqual(self.s.run("prompt", "H1", "--role", "fix").returncode, 0,
+                         "первому кругу спросить не у кого — сигнал со второго")
+        check = self.s.run("check")
+        self.assertIn("loop signal", warned(check),
+                      "check обязан сказать о сигнале предупреждением, не роняя прогон: "
+                      + check.stdout[-500:])
+        self.assertIn("H1-001", warned(check))
+
+    def test_находка_вне_строк_диффа_того_же_файла_круг_не_останавливает(self):
+        """«Внутри диффа» — по строкам, а не по файлу: круг трогал one.ts, но не строку 9."""
+        self._review_found(self._finding(9))
+        fix = self._fix2()
+        self.assertEqual(fix.returncode, 0, fix.stderr)
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0, check.stdout)
+        self.assertNotIn("loop signal", check.stdout)
+
+    def test_сигнал_смотрит_на_главную_открытую_находку_от_medium(self):
+        # low внутри диффа — не повод для круга, и сигнала нет.
+        self._review_found(self._finding(3, "low"))
+        self.assertEqual(self._fix2().returncode, 0, "low внутри диффа сигнала не даёт")
+        # Главная — high, и она ВНЕ диффа; medium внутри главной не является.
+        self._review_found(self._finding(9, "high"), self._finding(4))
+        self.assertEqual(self._fix2().returncode, 0, "главная находка вне диффа — сигнала нет")
+        # high отложена с причиной — главной среди открытых становится medium внутри.
+        high = next(f["id"] for f in self._register() if f["severity"] == "high")
+        out = self.s.run("set-finding", high, "deferred", "--reason", "в другой блок")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        fix = self._fix2()
+        self.assertEqual(fix.returncode, 2, "главная открытая находка внутри диффа")
+        self.assertIn("loop signal", fix.stderr)
+
+    def test_решение_человека_снимает_сигнал_и_доходит_до_заданий(self):
+        self._review_found(self._finding(3))
+        early = self.s.run("decide", "H1", "решение до ревью правок", "--round", "0")
+        self.assertEqual(early.returncode, 0, early.stderr)
+        self.assertEqual(self._fix2().returncode, 2,
+                         "решение, принятое до проверки круга 1, петлю круга 1 не снимает")
+        out = self.s.run("decide", "H1", "Заменить стража единственной точкой входа")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = [json.loads(ln) for ln in (self.s.root / "docs/review/decisions.jsonl")
+                .read_text(encoding="utf-8").splitlines()]
+        self.assertEqual((rows[-1]["block"], rows[-1]["round"]), ("H1", 1),
+                         "круг решения по умолчанию — последняя проверка в реестре")
+        self.assertRegex(rows[-1]["at"], r"^\d{4}-\d\d-\d\dT")
+        fix = self._fix2()
+        self.assertEqual(fix.returncode, 0, fix.stderr)
+        self.assertIn("Заменить стража единственной точкой входа", fix.stdout,
+                      "решение обязано дойти до исполнителя")
+        review = self.s.run("prompt", "H1", "--role", "fixreview", "--round", "2",
+                            "--diff", self.round1)
+        self.assertEqual(review.returncode, 0, review.stderr)
+        self.assertIn("Заменить стража единственной точкой входа",
+                      review.stdout.split("````diff")[0], "и до ревьюера правок")
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0, check.stdout)
+        self.assertNotIn("loop signal", check.stdout)
+        self.assertIn("Заменить стража", (self.s.root / "docs/review/journal.md")
+                      .read_text(encoding="utf-8"), "решение видно и человеку в дневнике")
+
+    def test_без_решений_подстановка_нейтральная(self):
+        for role, extra in (("fix", ()), ("fixreview", ("--diff", self.round1))):
+            out = self.s.run("prompt", "H1", "--role", role, *extra)
+            with self.subTest(role=role):
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertIn("решений человека по блоку не записано", out.stdout)
+                self.assertNotIn("{{DECISIONS}}", out.stdout)
+
+    def test_старые_записи_без_found_in_не_роняют_и_не_останавливают(self):
+        self._draft(self._finding(3))
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        # Руками вписанное поле не той формы — то, что бывает в старых реестрах.
+        rows = self._register()
+        rows += [dict(rows[0], id="H1-002", found_in="fix review round 1, R1-001"),
+                 dict(rows[0], id="H1-003", found_in={"role": "fixreview", "round": "1"})]
+        self.s.write("docs/review/findings.jsonl",
+                     "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+        fix = self._fix2()
+        self.assertEqual(fix.returncode, 0, fix.stderr)
+        check = self.s.run("check")
+        self.assertNotIn("Traceback", check.stderr + fix.stderr)
+        self.assertNotIn("loop signal", check.stdout)
+
+    def test_импорт_пишет_круг_и_дифф_закреплённый_номерами_коммитов(self):
+        self._review_found(self._finding(3))
+        self.assertEqual(self._register()[0]["found_in"],
+                         {"role": "fixreview", "round": 1, "diff": f"{self.base}..{self.head}"},
+                         "`...HEAD` уедет со следующим кругом — дифф закрепляется коммитами")
+        self._draft(self._finding(9))
+        out = self.s.run("import", "H1", "--append")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("found_in", self._register()[-1], "добор без круга круга не выдумывает")
+        for argv, said in ((("--append", "--round", "1"), "--round and --diff"),
+                           (("--round", "1", "--diff", self.round1), "--append"),
+                           (("--append", "--round", "1", "--diff", "HEAD"), "A..B")):
+            with self.subTest(argv=argv):
+                out = self.s.run("import", "H1", *argv)
+                self.assertEqual(out.returncode, 2, out.stdout)
+                self.assertIn(said, out.stderr)
+
+    def test_ревьюер_правок_получает_команду_ввоза_с_закреплённым_диффом(self):
+        out = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", self.round1)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        # Команда ввоза стоит в разделе «что сдать» — после вклеенного диффа.
+        self.assertIn(f"import H1 --append --round 1 --diff {self.base}..{self.head}",
+                      out.stdout.rsplit("````", 1)[1])
 
 
 class CliContractTest(unittest.TestCase):
