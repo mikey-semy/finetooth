@@ -5472,6 +5472,30 @@ class RepositoryContractTest(unittest.TestCase):
     # берутся из CHANGELOG дословно, и читает их не автор.
     LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])\s")
     FENCE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
+    # Ленивое продолжение бывает только у АБЗАЦА: строка, которая сама открывает блок,
+    # список обрывает и печатается там, где написана. Таких три (ограда — четвёртая, её
+    # правило считает отдельно): ATX-заголовок, тематический разрыв и html-блок типов 1–6.
+    # Строка таблицы сюда не входит: её шапку GFM собирает из последней строки абзаца, и
+    # `| a | b |` сразу за пунктом остаётся внутри пункта — послабление здесь ослепило бы
+    # правило на настоящем склеивании.
+    ENDS_LIST = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|(?:\*\s*){3,}$|(?:-\s*){3,}$"
+                           r"|(?:_\s*){3,}$|<[A-Za-z/!?])")
+
+    @classmethod
+    def _glued_to_list_item(cls, text: str) -> list[int]:
+        """Номера строк, которые разметка делает продолжением предыдущего пункта списка."""
+        glued, fenced, lines = [], False, text.split("\n")
+        for n, line in enumerate(lines):
+            if cls.FENCE.match(line):
+                fenced = not fenced
+                continue
+            prev = lines[n - 1] if n else ""
+            # Отступ и цитата — законное продолжение пункта, набранное намеренно.
+            if (not fenced and line.strip() and cls.LIST_ITEM.match(prev)
+                    and not cls.LIST_ITEM.match(line) and not cls.ENDS_LIST.match(line)
+                    and not line.startswith((" ", "\t", ">"))):
+                glued.append(n + 1)
+        return glued
 
     def test_ни_один_абзац_не_приклеен_к_предыдущему_пункту_списка(self):
         # Отчёты самого ревью сюда не входят: они пишутся агентами и удаляются вместе с
@@ -5479,21 +5503,43 @@ class RepositoryContractTest(unittest.TestCase):
         swallowed = []
         for rel in self._tracked("*.md", ":!docs/review"):
             lines = (KIT / rel).read_text(encoding="utf-8").split("\n")
-            fenced = False
-            for n, line in enumerate(lines):
-                if self.FENCE.match(line):
-                    fenced = not fenced
-                    continue
-                prev = lines[n - 1] if n else ""
-                # Отступ и цитата — законное продолжение пункта, набранное намеренно.
-                if (not fenced and line.strip() and self.LIST_ITEM.match(prev)
-                        and not self.LIST_ITEM.match(line)
-                        and not line.startswith((" ", "\t", ">"))):
-                    swallowed.append(f"{rel}:{n + 1}: {line[:60]}")
+            swallowed += [f"{rel}:{n}: {lines[n - 1][:60]}"
+                          for n in self._glued_to_list_item("\n".join(lines))]
         self.assertEqual(swallowed, [],
                          "абзац идёт сразу за пунктом списка, без пустой строки между ними, "
                          "и разметка делает его продолжением этого пункта — вставьте пустую "
                          "строку: " + "; ".join(swallowed))
+
+    # Обе стороны правила на документах, которых в репозитории нет: склеенным считается
+    # только то, что разметка действительно вносит в пункт.
+    GLUED = {
+        "абзац за пунктом": "- пункт списка\nВводный абзац раздела\n",
+        "абзац за нумерованным пунктом": "1. пункт списка\nВводный абзац раздела\n",
+    }
+    NOT_GLUED = {
+        "заголовок обрывает список": "- пункт списка\n## Заголовок раздела\n",
+        "тематический разрыв": "- пункт списка\n---\n",
+        "html-блок": "- пункт списка\n<div>врезка</div>\n",
+        "ограда кода": "- пункт списка\n```sh\nmake test\n```\n",
+        "продолжение с отступом": "- пункт списка\n  продолжение пункта\n",
+        "цитата": "- пункт списка\n> цитата\n",
+        "следующий пункт": "- пункт списка\n- следующий пункт\n",
+        "пустая строка между ними": "- пункт списка\n\nОтдельный абзац\n",
+        "пример внутри ограды": "```md\n- пункт списка\nабзац примера\n```\n",
+    }
+
+    def test_правило_про_склеенный_абзац_читается_на_выдуманном_документе(self):
+        """Правило запрещает — значит, проверено и то, что оно ПРОПУСКАЕТ: заголовок,
+        разрыв и html-блок сразу за пунктом список обрывают и рисуются как написаны, а
+        запрет на них выгонял бы автора править верную разметку."""
+        for why, text in self.GLUED.items():
+            with self.subTest(склеено=why):
+                self.assertEqual(self._glued_to_list_item(text), [2],
+                                 "правило не увидело абзаца, приклеенного к пункту")
+        for why, text in self.NOT_GLUED.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(self._glued_to_list_item(text), [],
+                                 "правило придирается к верной разметке")
 
     # Пары «оригинал — перевод»: обе половины обязаны вести друг на друга с первой строки.
     BILINGUAL = ("README", "CHANGELOG", "CODE_OF_CONDUCT")
