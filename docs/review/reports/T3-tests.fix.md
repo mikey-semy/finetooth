@@ -550,6 +550,18 @@ the identity is the stand's own business now, and the locale was the cell that w
 pinned. Verified by running the whole suite with `HOME` pointing at an empty directory:
 255 tests, OK.
 
+**4. A new standing rule over the suite itself** (`tests/test_review.py`,
+`SourceRuleTest._rules_without_samples`), added in `f8007b3` while fixing T3-014 and left
+out of this list when it was written. Every rule that reads a source must (a) live in its
+own function, not inline in a test — otherwise there is nothing to feed it but the code
+already written — and (b) be run at least once on an INVENTED source. It reddened two rules
+that were already in the file (the `git log` marker rule and the language-table check), and
+both were moved into functions with invented samples in the same series.
+**Tests:** `SourceRuleTest.test_у_каждого_правила_по_исходнику_есть_выдуманный_образец`,
+with both directions in `test_узда_видит_правило_которое_никто_не_кормил`.
+**Red on revert:** yes — a rule written inline in a test, and a rule fed only the tool's
+own source, each redden the guard.
+
 ---
 
 ## Found, not fixed
