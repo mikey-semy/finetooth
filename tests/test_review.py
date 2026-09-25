@@ -5654,29 +5654,49 @@ def _workflow_steps(text: str) -> list[str]:
     return steps
 
 
+# Доводы, которые шаг ВПРАВЕ добавить к объявленной команде: они делают прогон громче, а
+# не уже. Всё остальное — отказ по имени: `-k НетТакого` гоняет ноль тестов, `|| true`
+# уносит код возврата мимо CI, и оба измерены зелёными на правиле, которое считало любой
+# лишний довод безобидным. Новый довод вписывается сюда вместе с причиной, почему он не
+# сужает ворота, — молчаливое «наверное, ничего» и есть то, чем ворота отключают.
+WIDENING_ARGS = ("-v", "--verbose")
+# Выражение GitHub Actions, свёрнутое в одно слово: `${{ github.sha }}` содержит пробелы,
+# и по пробелам диапазон рассыпается на пять слов, из которых на диапазон похоже `}}..${{`.
+SUBSTITUTION = "${{}}"
+
+
+def _step_tokens(step: str) -> list[str]:
+    """Слова командной строки шага, с выражениями `${{ … }}`, свёрнутыми в одно слово."""
+    return re.sub(r"\$\{\{[^{}]*\}\}", SUBSTITUTION, step).split()
+
+
 def _runs_command(cmd: str, step: str) -> bool:
-    """Шаг гоняет ИМЕННО эту команду: та же программа и все её доводы, в том же порядке.
+    """Шаг гоняет ИМЕННО эту команду: та же программа, все её доводы в том же порядке, и
+    ничего сверх того, что названо расширением.
 
     Программа сверяется по имени, а не по пути: в CI валидатор лежит в venv под
-    `$RUNNER_TEMP`, а зовётся тем же именем. Доводы шага могут быть шире доводов
-    документа (`-v` у прогона тестов), но ни один довод документа не может пропасть.
-    Диапазон коммитов CI подставляет из события, поэтому довод с `..` сверяется по форме.
+    `$RUNNER_TEMP`, а зовётся тем же именем. Диапазон коммитов CI подставляет из события,
+    поэтому на месте объявленного диапазона принимается подстановка — но не собственный
+    диапазон шага: `.github/dco.sh HEAD~1..HEAD` проверяет один коммит вместо всех
+    коммитов предложения, и это те же отключённые ворота, только тише.
     """
-    want, got = cmd.split(), step.split()
+    want, got = cmd.split(), _step_tokens(step)
     if not want or not got:
         return False
     if Path(want[0].strip("\"'")).name != Path(got[0].strip("\"'")).name:
         return False
-    rest = got[1:]
+    rest, extra = got[1:], []
     for arg in want[1:]:
         if ".." in arg:
-            if not any(".." in g for g in rest):
-                return False
-            continue
-        if arg not in rest:
+            hit = next((i for i, g in enumerate(rest)
+                        if ".." in g and (SUBSTITUTION in g or g == arg)), None)
+        else:
+            hit = rest.index(arg) if arg in rest else None
+        if hit is None:
             return False
-        rest = rest[rest.index(arg) + 1:]
-    return True
+        extra += rest[:hit]
+        rest = rest[hit + 1:]
+    return all(a in WIDENING_ARGS for a in extra + rest)
 
 
 def _gates_not_run(commands: list[str], steps: list[str]) -> list[str]:
@@ -5898,6 +5918,45 @@ jobs:
         self.assertEqual(
             _gates_not_run(list(self.INVENTED_GATES), _workflow_steps(stubbed)),
             [self.INVENTED_GATES[1]], "узда не увидела подменённый валидатор")
+
+    # Ворота, оставшиеся на месте и обезвреженные: шаг зовёт ту же программу с теми же
+    # доводами, а красным стать уже не может. Каждая форма измерена зелёной на правиле,
+    # которое разрешало шагу быть любым, лишь бы доводы документа в нём нашлись.
+    NEUTRALISED_STEPS = {
+        "код возврата не доходит до CI":
+            ("python3 -m unittest discover -s tests", "python3 -m unittest discover -s tests || true"),
+        "прогон сужен образцом":
+            ("python3 -m unittest discover -s tests",
+             "python3 -m unittest discover -s tests -k НетТакогоТеста"),
+        "свой диапазон вместо подставленного":
+            (".github/dco.sh origin/dev..HEAD", ".github/dco.sh HEAD~1..HEAD"),
+    }
+    # Обратная сторона: шаг вправе называть команду по-своему, и это не обезвреживание.
+    HONEST_STEPS = {
+        "громче, но не уже":
+            ("python3 -m unittest discover -s tests", "python3 -m unittest discover -s tests -v"),
+        "программа из venv":
+            ("skills-ref validate skills/finetooth",
+             '"$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth'),
+        "диапазон из события":
+            (".github/dco.sh origin/dev..HEAD",
+             ".github/dco.sh ${{ github.event.pull_request.base.sha }}..${{ github.sha }}"),
+        "диапазон слово в слово":
+            (".github/dco.sh origin/dev..HEAD", ".github/dco.sh origin/dev..HEAD"),
+    }
+
+    def test_узда_видит_обезвреженные_ворота(self):
+        """Ворота, которые нельзя уронить, — не ворота, даже если шаг с ними на месте.
+        `|| true` уносит код возврата мимо CI, `-k НетТакогоТеста` гоняет ноль тестов,
+        `HEAD~1..HEAD` проверяет один коммит вместо всех коммитов предложения."""
+        for why, (cmd, step) in self.NEUTRALISED_STEPS.items():
+            with self.subTest(обезврежено=why):
+                self.assertFalse(_runs_command(cmd, step),
+                                 f"{step!r} засчитан как прогон `{cmd}`")
+        for why, (cmd, step) in self.HONEST_STEPS.items():
+            with self.subTest(честный=why):
+                self.assertTrue(_runs_command(cmd, step),
+                                f"{step!r} не засчитан как прогон `{cmd}`")
 
     READMES = ("README.md", "README.ru.md")
 
