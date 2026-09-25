@@ -158,6 +158,17 @@ older than the fingerprints); a finding without a rejection reason, a fix commit
 touch the file, a duplicate of a nonexistent finding, a guard at a nonexistent path; a tree
 more than a week behind the server.
 
+## In CI and on the platform
+
+`review check` is the gate a project runs in CI and makes required: a merge that edits code
+under an open finding, or leaves the register contradicting the tree, stays red.
+`review sarif` prints the open and deferred findings as SARIF 2.1.0 (`--out <file>` writes
+it instead) for GitHub code scanning — the findings show in the Security tab and on the
+lines of a pull request; a deferred one is marked as an accepted risk. Ready jobs:
+[assets/github-actions-snippet.yml](assets/github-actions-snippet.yml) (`check` plus the
+SARIF upload) and [assets/gitlab-ci-snippet.yml](assets/gitlab-ci-snippet.yml) (`check`;
+it says what GitLab shows and on which tier).
+
 ## When the review is finished
 
 All blocks `closed`, no open findings, every rejected one has a reason and every deferred
@@ -183,7 +194,8 @@ review starts from zero.
 - [references/lessons.md](references/lessons.md) — the lessons of two reviews the rules grew
   out of: read before the first block.
 - [assets/](assets/) — samples: blocks, manifest, invariants, journal, banner for the root
-  instructions file, `make` and `package.json` targets, a guard example;
+  instructions file, `make` and `package.json` targets, CI jobs for GitHub Actions and
+  GitLab, a guard example;
   [assets/run-role.sh](assets/run-role.sh) — a role run through `claude -p` with the event
   stream kept and the spend logged.
 - [scripts/axes.py](scripts/axes.py) — the spend of one run by axis (cache, turns, tool

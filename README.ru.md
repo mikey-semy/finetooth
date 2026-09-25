@@ -257,7 +257,7 @@ npx skills add mikey-semy/finetooth
 python3 -m unittest discover -s tests
 ```
 
-399 сценариев, около девяти минут, никаких зависимостей кроме `git`. Каждый заводит свежий временный
+413 сценариев, около девяти минут, никаких зависимостей кроме `git`. Каждый заводит свежий временный
 репозиторий и зовёт инструмент **из папки скилла**, с рабочим каталогом в этом репозитории, —
 так, как его зовёт агент. Поведение проверяется через командную строку, а не импортом
 внутренностей. Отдельный класс проверяет сам скилл по спецификации: имя равно каталогу,
@@ -389,10 +389,10 @@ python3 .claude/skills/finetooth/scripts/review.py setup --project "Имя"
 skills/finetooth/                СКИЛЛ — это и ставится агенту
   SKILL.md                        когда применять и порядок работы (читает агент)
   LICENSE                         условия — едут вместе со скиллом
-  scripts/review.py               инструмент, 23 команды: version, setup, init, status, next,
+  scripts/review.py               инструмент, 24 команды: version, setup, init, status, next,
                                   inventory, sizes, coverage, coupling, order, roots, prompt,
                                   import, set-status, set-finding, hypotheses, restamp,
-                                  backfill, refs, findings, summary, check, log
+                                  backfill, refs, findings, summary, sarif, check, log
   scripts/axes.py                 расход безголового прогона в разбивке по осям
   references/hunter.md            охотник: читает файлы блока и выдвигает находки
   references/verify.md            проверяющий: свой независимый проход, три вердикта
@@ -413,10 +413,12 @@ skills/finetooth/                СКИЛЛ — это и ставится аг�
                                   journal.example.ru.md, agent-banner.ru.md
   assets/makefile-snippet.mk      цели make
   assets/package-json-snippet.json то же для проекта на npm
+  assets/github-actions-snippet.yml CI для GitHub: `check` обязательной проверкой + выгрузка SARIF
+  assets/gitlab-ci-snippet.yml    CI для GitLab: `check` отдельной задачей
   assets/guard-grep.sh            движок греп-ворот: разрешение по номеру строки
   assets/run-role.sh              гонит роль безголово через `claude -p` и пишет расход в
                                   дневник — единственная часть, уходящая с машины
-tests/                            тесты инструмента и формата скилла: 399 сценариев
+tests/                            тесты инструмента и формата скилла: 413 сценариев
   test_verdict_corpus.py          разборщик вердиктов на настоящих отчётах (tests/corpus/verdicts)
 examples/toy                      настоящее docs/review/ после одного блока, на игрушечном приложении
 .github/                          CI (тесты на 3.12 и 3.14, skills-ref validate, проверка
@@ -463,6 +465,18 @@ CHANGELOG.md                      история версий (+ CHANGELOG.ru.md
 принятые риски и чем закрыт каждый класс (узды, коммиты). `review summary --aged <файл>`
 отвечает по одному `git log`, насколько каждый блок уехал от той ревизии, — повторная проверка
 начинается отсюда, а не с нуля.
+
+**Находки там, где их показывает платформа.** `review sarif` печатает открытые и отложенные
+находки реестра в SARIF 2.1.0 для GitHub Code Scanning: правило — класс дефекта находки (блок,
+если класса нет), уровень — из серьёзности (critical и high → error, medium → warning, low →
+note), место — файл и строка от корня репозитория, отпечаток — номер находки: правка строки
+не открывает второе предупреждение. Отложенная находка несёт в SARIF принятое подавление
+(`suppressions`) и говорит «принятый риск» в тексте, потому что GitHub подавлений не читает.
+`security-severity` не пишется: реестр не говорит, какая находка — уязвимость. Готовые задачи —
+`assets/github-actions-snippet.yml` (`check` обязательной проверкой и выгрузка через
+`github/codeql-action/upload-sarif`, закреплённый коммитом) и `assets/gitlab-ci-snippet.yml`
+(`check` задачей; SARIF GitLab показывает только на тарифе Ultimate, отчёт Code Quality —
+следующий шаг).
 
 **Порядок обхода.** `review order` ставит блоки по цене ошибки (`risk` у блока) и внутри — по
 частоте правок из `git log`. Замерено на первом проекте как предсказание: верхние 10 % файлов

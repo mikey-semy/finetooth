@@ -101,6 +101,13 @@ What I deliberately did not do, and what I could not do:
 - **The verdict and coverage regexes were read, not fuzzed.** I checked that the templates
   describe what the parsers do; I did not construct adversarial reports to find a form of
   words the gates mis-read. That is a measured block's work, not a reading one's.
+- **Added by the lead after the block closed (2026-09-25, direction 18, branch `feat/sarif`),
+  not read by this hunter or by any agent of this review:**
+  `skills/finetooth/assets/github-actions-snippet.yml` and
+  `skills/finetooth/assets/gitlab-ci-snippet.yml` — the CI jobs for `check` and the SARIF
+  upload. They entered T2 through `skills/finetooth/assets/*.yml` so that the coverage map has
+  no unowned file; the review of the kit has closed, and they are covered by the suite
+  (`test_действия_ci_закреплены_коммитом`), not by a reading.
 
 ## Findings
 
