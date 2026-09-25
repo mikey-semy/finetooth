@@ -3907,7 +3907,10 @@ def _check_gates(source: str | None = None) -> list[tuple[int, str, str]]:
                 and node.func.value.id in ("problems", "warnings")):
             key = re.sub(r"\s+", " ", literal(node.args[0])).strip()[:46]
             if not re.search(r"[A-Za-zА-Яа-я]", key):
-                key = "= " + re.sub(r"\s+", " ", ast.unparse(node.args[0]))[:44]
+                # Quotes dropped: `ast.unparse` picks the quote style by Python version
+                # (3.14 writes f"{b['id']}…", earlier versions f'{b['id']}…'), and the
+                # registry went red in CI on a key nobody had changed.
+                key = "= " + re.sub(r"\s+", " ", re.sub(r"[\"']", "", ast.unparse(node.args[0])))[:44]
             out.append((node.lineno, node.func.value.id, key))
     return sorted(out)
 
@@ -3932,7 +3935,7 @@ class GateRegistryTest(unittest.TestCase):
         (': no manifest', "test_манифест_пропал_а_блок_в_работе"),
         (': manifest is empty or nearly empty', "test_куцый_манифест_роняет_проверку"),
         (': status , but there is no verifier report — t', "test_пройденный_блок_без_отчёта_проверяющего"),
-        ('= f"{b[\'id\']}: {why}"', "test_пустой_отчёт_проверяющего_не_проводит_блок"),   # verify_report_problem
+        ("= f{b[id]}: {why}", "test_пустой_отчёт_проверяющего_не_проводит_блок"),   # verify_report_problem
         (': state.json declares report , which is not on', "test_объявленный_отчёт_которого_нет_на_диске"),
         (': status , but there is no hunter report — the', "test_статус_дальше_running_без_отчёта_охотника"),
         (': stuck in running without a timestamp — when ', "test_running_без_отметки_времени"),
