@@ -63,6 +63,14 @@ defects; you are the check it does not have.
 12. **Write the report as you go.** Put what you have established into `{{REPORT_PATH}}` as
     soon as it is established and extend it; a run cut off at a limit keeps what is on disk
     and loses what was only in your head.
+13. **The commits follow the project's commit rules.** When the project has its own check of
+    commits (the CI jobs and CONTRIBUTING name it; for example `.github/dco.sh <range>`),
+    run it over the diff range and put its output in the report. A commit it refuses — no
+    sign-off, a wrong identity, a message against the project's convention — is a finding:
+    the project's CI will refuse the change for it. What the tool found in the project's
+    files:
+
+    {{COMMIT_RULES}}
 
 # Project invariants
 
