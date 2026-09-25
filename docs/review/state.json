@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-25T05:08:22Z",
+  "updated_at": "2026-09-25T17:03:36Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -8,10 +8,10 @@
       "finished": "2026-09-25T02:22:21Z",
       "reports": [],
       "note": "",
-      "reviewed_sha": "4ab80a243f3a5a01",
-      "refs_sha": "ee0980ad61d57d41",
+      "reviewed_sha": "ab5fba9ba114248a",
+      "refs_sha": "fc545290b6fdb3ec",
       "hypotheses_sha": "4ab68e42761325b3",
-      "restamped_at": "2026-09-25T02:22:09Z"
+      "restamped_at": "2026-09-25T17:03:36Z"
     },
     "T2": {
       "status": "fixing",
@@ -19,9 +19,10 @@
       "finished": null,
       "reports": [],
       "note": "",
-      "reviewed_sha": "baf5968c618d7836",
-      "refs_sha": "5df5cefdd198a393",
-      "hypotheses_sha": "1d5450e8e739f769"
+      "reviewed_sha": "9e9b10592849bdf5",
+      "refs_sha": "6502d60fb36e0721",
+      "hypotheses_sha": "1d5450e8e739f769",
+      "restamped_at": "2026-09-25T17:03:36Z"
     },
     "T3": {
       "status": "fixing",
@@ -29,9 +30,10 @@
       "finished": null,
       "reports": [],
       "note": "",
-      "reviewed_sha": "f6c46afb743dc5e0",
-      "refs_sha": "5df5cefdd198a393",
-      "hypotheses_sha": "fcbe3731d494ce45"
+      "reviewed_sha": "facd48d6544026aa",
+      "refs_sha": "6502d60fb36e0721",
+      "hypotheses_sha": "fcbe3731d494ce45",
+      "restamped_at": "2026-09-25T17:03:36Z"
     },
     "T4": {
       "status": "fixing",
@@ -39,9 +41,10 @@
       "finished": null,
       "reports": [],
       "note": "",
-      "reviewed_sha": "b9d511beae9bf860",
-      "refs_sha": "a2a38ef767f6536c",
-      "hypotheses_sha": "779f2bec72a0a16a"
+      "reviewed_sha": "e788c90c4cf4b362",
+      "refs_sha": "310e2015056eaa9d",
+      "hypotheses_sha": "779f2bec72a0a16a",
+      "restamped_at": "2026-09-25T17:03:36Z"
     }
   }
 }
