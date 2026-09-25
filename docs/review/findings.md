@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **15** of 131 records.
+Open: **8** of 131 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **15** of 131 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (6 open / 43)
+## medium (4 open / 43)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -49,8 +49,8 @@ Open: **15** of 131 records.
 | T1-065 | T1 | fixed | `skills/finetooth/scripts/review.py:3229` | [R7-007, round 7] the R6-004 fix is untested: reverting the gate's `"quoted"` mode leaves the whole suite green |
 | T2-001 | T2 | fixed | `skills/finetooth/references/verify.md:123` | The verifier template tells the agent to put a rejection reason in `claim`, but check accepts it only when the claim starts with a rejection word or a reject_reason field is present — neither is mentioned |
 | T2-002 | T2 | fixed | `skills/finetooth/references/hunter.md:155` | The draft-findings JSON schema in every role template omits `root` and `dup_of`, so the three-instance guard gate and the duplicate gate can never be satisfied by an agent following the template |
-| T2-016 | T2 | open | `tests/test_review.py:6062` | TemplateContractTest only checks that each agent field name occurs anywhere in a template, so prose satisfies it and the draft schemas it was written for are unguarded (fix review round 1, R1-001) |
-| T2-017 | T2 | open | `skills/finetooth/scripts/review.py:1906` | {{DIFF}} is replaced over the assembled body, so the manifest's own mentions of it get the diff too: the prompt carries it three times while {{DIFF_VOLUME}} states one (fix review round 1, R1-002) |
+| T2-016 | T2 | fixed | `tests/test_review.py:6062` | TemplateContractTest only checks that each agent field name occurs anywhere in a template, so prose satisfies it and the draft schemas it was written for are unguarded (fix review round 1, R1-001) |
+| T2-017 | T2 | fixed | `skills/finetooth/scripts/review.py:1906` | {{DIFF}} is replaced over the assembled body, so the manifest's own mentions of it get the diff too: the prompt carries it three times while {{DIFF_VOLUME}} states one (fix review round 1, R1-002) |
 | T3-001 | T3 | fixed | `tests/test_review.py:3951` | Five cmd_check gates moved from problems to warnings leave all 248 tests green: check exits 0 on the state it refused, because GATES keys a gate by its message and those gate tests never assert the exit code |
 | T3-002 | T3 | fixed | `tests/test_review.py:3925` | _check_gates matches only `problems.append(x)` on a Name, so a gate written with `+=` or `extend` yields no key, needs no GATES entry and no test, and the registry stays green |
 | T3-003 | T3 | fixed | `tests/test_review.py:4034` | GateRegistryTest checks only that the test named beside a gate exists; nothing ties the two, so a gate registered against any existing test name satisfies the guard with zero coverage |
@@ -63,7 +63,7 @@ Open: **15** of 131 records.
 | T4-021 | T4 | open | `tests/test_review.py:5233` | test_каждые_объявленные_ворота_гоняет_ci matches each CONTRIBUTING command by two anchors anywhere in the workflow text, so CI can stop running the unittest suite with the guard green (fix review round 1, R1-003) |
 | T4-026 | T4 | open | `.github/dco.sh:31` | dco.sh feeds git rev-list through process substitution, so an unresolvable range examines no commits and the script prints 'all commits are signed off' with exit 0 (fix review round 1, R1-008) |
 
-## low (9 open / 83)
+## low (4 open / 83)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -115,11 +115,11 @@ Open: **15** of 131 records.
 | T2-013 | T2 | fixed | `examples/toy/docs/review/findings.md:3` | The toy's findings.md header holds the literal `<skill>` path while its blocks.json sets no `cli`, so the file can never equal the regenerated one and check is red in every copy of the example |
 | T2-014 | T2 | fixed | `skills/finetooth/SKILL.md:126` | `roots`, the class view the three-instance guard gate rests on, is named by no message of the tool, by no line of SKILL.md and by no line of the entry point, so a lead cannot learn it exists |
 | T2-015 | T2 | fixed | `skills/finetooth/assets/agent-banner.md:13` | Both banner assets hardcode `make review-status` with no {{CLI}} placeholder, and setup substitutes nothing in them, so a project without a Makefile pastes a dead command into every session |
-| T2-018 | T2 | open | `skills/finetooth/scripts/review.py:197` | The diff_vol message tells a reviewer who cannot hold the diff to take one half through --scope, but --scope does not shrink the diff it is handed (fix review round 1, R1-003) |
-| T2-019 | T2 | open | `tests/test_review.py:6533` | Three new negative tests (deferral without reason, reason only in claim, root from the sample) assert the gate's message in check's stdout, never its exit code (fix review round 1, R1-004) |
-| T2-020 | T2 | open | `CHANGELOG.md:77` | The T2 section's opening paragraph follows the last T4 bullet with no blank line in both CHANGELOGs, so it renders as part of the NOTICE.md bullet (fix review round 1, R1-005) |
-| T2-021 | T2 | open | `skills/finetooth/scripts/review.py:3086` | Two of the four places T2-011 fixed — the deferral refusal's tail in check and SKILL.md's completion sentence — are held by no test, and the register records no rule for T2-011 (fix review round 1, R1-006) |
-| T2-022 | T2 | open | `skills/finetooth/references/verify.md:92` | The verifier's template gets the same whole-block 'read all' file list as the hunter but no {{VOLUME}} reading budget (fix review round 1, R1-007) |
+| T2-018 | T2 | fixed | `skills/finetooth/scripts/review.py:197` | The diff_vol message tells a reviewer who cannot hold the diff to take one half through --scope, but --scope does not shrink the diff it is handed (fix review round 1, R1-003) |
+| T2-019 | T2 | fixed | `tests/test_review.py:6533` | Three new negative tests (deferral without reason, reason only in claim, root from the sample) assert the gate's message in check's stdout, never its exit code (fix review round 1, R1-004) |
+| T2-020 | T2 | fixed | `CHANGELOG.md:77` | The T2 section's opening paragraph follows the last T4 bullet with no blank line in both CHANGELOGs, so it renders as part of the NOTICE.md bullet (fix review round 1, R1-005) |
+| T2-021 | T2 | fixed | `skills/finetooth/scripts/review.py:3086` | Two of the four places T2-011 fixed — the deferral refusal's tail in check and SKILL.md's completion sentence — are held by no test, and the register records no rule for T2-011 (fix review round 1, R1-006) |
+| T2-022 | T2 | fixed | `skills/finetooth/references/verify.md:92` | The verifier's template gets the same whole-block 'read all' file list as the hunter but no {{VOLUME}} reading budget (fix review round 1, R1-007) |
 | T3-005 | T3 | fixed | `tests/test_review.py:3059` | The no-traceback class guard passes one fixed argv to every subcommand; argparse rejects it for 20 of the 23, so their bodies never run and the guard proves nothing about them |
 | T3-006 | T3 | fixed | `tests/test_review.py:2250` | Nothing compares the key sets of MSG['en'] and MSG['ru'], so deleting a translation leaves the suite green while T() raises KeyError at run time on the path that needs it |
 | T3-007 | T3 | fixed | `tests/test_review.py:3600` | Mechanisms outside cmd_check that no test reaches: import's claim cap, block_risk's refusal, review_lang's fallback and cmd_next — each removable with the whole suite green |
