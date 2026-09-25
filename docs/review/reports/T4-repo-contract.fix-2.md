@@ -442,7 +442,7 @@ with two pattern languages. Merged, the class has three instances and a guard al
 apart, each stays under the threshold. Roots are written by the hunter and the verifier, and
 merging two of them is not a fixer's decision.
 
-**Nothing else.** The runtime figures still hold after this round's twenty-three new tests
+**Nothing else.** The runtime figures still hold after this round's sixteen new tests
 (`Ran 341 tests in 330.661s` — README and AGENTS.md say about six minutes, CONTRIBUTING about
 five, and the measurement sits between them), and `grep` found no second address for T4-019's
 class (above).
@@ -479,7 +479,8 @@ Ran 341 tests in 330.661s
 OK
 ```
 
-Twenty-three of those 341 are this round's. The relevant suites were also run on their own
+Sixteen of those 341 are this round's — the suite ran 325 at `d33527c`, the commit the round
+started from, and 341 at its end. The relevant suites were also run on their own
 after each fix (`DcoGateTest`, `GuardGrepTest`, `ShellGateMutationTest`, `CommandSweepRuleTest`,
 `WriteBoundaryTest`, `HandWrittenInputTest`, `SourceRuleTest`, `RepositoryContractTest`).
 
