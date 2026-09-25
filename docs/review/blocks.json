@@ -51,6 +51,7 @@
         "skills/finetooth/assets/*.md",
         "skills/finetooth/assets/*.json",
         "skills/finetooth/assets/*.mk",
+        "skills/finetooth/assets/*.yml",
         "examples/**"
       ],
       "ref_paths": [
