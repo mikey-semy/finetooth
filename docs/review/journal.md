@@ -39,6 +39,7 @@
 - **2026-09-25T09:45:43Z** · `T3` — fix: 15 findings closed, none rejected; two mechanisms inside T3-007 left unmeasured and named in the report
 - **2026-09-25T09:59:11Z** · `T2` — fixreview — spend: 21 min, 88 turns, 87 tool calls, input 54.0M tokens (99% from cache, 665k written), output 73k, re-reads 0, cost estimate $35.12, model claude-opus-5
 - **2026-09-25T10:03:25Z** · `T4` — fixreview — spend: 25 min, 90 turns, 89 tool calls, input 20.5M tokens (98% from cache, 316k written), output 70k, re-reads 0, cost estimate $15.12, model claude-opus-5
+- **2026-09-25T11:15:11Z** · `T3` — fixreview — spend: 28 min, 168 turns, 167 tool calls, input 36.8M tokens (99% from cache, 425k written), output 101k, re-reads 3, cost estimate $25.08, model claude-opus-5
 - **2026-09-25T11:41:04Z** · `T2` — fix — spend: 52 min, 191 turns, 190 tool calls, input 34.6M tokens (99% from cache, 287k written), output 116k, re-reads 0, cost estimate $22.93, model claude-opus-5
 - **2026-09-25T11:59:04Z** · `T2` — fixreview — spend: 16 min, 105 turns, 104 tool calls, input 15.6M tokens (99% from cache, 201k written), output 69k, re-reads 0, cost estimate $11.51, model claude-opus-5
 - **2026-09-25T12:39:21Z** · `T3` — fix — spend: 69 min, 151 turns, 150 tool calls, input 34.1M tokens (99% from cache, 287k written), output 170k, re-reads 0, cost estimate $24.04, model claude-opus-5
