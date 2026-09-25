@@ -198,6 +198,148 @@ def warned(out: subprocess.CompletedProcess) -> str:
     return rest
 
 
+class _Values:
+    """Где модуль СОБИРАЕТ значения: имя → всё, что в него клали, по областям видимости.
+
+    Общее основание для всех правил по исходнику. Правило, написанное на форму записи,
+    слепнет от первого же безобидного переноса: приставка `["git", "-C", str(ROOT)]`,
+    вынесенная в модульную переменную, звёздочка вместо склейки, псевдоним модуля,
+    переименованная переменная записи. Измерено трижды подряд — и каждый раз ответом было
+    «допишем ещё одну ветку `isinstance`», после чего находилась следующая форма.
+    Значение собирают в одном месте, а читают в другом; смотреть надо туда, где собрали.
+
+    Здесь нет исполнения: имена разрешаются по ВСЕМУ, что в них когда-либо клали в этой
+    области видимости и в объемлющих. Объединение — намеренно щедрое: правило,
+    основанное на нём, ошибается в сторону лишней жалобы, а не пропущенного дефекта.
+    """
+
+    def __init__(self, source: str) -> None:
+        self.tree = ast.parse(source)
+        self.parent: dict = {}
+        self.scope: dict = {}
+        self._map(self.tree, self.tree)
+        self.assigned: dict = {}      # (область, имя) → всё, что в него клали
+        self.uses: dict = {}          # (область, имя) → где его читают
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+                targets = [node.target]
+            else:
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                    self.uses.setdefault((self.scope_of(node), node.id), []).append(node)
+                continue
+            if node.value is None:
+                continue
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    self.assigned.setdefault((self.scope_of(node), t.id), []).append(node.value)
+
+    def _map(self, node, scope) -> None:
+        for child in ast.iter_child_nodes(node):
+            self.parent[child] = node
+            self.scope[child] = scope
+            inner = child if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                ast.Lambda)) else scope
+            self._map(child, inner)
+
+    def scope_of(self, node):
+        return self.scope.get(node, self.tree)
+
+    def lookup(self, name: str, scope) -> list:
+        """Всё, что клали в имя: сначала своя область, потом объемлющие."""
+        while True:
+            if (scope, name) in self.assigned:
+                return self.assigned[(scope, name)]
+            if scope is self.tree:
+                return []
+            scope = self.scope_of(scope)
+
+    def elements(self, node, seen: tuple = ()) -> list:
+        """Элементы списка, собранного как угодно: литералом, склейкой, звёздочкой, по имени."""
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            out = []
+            for e in node.elts:
+                out += self.elements(e.value, seen) if isinstance(e, ast.Starred) else [e]
+            return out
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return self.elements(node.left, seen) + self.elements(node.right, seen)
+        if isinstance(node, ast.Name) and node.id not in seen:
+            return self.name_elements(node.id, self.scope_of(node), seen)
+        return []
+
+    def name_elements(self, name: str, scope, seen: tuple = ()) -> list:
+        return [e for v in self.lookup(name, scope)
+                for e in self.elements(v, seen + (name,))]
+
+    def built_lists(self) -> list:
+        """Каждое место, где модуль собирает список: (строка, элементы).
+
+        Имя — один раз со всем, что в него клали; выражение — там, где его никуда не
+        положили. Иначе одно и то же значение считалось бы дважды.
+        """
+        out = [(min(v.lineno for v in values), self.name_elements(name, scope))
+               for (scope, name), values in self.assigned.items()]
+        for node in ast.walk(self.tree):
+            if not (isinstance(node, (ast.List, ast.Tuple))
+                    or (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add))):
+                continue
+            up = self.parent.get(node)
+            if isinstance(up, (ast.List, ast.Tuple, ast.BinOp, ast.Starred)):
+                continue                                   # часть большего списка
+            if (isinstance(up, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+                    and up.value is node
+                    and (isinstance(getattr(up, "target", None), ast.Name)
+                         or (isinstance(up, ast.Assign) and len(up.targets) == 1
+                             and isinstance(up.targets[0], ast.Name)))):
+                continue                                   # учтено по имени
+            out.append((node.lineno, self.elements(node)))
+        return sorted(out, key=lambda pair: pair[0])
+
+    def literal(self, node, seen: tuple = ()):
+        """Значение выражения с подставленными именами: таблицу собирают из кусков."""
+        if isinstance(node, ast.Name) and node.id not in seen:
+            values = self.lookup(node.id, self.scope_of(node))
+            if values:
+                return self.literal(values[-1], seen + (node.id,))
+        if isinstance(node, ast.Dict):
+            out = {}
+            for key, value in zip(node.keys, node.values):
+                if key is None:
+                    out.update(self.literal(value, seen))
+                else:
+                    out[self.literal(key, seen)] = self.literal(value, seen)
+            return out
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            items = [self.literal(e, seen) for e in node.elts]
+            return items if isinstance(node, ast.List) else tuple(items)
+        return ast.literal_eval(node)
+
+    def text(self, node) -> str:
+        """Текст выражения ВМЕСТЕ с тем, что стоит за его именами."""
+        parts = [ast.unparse(node)]
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Name):
+                parts += [ast.unparse(v) for v in self.lookup(inner.id, self.scope_of(inner))]
+        return " ".join(parts)
+
+    def flows_into(self, node, needle: str, seen: tuple = ()) -> bool:
+        """Попадает ли значение в выражение, где есть `needle`, — прямо или через имя."""
+        up = node
+        while up in self.parent:
+            up = self.parent[up]
+            if isinstance(up, ast.stmt):
+                break
+            if needle in ast.unparse(up):
+                return True
+        if isinstance(up, ast.Assign) and len(up.targets) == 1 \
+                and isinstance(up.targets[0], ast.Name) and up.targets[0].id not in seen:
+            name = up.targets[0].id
+            return any(self.flows_into(use, needle, seen + (name,))
+                       for use in self.uses.get((self.scope_of(up), name), []))
+        return False
+
+
 FULL_HUNTER = """# отчёт охотника
 
 ## Гипотезы
@@ -2488,10 +2630,23 @@ class LanguageTest(unittest.TestCase):
 
     @staticmethod
     def _msg_tables(source: str) -> dict:
-        """Таблицы сообщений инструмента, прочитанные из его исходника."""
-        for node in ast.parse(source).body:
-            if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "MSG":
-                return ast.literal_eval(node.value)
+        """Таблицы сообщений инструмента, прочитанные из его исходника.
+
+        Таблица читается там, где её СОБРАЛИ: объявление с типом, языки отдельными
+        константами, склейка из кусков — всё это одна и та же таблица, а правило,
+        знавшее одно `MSG = {...}` в теле модуля, на любой из этих форм переставало
+        сверять языки и молчало об этом.
+        """
+        vals = _Values(source)
+        for node in ast.walk(vals.tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+            elif isinstance(node, ast.AnnAssign):
+                target = node.target
+            else:
+                continue
+            if isinstance(target, ast.Name) and target.id == "MSG":
+                return vals.literal(node.value)
         raise AssertionError("в исходнике нет таблицы MSG — правило смотрит не туда")
 
     @staticmethod
@@ -4569,7 +4724,7 @@ class GateCoverageTest(unittest.TestCase):
 
 
 class UnknownGateSpelling(Exception):
-    """Строка `cmd_check`, которая что-то делает со списком отказов, а реестр её не понял."""
+    """Строка, которая что-то делает со списком отказов, а реестр её не понял."""
 
 
 # Ворота: где они написаны (первая и последняя строка ЦЕЛОГО оператора — мутация вырезает
@@ -4614,7 +4769,7 @@ def _gate_messages(stmt) -> tuple[str, list]:
 
 
 def _check_gates(source: str | None = None) -> list[Gate]:
-    """Все ворота `cmd_check`.
+    """Все ворота инструмента — ГДЕ БЫ ОНИ НИ БЫЛИ НАПИСАНЫ.
 
     Ключ — это литеральные куски f-строки, склеенные и ужатые по пробелам: он переживает
     правку подставляемых значений и меняется, когда меняется сама формулировка.
@@ -4623,10 +4778,18 @@ def _check_gates(source: str | None = None) -> list[Gate]:
     (`problems.append(why)`), и литералов в нём нет вовсе. Такие ворота названы выражением,
     которое их сообщение порождает: иначе все они делят один пустой ключ, и следующие
     ворота, написанные той же формой, совпадут с уже записанными и пройдут незамеченными.
+
+    Реестр смотрит туда, где список отказов НАПОЛНЯЮТ, а не в одну названную функцию.
+    Пока он обходил только `cmd_check`, очевидное разделение пятисотстрочной команды на
+    части выносило ворота из-под правила целиком: часть, написанная отдельной функцией,
+    которой передают `problems`, не давала ключа, не требовала ни записи, ни теста — и
+    снималась потом при зелёном прогоне. Сегодня такие ворота есть только в `cmd_check`;
+    правило держит и те, которых ещё нет.
     """
-    tree = ast.parse(source if source is not None else TOOL.read_text(encoding="utf-8"))
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == "cmd_check")
+    if source is None:
+        source = TOOL.read_text(encoding="utf-8")
+    vals = _Values(source)
+    tree = vals.tree
 
     def literal(node) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -4638,12 +4801,12 @@ def _check_gates(source: str | None = None) -> list[Gate]:
         return ""
 
     out = []
-    for stmt in ast.walk(fn):
+    for stmt in ast.walk(tree):
         if not isinstance(stmt, ast.stmt):
             continue
         lst, messages = _gate_messages(stmt)
         if not lst:
-            _refuse_unknown_spelling(stmt)
+            _refuse_unknown_spelling(stmt, getattr(vals.scope_of(stmt), "name", "модуль"))
             continue
         for msg in messages:
             key = re.sub(r"\s+", " ", literal(msg)).strip()[:46]
@@ -4670,7 +4833,7 @@ def _own_nodes(stmt) -> list:
     return out
 
 
-def _refuse_unknown_spelling(stmt) -> None:
+def _refuse_unknown_spelling(stmt, where: str = "модуль") -> None:
     """Оператор, который трогает список отказов способом, которого реестр не знает.
 
     Чтение (`if problems:`, `for p in problems`) и заведение списка — не ворота. Всё
@@ -4693,7 +4856,7 @@ def _refuse_unknown_spelling(stmt) -> None:
             touched.append(f"{t.id} = …")
     if touched:
         raise UnknownGateSpelling(
-            f"cmd_check, строка {stmt.lineno}: {', '.join(sorted(set(touched)))} — такой "
+            f"{where}, строка {stmt.lineno}: {', '.join(sorted(set(touched)))} — такой "
             f"формы записи реестр ворот не знает и пропустил бы эти ворота без теста. "
             f"Научите _gate_messages читать её или пишите ворота `problems.append(...)`.")
 
@@ -4705,10 +4868,11 @@ class GateRegistryTest(unittest.TestCase):
     останется зелёным. Список починенных мест такое не держит: следующие ворота напишут
     без теста так же. Здесь ворота перечислены поимённо вместе с тестом, который краснеет
     при их снятии, и правило сверяет список с исходником: новые ворота без записи роняют
-    прогон, запись с несуществующим именем теста — тоже.
+    прогон, запись с несуществующим именем теста — тоже. Исходник берётся весь: ворота
+    ищутся там, где наполняют список отказов, а не в одной названной команде.
     """
 
-    # ворота `cmd_check` → тест, который краснеет, если их заглушить
+    # ворота инструмента → тест, который краснеет, если их заглушить
     GATES = [
         (': no record in state.json — run ` init`', "test_блок_из_определения_без_записи_в_состоянии"),
         (': present in state.json but missing from block', "test_блок_в_состоянии_которого_нет_в_определении"),
@@ -4868,6 +5032,35 @@ def cmd_check(args):
                                  f"ворота, написанные через {how}, реестр не увидел")
                 self.assertEqual([g.lst for g in gates], ["problems"])
 
+    # Ворота живут там, где наполняют список отказов, а не в одной названной команде:
+    # часть, вынесенная из `cmd_check`, — это те же ворота, и без записи в реестре их
+    # можно было бы снять при зелёном прогоне.
+    SPLIT_OUT_GATES = {
+        "часть с чужим списком":
+            'def _reserved_role(defn, problems):\n'
+            '    if defn.get("role") == "__never__":\n'
+            '        problems.append(f"{bid}: role `__never__` is reserved")\n\n'
+            'def cmd_check(args):\n'
+            '    problems = []\n'
+            '    _reserved_role(defn, problems)\n',
+        "часть отдаёт свой список":
+            'def _reserved_role(defn):\n'
+            '    problems = []\n'
+            '    if defn.get("role") == "__never__":\n'
+            '        problems.append(f"{bid}: role `__never__` is reserved")\n'
+            '    return problems\n\n'
+            'def cmd_check(args):\n'
+            '    problems = []\n'
+            '    problems += _reserved_role(defn)\n',
+    }
+
+    def test_ворота_вынесенные_из_команды_видны_реестру(self):
+        for how, source in self.SPLIT_OUT_GATES.items():
+            with self.subTest(форма=how):
+                self.assertIn(": role `__never__` is reserved",
+                              [g.key for g in _check_gates(source)],
+                              f"ворота, вынесенные {how}, реестр не увидел")
+
     def test_незнакомая_форма_записи_отказ_а_не_молчание(self):
         """Обратная сторона: форма, которой реестр не знает, обязана ронять прогон, а не
         проходить как «ворот здесь нет». Молчание здесь — это ворота без теста."""
@@ -5004,43 +5197,58 @@ def _spawns(source: str) -> list[tuple[int, str]]:
     Потомок запускается здесь три десятка раз, и каждый раз — это вопрос «зависит ли
     приговор от машины». Два ответа обязаны быть одинаковыми везде: окружение задаёт
     `child_env`, а интерпретатор — тот же, на котором идёт прогон.
+
+    Запуск узнаётся по тому, ЧТО зовут, а не по тому, как это написали: `subprocess.run`,
+    модуль под псевдонимом, имя, втянутое `from subprocess import run`, — один и тот же
+    потомок. Имя интерпретатора и окружение читаются там, где их собрали.
     """
-    tree = ast.parse(source)
+    vals = _Values(source)
+    tree = vals.tree
+    spawners = ("run", "Popen", "call", "check_output", "check_call")
+
+    # За чем стоит сам модуль и за чем — его порождающие функции.
+    modules, imported = {"subprocess"}, set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {a.asname or a.name for a in node.names if a.name == "subprocess"}
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            imported |= {a.asname or a.name for a in node.names if a.name in spawners}
 
     def is_child_env(node) -> bool:
         return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "child_env")
 
-    # `env=env` — обычная форма, когда одно окружение нужно двум запускам: переменная
-    # годится ровно настолько, насколько годится всё, что в неё когда-либо клали.
-    assigned: dict[str, list] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                if isinstance(t, ast.Name):
-                    assigned.setdefault(t.id, []).append(node.value)
-
     offenders = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "subprocess"
-                and node.func.attr in ("run", "Popen", "call", "check_output", "check_call")):
+        if not isinstance(node, ast.Call):
+            continue
+        by_module = (isinstance(node.func, ast.Attribute) and node.func.attr in spawners
+                     and isinstance(node.func.value, ast.Name)
+                     and node.func.value.id in modules)
+        # Втянутое имя может быть перекрыто своим: `run = lambda ...` в тесте — это не
+        # `subprocess.run`, и требовать от него окружения значило бы требовать пустого.
+        by_name = (isinstance(node.func, ast.Name) and node.func.id in imported
+                   and not vals.lookup(node.func.id, vals.scope_of(node)))
+        if not (by_module or by_name):
             continue
         why = []
         passed = next((k.value for k in node.keywords if k.arg == "env"), None)
         if passed is None:
             why.append("без env=child_env(): локаль и конфиг git достаются от машины")
         elif isinstance(passed, ast.Name):
-            values = assigned.get(passed.id, [])
+            # `env=env` — обычная форма, когда одно окружение нужно двум запускам:
+            # переменная годится ровно настолько, насколько годится всё, что в неё клали.
+            values = vals.lookup(passed.id, vals.scope_of(passed))
             if not values or not all(is_child_env(v) for v in values):
                 why.append(f"env={passed.id}, а он собран не из child_env()")
         elif not is_child_env(passed):
             why.append("env= собран не из child_env()")
-        argv = node.args[0] if node.args else None
-        first = next((e.value for e in getattr(argv, "elts", [])[:1]
-                      if isinstance(e, ast.Constant) and isinstance(e.value, str)), "")
-        if re.fullmatch(r"python[\d.]*", first):
+        head = next(iter(vals.elements(node.args[0]) if node.args else []), None)
+        try:
+            first = vals.literal(head) if head is not None else ""
+        except (ValueError, TypeError, SyntaxError):
+            first = ""
+        if isinstance(first, str) and re.fullmatch(r"python[\d.]*", first):
             why.append(f"`{first}` из PATH вместо sys.executable: прогон на другом "
                        f"интерпретаторе измерил бы не его")
         if why:
@@ -5125,8 +5333,6 @@ class TestSuiteRuleTest(unittest.TestCase):
         out = self._import_suite()
         self.assertEqual(out.returncode, 0, out.stderr[-800:])
         self.assertEqual(out.stderr.strip(), "", "молчаливый импорт обязан быть молчаливым")
-
-
 
 
 class DcoGateTest(unittest.TestCase):
@@ -5449,46 +5655,24 @@ class SourceRuleTest(unittest.TestCase):
 
     @classmethod
     def _nul_offenders(cls, source: str) -> list[tuple[int, list]]:
-        """Вызовы git, которые просят пути и не просят `-z`.
+        """Аргументы git, которые просят пути и не просят `-z`.
 
-        Аргументы собираются ЗА ВЫЗОВ, а не по одному литералу: список склеивают из
-        частей (`[...] + [...]`), копят в переменной (`cmd = [...]; cmd += [...]`) и
-        передают по имени. Пока правило смотрело на один литерал, вынос общей приставки
-        `["git", "-C", str(ROOT)]` в отдельный список ослеплял его целиком — измерено:
-        `-z` в `untracked_files` снимался при зелёном прогоне.
+        Правило смотрит туда, где argv СОБИРАЮТ, а не туда, где его передают: список
+        склеивают из частей, копят в переменной, выносят общую приставку в модульную
+        константу, разворачивают звёздочкой — и отдают не только `subprocess.run`, но и
+        своей обёртке (`log_records`). Пока правило узнавало вызов по `subprocess.<...>`
+        с литеральным списком, любой из этих переносов снимал его целиком: измерено —
+        `-z` уходил из `untracked_files` при зелёном прогоне.
         """
-        tree = ast.parse(source)
-
-        def strings(node) -> list[str]:
-            if isinstance(node, (ast.List, ast.Tuple)):
-                return [e.value for e in node.elts
-                        if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                return strings(node.left) + strings(node.right)
-            return []
-
+        vals = _Values(source)
         offenders = []
-        for fn in ast.walk(tree):
-            if not isinstance(fn, ast.FunctionDef):
+        for lineno, elements in vals.built_lists():
+            items = [e.value for e in elements
+                     if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            if "git" not in items or not any(a in items for a in cls.ASKS_FOR_NAMES):
                 continue
-            # всё, что за жизнь функции попадало в каждую переменную-список
-            kept: dict[str, list[str]] = {}
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
-                    kept.setdefault(node.targets[0].id, []).extend(strings(node.value))
-                elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
-                    kept.setdefault(node.target.id, []).extend(strings(node.value))
-            for node in ast.walk(fn):
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                        and isinstance(node.func.value, ast.Name)
-                        and node.func.value.id == "subprocess" and node.args):
-                    continue
-                argv = node.args[0]
-                items = kept.get(argv.id, []) if isinstance(argv, ast.Name) else strings(argv)
-                if "git" not in items or not any(a in items for a in cls.ASKS_FOR_NAMES):
-                    continue
-                if "-z" not in items:
-                    offenders.append((node.lineno, items))
+            if "-z" not in items:
+                offenders.append((lineno, items))
         return offenders
 
     def test_список_путей_у_git_всегда_запрашивается_NUL_разделённым(self):
@@ -5645,19 +5829,20 @@ def report_sections(md):
     def _log_mark_offenders(cls, source: str) -> list[tuple[str, int]]:
         """Кто читает маркер записей `git log` сам, мимо `log_records`.
 
-        Маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно.
+        Маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно. Постановка узнаётся
+        по тому, КУДА уходит значение, а не по тому, какой формой строку написали:
+        f-строка, склейка, собранный заранее кусок формата — всё это постановка, и
+        правило, знавшее одну f-строку, краснело бы на любой из остальных, а на второй
+        разбор потока при этом не смотрело.
         """
-        tree = ast.parse(source)
-        placed = {n.lineno for n in ast.walk(tree)
-                  if isinstance(n, ast.JoinedStr) and "--format=" in "".join(
-                      v.value for v in n.values if isinstance(v, ast.Constant))}
+        vals = _Values(source)
         offenders = []
-        for fn in ast.walk(tree):
+        for fn in ast.walk(vals.tree):
             if not isinstance(fn, ast.FunctionDef) or fn.name == "log_records":
                 continue
             offenders += [(fn.name, n.lineno) for n in ast.walk(fn)
                           if isinstance(n, ast.Name) and n.id == "LOG_MARK"
-                          and n.lineno not in placed]
+                          and not vals.flows_into(n, "--format=")]
         return offenders
 
     def test_записи_коммитов_разбираются_одним_местом(self):
@@ -5695,10 +5880,14 @@ def report_sections(md):
         естественная запись выведенного предела, а `A_MAX, B_MAX = 12, 34` — обычная
         запись пары, заведённой разом. Пока правило смотрело только на
         `ИМЯ = <константа>`, обе формы проходили мимо него — измерено.
+
+        Порог ищется во ВСЁМ модуле, а не в его верхнем уровне: константа, переехавшая
+        внутрь единственной функции, которая ей пользуется, объяснения требует ровно
+        того же.
         """
         lines = source.splitlines()
         bare = []
-        for node in ast.parse(source).body:
+        for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Assign):
                 targets = node.targets
             elif isinstance(node, ast.AnnAssign):
@@ -5716,7 +5905,7 @@ def report_sections(md):
                 continue
             # комментарий может стоять над группой констант, а не над каждой
             i = node.lineno - 2
-            while i >= 0 and re.match(r"^[A-Z_][A-Z_0-9, ]*\s*[:=]", lines[i]):
+            while i >= 0 and re.match(r"^[A-Z_][A-Z_0-9, ]*\s*[:=]", lines[i].lstrip()):
                 i -= 1
             if i < 0 or not lines[i].lstrip().startswith("#"):
                 bare += names
@@ -5733,9 +5922,15 @@ def report_sections(md):
     SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__")
 
     @classmethod
-    def _rules_without_samples(cls, source: str) -> tuple[list[str], list[str]]:
-        """(правила, написанные прямо в тесте; правила, прогнанные только на исходнике)."""
-        tree = ast.parse(source)
+    def _rules_without_samples(cls, source: str) -> tuple[list[str], list[str], list[str]]:
+        """(правила прямо в тесте; правила без выдуманного образца; правила по исходнику).
+
+        Исходник узнаётся и тогда, когда его передали через переменную: `src = self.SOURCE`
+        — тот же настоящий исходник, и правило, прогнанное только на нём, остаётся
+        недоказанным, как бы ни назвали переменную по дороге.
+        """
+        vals = _Values(source)
+        tree = vals.tree
         reads_tool = {fn.name for fn in ast.walk(tree)
                       if isinstance(fn, ast.FunctionDef) and "TOOL.read_text" in ast.unparse(fn)}
         inline, over_source, over_invented = [], set(), set()
@@ -5745,7 +5940,7 @@ def report_sections(md):
             for node in ast.walk(fn):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                         and node.func.attr in ("parse", "walk") and node.args
-                        and any(m in ast.unparse(node.args[0]) for m in cls.SOURCE_MARKS)):
+                        and any(m in vals.text(node.args[0]) for m in cls.SOURCE_MARKS)):
                     inline.append(fn.name)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -5754,16 +5949,17 @@ def report_sections(md):
                     else getattr(node.func, "id", ""))
             if not name.startswith("_"):
                 continue
-            args = " ".join(ast.unparse(a) for a in node.args)
+            args = " ".join(vals.text(a) for a in node.args)
             if any(m in args for m in cls.SOURCE_MARKS) or (not node.args and name in reads_tool):
                 over_source.add(name)
             elif node.args:
                 over_invented.add(name)
-        return sorted(set(inline)), sorted(over_source - over_invented)
+        return sorted(set(inline)), sorted(over_source - over_invented), sorted(over_source)
 
     def test_у_каждого_правила_по_исходнику_есть_выдуманный_образец(self):
         """УЗДА КЛАССА «узда, написанная под одну форму записи»."""
-        inline, lonely = self._rules_without_samples(Path(__file__).read_text(encoding="utf-8"))
+        inline, lonely, _ = self._rules_without_samples(
+            Path(__file__).read_text(encoding="utf-8"))
         self.assertEqual(
             inline, [],
             "правило по исходнику написано прямо в тесте: вынесите его в функцию, иначе "
@@ -5781,6 +5977,10 @@ def report_sections(md):
         "правило без выдуманного образца": (
             "class R:\n    def test_x(self):\n"
             "        self.assertEqual(_new_rule(self.SOURCE), [])\n", 1),
+        "исходник передан через переменную": (
+            "class R:\n    def test_x(self):\n"
+            "        src = self.SOURCE\n"
+            "        self.assertEqual(_new_rule(src), [])\n", 1),
     }
 
     def test_узда_видит_правило_которое_никто_не_кормил(self):
@@ -5791,7 +5991,7 @@ def report_sections(md):
         good = (self.RULE_SHAPES["правило без выдуманного образца"][0]
                 + '    def test_y(self):\n'
                   '        self.assertNotEqual(_new_rule("def f(): pass"), [])\n')
-        self.assertEqual(self._rules_without_samples(good), ([], []),
+        self.assertEqual(self._rules_without_samples(good)[:2], ([], []),
                          "узда придирается к правилу, у которого образец есть")
 
     # Спрашивающие git по pathspec. Образец приходит из blocks.json и зовётся `spec` или
@@ -5806,14 +6006,18 @@ def report_sections(md):
         `[id]` — класс символов: несуществующий `app/[i]/page.tsx` совпадает с живым
         соседом `app/i/page.tsx`, и «файл есть» становится правдой без файла. Три места
         спрашивали так (`file_sha`, узда, `--fixed-in`) — класс закрывается правилом.
+
+        Аргумент читается там, где его собрали: имя в переменной, кортеж, склейка —
+        всё это тот же вопрос к git, и правило, знавшее только литеральный список,
+        не видело ни одной из этих форм.
         """
+        vals = _Values(source)
         offenders = []
-        for node in ast.walk(ast.parse(source)):
+        for node in ast.walk(vals.tree):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id in cls.PATHSPEC_CALLS and node.args
-                    and isinstance(node.args[0], ast.List)):
+                    and node.func.id in cls.PATHSPEC_CALLS and node.args):
                 continue
-            for el in node.args[0].elts:
+            for el in vals.elements(node.args[0]):
                 text = ast.unparse(el)
                 if ":(literal)" in text or any(p in text for p in cls.PATTERN_NAMES):
                     continue
@@ -5858,6 +6062,625 @@ def report_sections(md):
         self.assertEqual(self._bare_numbers('NAMES = ("critical", "high")\n'), [],
                          "источник спрашивают у чисел, а не у словарей")
 
+
+# ── Мутации узд по исходнику ────────────────────────────────────────────────────────
+#
+# Выдуманный образец доказывает ровно то, что сумел вообразить автор правила, — и три
+# круга подряд воображения не хватало: каждый раз находилась форма записи, которой правило
+# не видело, и ответом было «допишем ещё одну ветку». Поэтому каждое правило прогоняется
+# ещё и на НАСТОЯЩЕМ исходнике, переписанном правдоподобно и испорченном нарочно, — так
+# же, как `GateMutationTest` прогоняет ворота: приговор правила обязан зависеть от того,
+# ЧТО код делает, и не зависеть от того, КАК он написан.
+
+
+class _Rewrite(ast.NodeTransformer):
+    """Подмена узлов по тождеству: мутатор находит узлы, оснастка их заменяет."""
+
+    def __init__(self, table: dict) -> None:
+        self.table = table
+
+    def visit(self, node):
+        swapped = self.table.get(id(node))
+        return swapped if swapped is not None else super().visit(node)
+
+
+def _rewritten(vals: _Values, table: dict | None = None,
+               hoisted: list | None = None, local: dict | None = None) -> str:
+    """Дерево обратно в текст: замены, вставки в функции и новые определения модуля."""
+    tree = _Rewrite(table or {}).visit(vals.tree)
+    top = list(hoisted or [])
+    for holder, stmts in (local or {}).items():
+        if isinstance(holder, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            holder.body[:0] = stmts
+        else:
+            top += stmts
+    if top:
+        # `from __future__ import annotations` обязан остаться первым оператором модуля
+        after = 0
+        while after < len(tree.body) and (
+                isinstance(tree.body[after], (ast.Import, ast.ImportFrom))
+                or (isinstance(tree.body[after], ast.Expr)
+                    and isinstance(tree.body[after].value, ast.Constant))):
+            after += 1
+        tree.body[after:after] = top
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
+def _reparsed(source: str) -> str:
+    """Тот же модуль, пропущенный через дерево, — контроль самой оснастки."""
+    return ast.unparse(ast.parse(source))
+
+
+def _put(vals: _Values, near, stmt, hoisted: list, local: dict) -> None:
+    """Новый оператор — в функцию, где живёт `near`, или в модуль, если её нет."""
+    scope = vals.scope_of(near)
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        local.setdefault(scope, []).append(stmt)
+    else:
+        hoisted.append(stmt)
+
+
+# ── git и NUL ──
+
+
+def _git_argv_literals(tree) -> list:
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.List):
+            continue
+        items = [e.value for e in node.elts
+                 if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if "git" in items and any(a in items for a in SourceRuleTest.ASKS_FOR_NAMES):
+            out.append(node)
+    return out
+
+
+def _git_without_z(source: str) -> str:
+    """ДЕФЕКТ: у git больше не просят NUL-разделённый вывод."""
+    vals = _Values(source)
+    for lst in _git_argv_literals(vals.tree):
+        lst.elts = [e for e in lst.elts
+                    if not (isinstance(e, ast.Constant) and e.value == "-z")]
+    return _rewritten(vals)
+
+
+def _git_prefix_hoisted(source: str, how: str) -> str:
+    """Общая приставка `["git", "-C", str(ROOT)]` вынесена — как её и выносят."""
+    vals = _Values(source)
+    table, hoisted, local = {}, [], {}
+    for n, lst in enumerate(_git_argv_literals(vals.tree)):
+        cut = next(i for i, e in enumerate(lst.elts)
+                   if isinstance(e, ast.Constant) and e.value in SourceRuleTest.ASKS_FOR_NAMES)
+        name = f"_GIT_PREFIX_{n}"
+        if how == "звёздочкой":
+            new = ast.parse(f"[*{name}]").body[0].value
+            new.elts += lst.elts[cut:]
+        else:
+            new = ast.parse(f"{name} + []").body[0].value
+            new.right.elts = lst.elts[cut:]
+        table[id(lst)] = new
+        holder = ast.parse(f"{name} = []").body[0]
+        holder.value.elts = lst.elts[:cut]
+        if how == "приставка в функции":
+            _put(vals, lst, holder, hoisted, local)
+        else:
+            hoisted.append(holder)
+    return _rewritten(vals, table, hoisted, local)
+
+
+# ── имя файла как pathspec ──
+
+
+def _pathspec_calls(tree) -> list:
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id in SourceRuleTest.PATHSPEC_CALLS and n.args
+            and isinstance(n.args[0], ast.List) and n.args[0].elts]
+
+
+def _pathspec_without_literal(source: str) -> str:
+    """ДЕФЕКТ: имя файла уходит к git образцом, и `[handle]` в нём — класс символов."""
+    vals = _Values(source)
+    for call in _pathspec_calls(vals.tree):
+        for part in ast.walk(call.args[0]):
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                part.value = part.value.replace(":(literal)", "")
+    return _rewritten(vals)
+
+
+def _pathspec_respelled(source: str, how: str) -> str:
+    vals = _Values(source)
+    table, hoisted, local = {}, [], {}
+    for n, call in enumerate(_pathspec_calls(vals.tree)):
+        arg = call.args[0]
+        if how == "кортежем":
+            table[id(arg)] = ast.Tuple(elts=list(arg.elts), ctx=ast.Load())
+        elif how == "склейкой":
+            new = ast.parse("[] + []").body[0].value
+            new.right.elts = list(arg.elts)
+            table[id(arg)] = new
+        else:
+            name = f"_WANT_{n}"
+            holder = ast.parse(f"{name} = []").body[0]
+            holder.value.elts = list(arg.elts)
+            _put(vals, call, holder, hoisted, local)
+            table[id(arg)] = ast.Name(id=name, ctx=ast.Load())
+    return _rewritten(vals, table, hoisted, local)
+
+
+# ── реестр ворот ──
+
+
+def _gate_statements(tree) -> list:
+    return [n for n in ast.walk(tree) if isinstance(n, ast.stmt) and _gate_messages(n)[0]]
+
+
+def _gate_removed(source: str) -> str:
+    """ДЕФЕКТ: одних ворот больше нет — их ключ обязан пропасть из реестра."""
+    vals = _Values(source)
+    return _rewritten(vals, {id(_gate_statements(vals.tree)[0]): ast.Pass()})
+
+
+def _gates_split_out(source: str, how: str) -> str:
+    """`cmd_check` в пятьсот строк разобран на части — очевидный следующий шаг."""
+    vals = _Values(source)
+    table, hoisted, local = {}, [], {}
+    for n, stmt in enumerate(_gate_statements(vals.tree)):
+        name = f"_gate_{n}"
+        if how == "часть отдаёт свой список":
+            helper = ast.parse(f"def {name}():\n"
+                               f"    problems = []\n"
+                               f"    return problems\n").body[0]
+            helper.body.insert(1, stmt)
+            table[id(stmt)] = ast.parse(f"problems += {name}()").body[0]
+        else:
+            helper = ast.parse(f"def {name}(problems, warnings):\n    pass\n").body[0]
+            helper.body = [stmt]
+            table[id(stmt)] = ast.parse(f"{name}(problems, warnings)").body[0]
+        if how == "часть внутри команды":
+            _put(vals, stmt, helper, hoisted, local)
+        else:
+            hoisted.append(helper)
+    return _rewritten(vals, table, hoisted, local)
+
+
+# ── пороги ──
+
+
+def _simple_const(line: str) -> bool:
+    """Константа модуля, записанная целиком в одну строку."""
+    if not re.match(r"^[A-Z_][A-Z_0-9]*\s*(:[^=]+)?=", line):
+        return False
+    return all(line.count(a) == line.count(b) for a, b in ("()", "[]", "{}")) \
+        and not line.rstrip().endswith("\\")
+
+
+def _threshold_unexplained(source: str) -> str:
+    """ДЕФЕКТ: у порога нет ни замера, ни ссылки."""
+    return source.rstrip("\n") + "\n\n\nSPOILED_LIMIT = 42\n"
+
+
+def _thresholds_respelled(source: str, how: str) -> str:
+    out = []
+    for line in source.split("\n"):
+        m = re.match(r"^([A-Z_][A-Z_0-9]*)( *: *[\w\[\], .]+)? = (.+)$", line)
+        value, sep, tail = (m.group(3), "", "") if m else ("", "", "")
+        if m and "  #" in value:
+            value, sep, tail = value.partition("  #")
+        if not m or not re.fullmatch(r"-?\d+", value.strip()):
+            out.append(line)
+        elif how == "число выражением":
+            out.append(f"{m.group(1)}{m.group(2) or ''} = ({value.strip()}) + 0{sep}{tail}")
+        else:
+            out.append(f"{m.group(1)}: int = {value.strip()}{sep}{tail}")
+    return "\n".join(out)
+
+
+def _thresholds_in_a_function(source: str) -> str:
+    """Порог переехал внутрь функции, которая им одна и пользуется."""
+    lines, out, n = source.split("\n"), [], 0
+    i = 0
+    while i < len(lines):
+        if not _simple_const(lines[i]):
+            out.append(lines[i])
+            i += 1
+            continue
+        start = i
+        while i < len(lines) and _simple_const(lines[i]):
+            i += 1
+        block = lines[start:i]
+        while out and out[-1].lstrip().startswith("#"):
+            block.insert(0, out.pop())
+        n += 1
+        out.append(f"def _thresholds_{n}():")
+        out += ["    " + ln if ln.strip() else ln for ln in block]
+    return "\n".join(out)
+
+
+# ── разбор потока `git log` ──
+
+
+def _second_log_parser(source: str) -> str:
+    """ДЕФЕКТ: поток `git log -z` разбирают ещё раз, своими руками."""
+    return source.rstrip("\n") + ("\n\n\ndef churn_records(out):\n"
+                                  "    return [rec for rec in out.split(LOG_MARK) if rec]\n")
+
+
+def _format_respelled(source: str, how: str) -> str:
+    """Строку `--format=` пишут не только f-строкой."""
+    vals = _Values(source)
+    table, hoisted, local = {}, [], {}
+    marks = [n for n in ast.walk(vals.tree)
+             if isinstance(n, ast.JoinedStr)
+             and any(isinstance(v, ast.Constant) and "--format=" in v.value
+                     for v in n.values)]
+    for n, node in enumerate(marks):
+        parts = [v if isinstance(v, ast.Constant) else v.value for v in node.values]
+        if how == "склейкой":
+            new = parts[0]
+            for part in parts[1:]:
+                new = ast.BinOp(left=new, op=ast.Add(), right=part)
+            table[id(node)] = new
+            continue
+        name = f"_fmt_{n}"
+        tail = parts[1]
+        for part in parts[2:]:
+            tail = ast.BinOp(left=tail, op=ast.Add(), right=part)
+        holder = ast.parse(f"{name} = None").body[0]
+        holder.value = tail
+        _put(vals, node, holder, hoisted, local)
+        table[id(node)] = ast.parse(f'f"--format={{{name}}}"').body[0].value
+    return _rewritten(vals, table, hoisted, local)
+
+
+# ── распознавание цитаты ──
+
+
+def _deaf_report_parser(source: str) -> str:
+    """ДЕФЕКТ: разметку отчёта разбирают, не спросив общий трекер цитаты."""
+    return source.rstrip("\n") + (
+        "\n\n\ndef limits_lines(md):\n"
+        "    return [line for line in md.split(chr(10)) if line.startswith('#')]\n")
+
+
+def _tracker_via_relay(source: str) -> str:
+    """Трекер цитаты зовут через посредника — разбор всё равно его спросил."""
+    vals = _Values(source)
+    table, hoisted = {}, []
+    used = set()
+    for node in ast.walk(vals.tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in SourceRuleTest.QUOTE_TRACKERS):
+            relay = f"_relay_{node.func.id}"
+            table[id(node.func)] = ast.Name(id=relay, ctx=ast.Load())
+            used.add((relay, node.func.id))
+    for relay, tracker in sorted(used):
+        hoisted.append(ast.parse(f"def {relay}(*args):\n"
+                                 f"    return {tracker}(*args)\n").body[0])
+    return _rewritten(vals, table, hoisted)
+
+
+# ── таблицы сообщений ──
+
+
+def _msg_assign(tree):
+    for node in ast.walk(tree):
+        target = (node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1
+                  else node.target if isinstance(node, ast.AnnAssign) else None)
+        if isinstance(target, ast.Name) and target.id == "MSG":
+            return node
+    return None
+
+
+def _msg_key_dropped(source: str) -> str:
+    """ДЕФЕКТ: перевод потерян — ключ есть на одном языке и нет на другом."""
+    vals = _Values(source)
+    table = _msg_assign(vals.tree).value
+    for key, value in zip(table.keys, table.values):
+        if isinstance(key, ast.Constant) and key.value == "ru":
+            value.keys, value.values = value.keys[1:], value.values[1:]
+    return _rewritten(vals)
+
+
+def _msg_respelled(source: str, how: str) -> str:
+    vals = _Values(source)
+    hoisted, table = [], {}
+    node = _msg_assign(vals.tree)
+    if how == "объявление с типом":
+        new = ast.parse("MSG: dict = {}").body[0]
+        new.value = node.value
+        table[id(node)] = new
+        return _rewritten(vals, table)
+    for key, value in zip(node.value.keys, node.value.values):
+        name = f"_MSG_{key.value.upper()}"
+        holder = ast.parse(f"{name} = None").body[0]
+        holder.value = value
+        hoisted.append(holder)
+        table[id(value)] = ast.Name(id=name, ctx=ast.Load())
+    return _rewritten(vals, table, hoisted)
+
+
+# ── поля записи реестра ──
+
+
+def _unknown_field_read(source: str) -> str:
+    """ДЕФЕКТ: у находки появилось поле, о котором не знает ни один шаблон роли."""
+    return source.rstrip("\n") + ('\n\n\ndef finding_note(f) -> str:\n'
+                                  '    return f.get("verdict_note") or ""\n')
+
+
+def _record_renamed(source: str) -> str:
+    """Запись реестра зовут не `f`, а по-человечески."""
+    vals = _Values(source)
+    for node in ast.walk(vals.tree):
+        if isinstance(node, ast.Name) and node.id == "f":
+            node.id = "record"
+        elif isinstance(node, ast.arg) and node.arg == "f":
+            node.arg = "record"
+    return _rewritten(vals)
+
+
+# ── запуск потомков в наборе ──
+
+
+def _spawn_without_env(source: str) -> str:
+    """ДЕФЕКТ: потомок берёт локаль и конфиг git у машины, а python — из PATH."""
+    return source.rstrip("\n") + ('\n\n\ndef _probe_version():\n'
+                                  '    return subprocess.run(["python3", "-V"], text=True)\n')
+
+
+def _subprocess_respelled(source: str, how: str) -> str:
+    vals = _Values(source)
+    table, hoisted = {}, []
+    if how == "модуль под псевдонимом":
+        for node in ast.walk(vals.tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "subprocess":
+                        alias.asname = "sp"
+            elif isinstance(node, ast.Name) and node.id == "subprocess":
+                node.id = "sp"
+        return _rewritten(vals)
+    if how == "имя втянуто из модуля":
+        for node in ast.walk(vals.tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "subprocess"):
+                table[id(node.func)] = ast.Name(id=node.func.attr, ctx=ast.Load())
+        hoisted.append(ast.parse("from subprocess import CalledProcessError, PIPE, Popen, "
+                                 "TimeoutExpired, call, check_call, check_output, run"
+                                 ).body[0])
+        return _rewritten(vals, table, hoisted)
+    for node in ast.walk(vals.tree):
+        if isinstance(node, ast.Constant) and node.value == "python3":
+            table[id(node)] = ast.Name(id="_PY", ctx=ast.Load())
+    hoisted.append(ast.parse('_PY = "python3"').body[0])
+    return _rewritten(vals, table, hoisted)
+
+
+# ── правила без выдуманного образца ──
+
+
+def _rule_inline_in_a_test(source: str) -> str:
+    """ДЕФЕКТ: правило по исходнику написано прямо в тесте — покормить его нечем."""
+    return source.rstrip("\n") + (
+        "\n\n\nclass _InlineRuleTest(unittest.TestCase):\n"
+        "    def test_правило_написано_прямо_в_тесте(self):\n"
+        "        for node in ast.walk(ast.parse(self.SOURCE)):\n"
+        "            self.assertIsNotNone(node)\n")
+
+
+def _source_through_a_variable(source: str) -> str:
+    """Исходник доехал до правила через модульную переменную, а не прямо из чтения файла."""
+    vals = _Values(source)
+    table, hoisted = {}, []
+    seen = 0
+    for node in ast.walk(vals.tree):
+        if not (isinstance(node, ast.Call) and node.args):
+            continue
+        arg = node.args[0]
+        if isinstance(arg, ast.Name) or not any(
+                m in ast.unparse(arg) for m in SourceRuleTest.SOURCE_MARKS):
+            continue
+        seen += 1
+        name = f"_src_{seen}"
+        holder = ast.parse(f"{name} = None").body[0]
+        holder.value = arg
+        hoisted.append(holder)
+        table[id(arg)] = ast.Name(id=name, ctx=ast.Load())
+    return _rewritten(vals, table, hoisted)
+
+
+# ── приговоры правил: один список строк, пустой на честном исходнике ──
+
+
+def _v_nul(source: str) -> list[str]:
+    return sorted({" ".join(items) for _, items in SourceRuleTest._nul_offenders(source)})
+
+
+def _v_pathspec(source: str) -> list[str]:
+    return sorted({text for _, text in SourceRuleTest._name_as_pattern(source)})
+
+
+def _v_gates(source: str) -> list[str]:
+    """Ключи ворот, которые ПРОПАЛИ по сравнению с честным инструментом."""
+    was = collections.Counter(g.key for g in _check_gates())
+    now = collections.Counter(g.key for g in _check_gates(source))
+    return sorted((was - now).elements())
+
+
+def _v_numbers(source: str) -> list[str]:
+    return sorted(set(SourceRuleTest._bare_numbers(source)))
+
+
+def _v_log_mark(source: str) -> list[str]:
+    return sorted({name for name, _ in SourceRuleTest._log_mark_offenders(source)})
+
+
+def _v_quotes(source: str) -> list[str]:
+    strangers, deaf = SourceRuleTest._quote_offenders(SourceRuleTest, source)
+    return sorted([f"свой детектор: {name}" for name, _ in strangers]
+                  + [f"без трекера: {name}" for name in deaf])
+
+
+def _v_msg(source: str) -> list[str]:
+    return sorted(LanguageTest._msg_mismatch(LanguageTest._msg_tables(source)))
+
+
+def _v_fields(source: str) -> list[str]:
+    known = TemplateContractTest.TOOL_FIELDS | TemplateContractTest.AGENT_FIELDS
+    return sorted(TemplateContractTest._register_fields(source) - known)
+
+
+def _v_spawns(source: str) -> list[str]:
+    return sorted({why for _, why in _spawns(source)})
+
+
+def _v_samples(source: str) -> list[str]:
+    """Заодно и потеря правила из виду: узда, переставшая замечать, что правилу дают
+    настоящий исходник, молча выводит его из-под собственной таблицы мутаций."""
+    inline, lonely, reading = SourceRuleTest._rules_without_samples(source)
+    return sorted([f"в тесте: {name}" for name in inline]
+                  + [f"без образца: {name}" for name in lonely]
+                  + [f"потеряно из виду: {name}"
+                     for name in set(SOURCE_MUTATIONS) - set(reading)])
+
+
+# Что доказывается мутациями: приговор правила, дефект и правдоподобные переписывания,
+# от которых приговор меняться НЕ имеет права. `suite` — правило читает не инструмент,
+# а сам набор.
+Mutated = collections.namedtuple("Mutated", "verdict spoil respellings suite")
+
+SOURCE_MUTATIONS = {
+    "_nul_offenders": Mutated(_v_nul, _git_without_z, {
+        "как написано": _reparsed,
+        "приставка в модуле": lambda s: _git_prefix_hoisted(s, "приставка в модуле"),
+        "приставка в функции": lambda s: _git_prefix_hoisted(s, "приставка в функции"),
+        "звёздочкой": lambda s: _git_prefix_hoisted(s, "звёздочкой"),
+    }, False),
+    "_name_as_pattern": Mutated(_v_pathspec, _pathspec_without_literal, {
+        "как написано": _reparsed,
+        "имя в переменной": lambda s: _pathspec_respelled(s, "имя в переменной"),
+        "кортежем": lambda s: _pathspec_respelled(s, "кортежем"),
+        "склейкой": lambda s: _pathspec_respelled(s, "склейкой"),
+    }, False),
+    "_check_gates": Mutated(_v_gates, _gate_removed, {
+        "как написано": _reparsed,
+        "часть с чужим списком": lambda s: _gates_split_out(s, "часть с чужим списком"),
+        "часть отдаёт свой список": lambda s: _gates_split_out(s, "часть отдаёт свой список"),
+        "часть внутри команды": lambda s: _gates_split_out(s, "часть внутри команды"),
+    }, False),
+    "_bare_numbers": Mutated(_v_numbers, _threshold_unexplained, {
+        "как написано": lambda s: s,
+        "число выражением": lambda s: _thresholds_respelled(s, "число выражением"),
+        "объявление с типом": lambda s: _thresholds_respelled(s, "объявление с типом"),
+        "порог внутри функции": _thresholds_in_a_function,
+    }, False),
+    "_log_mark_offenders": Mutated(_v_log_mark, _second_log_parser, {
+        "как написано": _reparsed,
+        "формат склейкой": lambda s: _format_respelled(s, "склейкой"),
+        "формат собран заранее": lambda s: _format_respelled(s, "заранее"),
+    }, False),
+    "_quote_offenders": Mutated(_v_quotes, _deaf_report_parser, {
+        "как написано": _reparsed,
+        "трекер через посредника": _tracker_via_relay,
+    }, False),
+    "_msg_tables": Mutated(_v_msg, _msg_key_dropped, {
+        "как написано": _reparsed,
+        "объявление с типом": lambda s: _msg_respelled(s, "объявление с типом"),
+        "языки отдельными константами": lambda s: _msg_respelled(s, "отдельными"),
+    }, False),
+    "_register_fields": Mutated(_v_fields, _unknown_field_read, {
+        "как написано": _reparsed,
+        "запись зовут иначе": _record_renamed,
+    }, False),
+    "_spawns": Mutated(_v_spawns, _spawn_without_env, {
+        "как написано": _reparsed,
+        "модуль под псевдонимом": lambda s: _subprocess_respelled(s, "модуль под псевдонимом"),
+        "имя втянуто из модуля": lambda s: _subprocess_respelled(s, "имя втянуто из модуля"),
+        "интерпретатор в переменной": lambda s: _subprocess_respelled(s, "в переменной"),
+    }, True),
+    "_rules_without_samples": Mutated(_v_samples, _rule_inline_in_a_test, {
+        "как написано": _reparsed,
+        "исходник через переменную": _source_through_a_variable,
+    }, True),
+}
+
+
+class SourceMutationTest(unittest.TestCase):
+    """УЗДА КЛАССА «узда, написанная под одну форму записи» — мутациями, а не списком.
+
+    Корень блока пережил два круга починок: правило по исходнику расширяли ещё на одну
+    форму записи, находилась следующая, и «починено» держалось ровно до неё. Список форм
+    здесь не поможет — их всегда на одну больше, чем вообразил автор. Поэтому доказывать
+    правило надо тем же способом, каким `GateMutationTest` доказывает ворота: на нарочно
+    испорченном НАСТОЯЩЕМ исходнике.
+
+    Каждое правило прогоняется четырежды в каждой форме записи:
+
+    * на честном исходнике — обязано молчать (иначе «покраснело» ничего не значит);
+    * на честном ПЕРЕПИСАННОМ — обязано молчать (иначе правило запрещает переносы);
+    * на испорченном — обязано говорить;
+    * на испорченном И переписанном — обязано говорить ТО ЖЕ САМОЕ.
+
+    Последнее и есть проверяемое свойство: приговор зависит от того, что код делает, и
+    не зависит от того, как он написан.
+    """
+
+    # Не правила: общий разрешатель значений, на котором стоят все правила ниже (его
+    # доказывает каждая таблица разом), и сверка уже РАЗОБРАННОЙ таблицы — ей скармливают
+    # не исходник, а словарь.
+    NOT_RULES = {"_Values", "_msg_mismatch"}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.TOOL_SOURCE = TOOL.read_text(encoding="utf-8")
+        cls.SUITE_SOURCE = Path(__file__).read_text(encoding="utf-8")
+
+    def _clean(self, rule) -> str:
+        return self.SUITE_SOURCE if rule.suite else self.TOOL_SOURCE
+
+    def test_каждое_правило_по_исходнику_доказано_мутацией(self):
+        for name, rule in SOURCE_MUTATIONS.items():
+            clean = self._clean(rule)
+            with self.subTest(узда=name):
+                self.assertEqual(rule.verdict(clean), [],
+                                 "контроль: на честном исходнике правило обязано молчать")
+                wounded = rule.verdict(rule.spoil(clean))
+                self.assertNotEqual(
+                    wounded, [],
+                    "правило не увидело дефекта даже там, где он написан прямо: "
+                    "мутация не воспроизводит то, ради чего правило написано")
+                for how, respell in rule.respellings.items():
+                    with self.subTest(форма=how):
+                        self.assertEqual(
+                            rule.verdict(respell(clean)), [],
+                            "правило придирается к переписанному, но ЧЕСТНОМУ исходнику: "
+                            "оно запрещает перенос, а не дефект")
+                        self.assertEqual(
+                            rule.verdict(respell(rule.spoil(clean))), wounded,
+                            "правило не увидело тот же дефект, записанный иначе: "
+                            "смотрите туда, где значение собирают, а не туда, где его "
+                            "написали — ещё одна ветка `isinstance` кончится так же")
+
+    def test_у_каждого_правила_по_исходнику_есть_таблица_мутаций(self):
+        """Узда самой узды: новое правило по исходнику обязано попасть в таблицу.
+
+        Иначе следующее правило снова будет доказано только выдуманным образцом — тем
+        самым способом, которого хватило на два круга и не хватило на третий.
+        """
+        reading = SourceRuleTest._rules_without_samples(self.SUITE_SOURCE)[2]
+        missing = sorted(set(reading) - set(SOURCE_MUTATIONS) - self.NOT_RULES)
+        self.assertEqual(
+            missing, [],
+            "правило по исходнику без таблицы мутаций: впишите его в SOURCE_MUTATIONS — "
+            "приговор, дефект и правдоподобные переписывания, — иначе оно доказано только "
+            "тем, что сумел вообразить его автор")
+        stale = sorted(set(SOURCE_MUTATIONS) - set(reading))
+        self.assertEqual(stale, [],
+                         "в таблице мутаций правило, которому больше не дают настоящий "
+                         "исходник: сверьте таблицу с тем, что осталось")
 
 
 class QuotationMapTest(unittest.TestCase):
@@ -6067,12 +6890,22 @@ class TemplateContractTest(unittest.TestCase):
     ROLES = ("hunter", "verify", "fix", "fixreview")
     LANGS = ("", "ru")
 
-    @staticmethod
-    def _register_fields(source: str) -> set[str]:
-        """Словарь полей записи реестра — из обращений к находке в исходнике инструмента."""
-        tree = ast.parse(source)
-        holders, out = {"f", "row"}, set()
-        for n in ast.walk(tree):
+    # Поля, которые бывают только у записи реестра: по ним запись и УЗНАЁТСЯ. Имя
+    # переменной для этого не годится — `f` в инструменте это и находка, и путь к файлу,
+    # а переименование `f` → `finding` снимало бы правило целиком и молча.
+    RECORD_MARKS = {"claim", "scenario", "severity", "confidence", "reject_reason",
+                    "defer_reason", "dup_of", "fix_commit", "code_sha", "root"}
+
+    @classmethod
+    def _register_fields(cls, source: str) -> set[str]:
+        """Словарь полей записи реестра — из обращений к находке в исходнике инструмента.
+
+        Запись узнаётся по своим полям: переменная, у которой спрашивают `claim` или
+        `severity`, — это находка, как бы её ни звали, и все прочие поля, которые
+        спрашивают у неё же, тоже поля записи.
+        """
+        accesses = []
+        for n in ast.walk(ast.parse(source)):
             key = base = None
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                     and n.func.attr in ("get", "setdefault")
@@ -6082,9 +6915,10 @@ class TemplateContractTest(unittest.TestCase):
             elif (isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name)
                   and isinstance(n.slice, ast.Constant)):
                 base, key = n.value.id, n.slice.value
-            if base in holders and isinstance(key, str):
-                out.add(key)
-        return out
+            if base is not None and isinstance(key, str):
+                accesses.append((base, key))
+        holders = {base for base, key in accesses if key in cls.RECORD_MARKS}
+        return {key for base, key in accesses if base in holders}
 
     def _templates(self, lang: str) -> dict[str, str]:
         suffix = ".md" if not lang else f".{lang}.md"
@@ -6112,14 +6946,16 @@ class TemplateContractTest(unittest.TestCase):
     def test_словарь_полей_читается_на_выдуманном_исходнике(self):
         """Обе стороны правила на исходнике, которого в инструменте нет: обращение к находке
         любой из трёх форм даёт поле, обращение к чужому словарю — нет."""
-        invented = ('def g(f, row, other):\n'
-                    '    f.get("via_get")\n'
-                    '    row.setdefault("via_setdefault", 1)\n'
-                    '    f["via_subscript"]\n'
+        invented = ('def g(rec, other):\n'
+                    '    rec.get("claim")\n'
+                    '    rec.get("via_get")\n'
+                    '    rec.setdefault("via_setdefault", 1)\n'
+                    '    rec["via_subscript"]\n'
                     '    other.get("not_a_finding")\n'
                     '    other["neither"]\n')
         self.assertEqual(self._register_fields(invented),
-                         {"via_get", "via_setdefault", "via_subscript"})
+                         {"claim", "via_get", "via_setdefault", "via_subscript"},
+                         "запись узнаётся по своим полям, а не по имени переменной")
 
     def test_шаблоны_ролей_есть_на_обоих_языках(self):
         for lang in self.LANGS:
