@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **15** of 140 records.
+Open: **14** of 140 records.
 
 ## high (0 open / 5)
 
@@ -65,7 +65,7 @@ Open: **15** of 140 records.
 | T4-027 | T4 | deferred | `docs/review/findings.jsonl:7` | The round rewrote the rule field of 16 earlier findings; 10 now name a guard green on the finding's own defect, 3 replacing a correct value (fix review round 2, R2-001) |
 | T4-028 | T4 | open | `tests/test_review.py:3309` | BODY_ARGV gives set-finding an id absent from the stand, so it refuses before writing and the write-boundary sweep never reaches its register write (fix review round 2, R2-002) |
 
-## low (12 open / 90)
+## low (11 open / 90)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -119,7 +119,7 @@ Open: **15** of 140 records.
 | T2-015 | T2 | fixed | `skills/finetooth/assets/agent-banner.md:13` | Both banner assets hardcode `make review-status` with no {{CLI}} placeholder, and setup substitutes nothing in them, so a project without a Makefile pastes a dead command into every session |
 | T2-018 | T2 | open | `skills/finetooth/scripts/review.py:197` | The diff_vol message tells a reviewer who cannot hold the diff to take one half through --scope, but --scope does not shrink the diff it is handed (fix review round 1, R1-003) |
 | T2-019 | T2 | open | `tests/test_review.py:6533` | Three new negative tests (deferral without reason, reason only in claim, root from the sample) assert the gate's message in check's stdout, never its exit code (fix review round 1, R1-004) |
-| T2-020 | T2 | open | `CHANGELOG.md:77` | The T2 section's opening paragraph follows the last T4 bullet with no blank line in both CHANGELOGs, so it renders as part of the NOTICE.md bullet (fix review round 1, R1-005) |
+| T2-020 | T2 | duplicate | `CHANGELOG.md:77` | The T2 section's opening paragraph follows the last T4 bullet with no blank line in both CHANGELOGs, so it renders as part of the NOTICE.md bullet (fix review round 1, R1-005) |
 | T2-021 | T2 | open | `skills/finetooth/scripts/review.py:3086` | Two of the four places T2-011 fixed — the deferral refusal's tail in check and SKILL.md's completion sentence — are held by no test, and the register records no rule for T2-011 (fix review round 1, R1-006) |
 | T2-022 | T2 | open | `skills/finetooth/references/verify.md:92` | The verifier's template gets the same whole-block 'read all' file list as the hunter but no {{VOLUME}} reading budget (fix review round 1, R1-007) |
 | T3-005 | T3 | fixed | `tests/test_review.py:3059` | The no-traceback class guard passes one fixed argv to every subcommand; argparse rejects it for 20 of the 23, so their bodies never run and the guard proves nothing about them |
