@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **15** of 131 records.
+Open: **19** of 135 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **15** of 131 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (6 open / 43)
+## medium (8 open / 45)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -55,6 +55,8 @@ Open: **15** of 131 records.
 | T3-002 | T3 | fixed | `tests/test_review.py:3925` | _check_gates matches only `problems.append(x)` on a Name, so a gate written with `+=` or `extend` yields no key, needs no GATES entry and no test, and the registry stays green |
 | T3-003 | T3 | fixed | `tests/test_review.py:4034` | GateRegistryTest checks only that the test named beside a gate exists; nothing ties the two, so a gate registered against any existing test name satisfies the guard with zero coverage |
 | T3-004 | T3 | fixed | `tests/test_review.py:611` | backfill runs once in the whole suite and set-finding over several ids only on the happy path, so neither backfill's idempotence nor set-finding's all-or-nothing is held by a test |
+| T3-016 | T3 | open | `tests/test_review.py:5405` | The widened NUL rule folds `[...] + [...]` but not a hoisted prefix: `G + ["ls-files", ...]` or `[*G, ...]` skips the call before -z is asked for (fix review round 1, R1-001) |
+| T3-017 | T3 | open | `tests/test_review.py:4611` | The gate registry still walks only cmd_check: a gate split into a module-level helper that appends to `problems` gets no key, no UnknownGateSpelling, no test (fix review round 1, R1-002) |
 | T4-001 | T4 | fixed | `skills/finetooth/SKILL.md:4` | The skill's frontmatter still says the base was handed over without a license, which LICENSE and NOTICE.md retired on 24.09.2026 |
 | T4-003 | T4 | fixed | `SECURITY.md:3` | The stated security boundary ('writes to docs/review/', 'sends nothing over the network') is false for `summary` and for assets/run-role.sh |
 | T4-016 | T4 | fixed | `skills/finetooth/scripts/review.py:564` | `init` answers a Python traceback on a blocks.json without the top-level review_id, and the guard test that forbids exactly that stays green |
@@ -63,7 +65,7 @@ Open: **15** of 131 records.
 | T4-021 | T4 | open | `tests/test_review.py:5233` | test_каждые_объявленные_ворота_гоняет_ci matches each CONTRIBUTING command by two anchors anywhere in the workflow text, so CI can stop running the unittest suite with the guard green (fix review round 1, R1-003) |
 | T4-026 | T4 | open | `.github/dco.sh:31` | dco.sh feeds git rev-list through process substitution, so an unresolvable range examines no commits and the script prints 'all commits are signed off' with exit 0 (fix review round 1, R1-008) |
 
-## low (9 open / 83)
+## low (11 open / 85)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -131,6 +133,8 @@ Open: **15** of 131 records.
 | T3-013 | T3 | fixed | `tests/test_review.py:2801` | No fixture path contains a bracket, so the :(literal) prefix in file_sha — there because git-pathspec reads [handle] as a character class — can be deleted with the suite green |
 | T3-014 | T3 | fixed | `tests/test_review.py:4253` | The threshold guard walks only module-level `NAME = <number>`, so a bare threshold written as a BinOp or as a tuple assignment carries no source and the suite stays green |
 | T3-015 | T3 | fixed | `tests/test_review.py:66` | The suite spawns the tool as PATH `python3` in seven places while using sys.executable in five, so running it under another interpreter does not test that interpreter |
+| T3-018 | T3 | open | `tests/test_review.py:39` | The module-level locale refusal is written in Russian and fires exactly where Russian cannot print: stderr falls back to backslashreplace (fix review round 1, R1-003) |
+| T3-019 | T3 | open | `tests/test_review.py:5690` | A new class guard (every source rule in its own function, fed an invented sample) is missing from the fix report and both changelogs, which say three guards (fix review round 1, R1-004) |
 | T4-002 | T4 | fixed | `CHANGELOG.md:40` | NOTICE.md's unqualified promise that road-tested projects are not named is contradicted by CHANGELOG.md:40, which names the owner's own project and one of its paths |
 | T4-004 | T4 | fixed | `README.md:281` | README (en, ru) and AGENTS.md give the suite as 98 scenarios taking about a minute; measured, it is 248 tests in 201 seconds |
 | T4-005 | T4 | fixed | `README.md:457` | README (en, ru) states the coupling shared-node threshold as a fixed six blocks and the mass cutoff as the 95th percentile; the code derives both |
