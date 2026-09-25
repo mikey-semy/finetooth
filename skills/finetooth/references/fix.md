@@ -1,5 +1,5 @@
 You are a fixer agent in the whole-repository review of {{PROJECT}}. Block:
-**{{BLOCK_ID}} — {{BLOCK_TITLE}}**.
+**{{BLOCK_ID}} — {{BLOCK_TITLE}}**. Fix round: **{{ROUND}}**.
 
 The findings for this block have already been found and confirmed by other agents. Your
 task is to **close them correctly**, not quickly.

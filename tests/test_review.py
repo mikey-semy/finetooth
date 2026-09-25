@@ -4814,5 +4814,70 @@ class SetupLanguageTest(unittest.TestCase):
         self.assertNotIn("{{", ru)
 
 
+class DocumentedSurfaceTest(unittest.TestCase):
+    """УЗДА КЛАССА «документация отстала от инструмента».
+
+    Три места сразу: `roots` — вид на класс дефекта, на который опираются ворота про третий
+    экземпляр, — не называли ни сообщения инструмента, ни `SKILL.md`, ни точка входа, и
+    узнать о ней было неоткуда; `--round` у исполнителя был настоящим и недокументированным,
+    из-за чего второй круг затирал отчёт первого, а ревьюер правок того круга смотрел на
+    файл, который никто не писал; сама точка входа не знала ни роли fixreview, ни ворот
+    починки. Список команд берётся из ИСХОДНИКА: команда, которой ещё нет, тоже обязана
+    быть названа.
+    """
+
+    @staticmethod
+    def subcommands() -> list[str]:
+        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+        return sorted({n.args[0].value for n in ast.walk(tree)
+                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                       and n.func.attr == "add_parser" and n.args
+                       and isinstance(n.args[0], ast.Constant)})
+
+    def test_каждая_команда_инструмента_названа_в_skill_md(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        # Названа — значит показана КОМАНДОЙ: слова `version` и `hypotheses` встречаются в
+        # прозе сами по себе, и правило, читающее их как упоминание команды, пропустило бы
+        # обе (измерено на прежнем SKILL.md).
+        missing = [c for c in self.subcommands()
+                   if not re.search(rf"review(?:\.py)?\s+{re.escape(c)}\b", text)]
+        self.assertEqual(
+            missing, [],
+            "команды инструмента, которых нет в SKILL.md: ведущая сессия читает его и точку "
+            "входа — о том, чего там нет, она не узнает ниоткуда")
+
+    def test_точка_входа_знает_про_роли_и_ворота_инструмента(self):
+        """Точку входа `setup` кладёт в проект, и дальше её читают вместо SKILL.md."""
+        for name in ("entry-point.md", "entry-point.ru.md"):
+            text = (SKILL / "assets" / name).read_text(encoding="utf-8")
+            for token in ("fixreview", "--append", "restamp", "backfill", "fix_gate", "deferred"):
+                with self.subTest(file=name, token=token):
+                    self.assertIn(token, text,
+                                  f"{name} не знает про {token} — а `check` про него знает")
+
+    def test_круг_починки_виден_и_в_промпте_и_в_имени_отчёта(self):
+        s = Stand()
+        self.addCleanup(s.cleanup)
+        s.write("src/one.ts", "a\n")
+        s.blocks(paths=["src/one.ts"])
+        s.manifest(hypotheses=1)
+        s.commit()
+        s.run("init")
+        first = s.run("prompt", "H1", "--role", "fix").stdout
+        self.assertIn("H1-demo.fix.md", first)
+        self.assertIn("Круг починки: **1**", first, "исполнитель обязан знать свой круг")
+        second = s.run("prompt", "H1", "--role", "fix", "--round", "2").stdout
+        self.assertIn("H1-demo.fix-2.md", second,
+                      "второй круг обязан писать в свой файл, а не затирать первый")
+        self.assertIn("Круг починки: **2**", second)
+        base = s.git("rev-parse", "HEAD").stdout.strip()
+        s.write("src/one.ts", "a\nfixed\n")
+        s.commit("fix")
+        review = s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD",
+                       "--round", "2").stdout
+        self.assertIn("H1-demo.fix-2.md", review.split("````diff")[0],
+                      "ревьюер правок круга 2 читает отчёт исполнителя того же круга")
+
+
 if __name__ == "__main__":
     unittest.main()
