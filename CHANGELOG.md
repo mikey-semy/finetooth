@@ -23,6 +23,7 @@ with a review already under way.
 
 ### Fixed
 
+- The loop-signal refusal of `prompt --role fix` (and the same `check` warning) is written through the message table like every other message: a Russian review got it in English. Guarded by `LoopSignalTest` in both languages; the English-only text back → the Russian tests red.
 - `run-role.sh`: the hunter may execute (`python3`, `node`, `npm test`, `pytest`, `make`). Three blocks of the kit's own review in a row had their hunter refused `python3`, and a `proof: measured` block was "proven" by reading. The template still forbids changing project files.
 
 The whole-repository review of the kit itself, block T1 (`review.py`, `axes.py`,

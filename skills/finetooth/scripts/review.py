@@ -295,6 +295,7 @@ MSG = {
   "rec_none": "(nothing is recorded against this block yet)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(recorded {date})_",
   "dec_none": "(no human decision is recorded for this block — work by the rules above)",
+  "loop_stop": "loop signal: the top finding lies in the code the previous round wrote — the human decides. {id} ({sev}, {file}:{line}) of fix review round {prev} sits on a line fix round {prev} changed ({diff}); another round would repeat that pattern. Record the decision — a different mechanism, a revert of the class, or closing the block — with `{cli} decide {block} \"<decision>\"`: it goes into the next fix and fix review prompts. If the decision is to close the block: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, after fix review round {round}: {text}",
   "f_where": "**Location:**", "f_claim": "**What is wrong:**", "f_scenario": "**Failure scenario:**", "f_invariant": "**Violated invariant:**", "f_conf": "confidence",
   "md_title": "# Review findings", "md_gen": "> This file is GENERATED from `findings.jsonl` by `{cli} findings`.", "md_noedit": "> Do not edit by hand — edit the jsonl and regenerate.",
@@ -365,6 +366,7 @@ MSG = {
   "rec_none": "(за блоком пока ничего не записано)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(записана {date})_",
   "dec_none": "(решений человека по блоку не записано — работай по правилам выше)",
+  "loop_stop": "сигнал петли: главная находка лежит в коде, который написал прошлый круг, — решает человек. {id} ({sev}, {file}:{line}) из ревью правок круга {prev} стоит на строке, которую изменил круг починки {prev} ({diff}); ещё один круг повторит тот же узор. Запишите решение — другой механизм, откат класса или закрытие блока — командой `{cli} decide {block} \"<decision>\"`: оно попадёт в задания следующего круга починки и ревью правок. Если решено закрыть блок: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, после ревью правок круга {round}: {text}",
   "f_where": "**Место:**", "f_claim": "**Что не так:**", "f_scenario": "**Сценарий отказа:**", "f_invariant": "**Нарушенный инвариант:**", "f_conf": "уверенность",
   "md_title": "# Находки ревью", "md_gen": "> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `{cli} findings`.", "md_noedit": "> Не редактируй его руками — правь jsonl и перегенерируй.",
@@ -2675,13 +2677,8 @@ def loop_stop(block_id: str, rnd: int, rows: list[dict]) -> str | None:
            and d["round"] >= prev for d in decisions()):
         return None
     f = inside[0]
-    return (f"loop signal: the top finding lies in the code the previous round wrote — the "
-            f"human decides. {f.get('id')} ({f.get('severity')}, {f.get('file')}:{f.get('line')}) "
-            f"of fix review round {prev} sits on a line fix round {prev} changed "
-            f"({f['found_in']['diff']}); another round would repeat that pattern. Record the "
-            f"decision — a different mechanism, a revert of the class, or closing the block — "
-            f"with `{CLI} decide {block_id} \"<decision>\"`: it goes into the next fix and fix "
-            f"review prompts. If the decision is to close the block: `{CLI} set-status {block_id} closed`.")
+    return T("loop_stop", id=f.get("id"), sev=f.get("severity"), file=f.get("file"),
+             line=f.get("line"), prev=prev, diff=f["found_in"]["diff"], cli=CLI, block=block_id)
 
 
 def render_decisions_for(block_id: str) -> str:
