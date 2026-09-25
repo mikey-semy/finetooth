@@ -197,9 +197,18 @@ check goes red.
   the old answers to the new one;
 - **a fingerprint of the code under a finding** — from the same place (suspect links) and from
   [claude-review-all](https://github.com/ncoevoet/claude-review-all), where a finding's key
-  includes a hash of the code. Here: an open finding whose code has moved fails the check —
-  either it has already been fixed, or the description is stale, or the defect is still there
-  and `restamp <finding-ID>` confirms it;
+  includes a hash of the code, and from GitHub code scanning, which matches a result by the
+  context of its line (`primaryLocationLineHash`). Here: a finding with a line keeps a
+  fingerprint of that line and the three above and below it (trailing whitespace and line
+  endings ignored), and `check` looks for those lines by content anywhere in the file. An
+  edit elsewhere in the file leaves the finding alone; if the lines above it came or went, a
+  warning names its new line. An edit inside the window fails the check — either the defect
+  has already been fixed, or the description is stale, or it is still there and
+  `restamp <finding-ID>` confirms it (`--line <N>` if it now sits elsewhere). A finding
+  without a line keeps the fingerprint of the whole file. The window size is measured on the
+  kit's own review, not chosen: the note next to `REGION_K` in `review.py` has the numbers.
+  Records stamped by an older version (`code_sha`, the whole file) are checked as before, and
+  `restamp` moves each one to the window;
 - **a cheap fabrication filter** — from [mergejury](https://github.com/iamEtornam/mergejury):
   a reference to a line that does not exist in the file is caught without any model;
 - **a budget inside the assignment itself** — from [repomix](https://github.com/yamadashy/repomix)
@@ -280,7 +289,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-422 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+435 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -458,7 +467,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 422 scenarios
+tests/                            tests of the tool and the skill format: 435 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
