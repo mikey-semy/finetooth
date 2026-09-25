@@ -89,6 +89,10 @@ rather than by three separate fixes, and it can only count instances that share 
 
 {{MANIFEST}}
 
+# Volume of work
+
+{{VOLUME}}
+
 # {{FILES_HEADING}}
 
 ```

@@ -115,7 +115,9 @@ one of your own:
    `review status` shows this debt as its own line.
 8. **Fix reviewer** — a fresh agent that did not write the fixes:
    `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope <half>]`.
-   The diff is pasted into the prompt whole; two agents on two halves of the diff is fine. Its
+   The diff is pasted into the prompt whole, and `--scope` names a reviewer's half in its
+   report without shrinking it: a diff too large for one agent is split by giving each a
+   narrower `--diff` range. Its
    confirmed findings go into the register as a top-up import (`import <ID> --append`), even
    the ones already fixed. A new round only for a finding of medium or higher; low ones are
    fixed by the fixer or by the lead, and a lead's fix is marked in the journal and the PR as

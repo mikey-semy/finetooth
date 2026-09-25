@@ -2450,6 +2450,236 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertNotIn("Дифф ниже", hunter, "замер диффа не протекает в другие роли")
         self.assertNotIn("{{", hunter, "и не оставляет незаполненной подстановки")
 
+    def test_названный_рядом_с_объёмом_выход_действительно_уменьшает_дифф(self):
+        """Выход, названный там же, где объём, обязан работать.
+
+        Сообщение звало разделить дифф через `--scope`, а `--scope` его не уменьшает:
+        замерено — промпт с ним на 120 байт БОЛЬШЕ. Уменьшает дифф только более узкий
+        диапазон `--diff`, и названо в сообщении обязано быть именно это.
+        """
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\n" + "первая часть\n" * 300)
+        self.s.commit("первая часть правок")
+        middle = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\n" + "первая часть\n" * 300 + "вторая часть\n" * 300)
+        self.s.commit("вторая часть правок")
+        self.s.run("init")
+        whole = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD")
+        self.assertEqual(whole.returncode, 0, whole.stderr)
+        measure = next(l for l in whole.stdout.splitlines() if l.startswith("Дифф ниже:"))
+        self.assertIn("--diff", measure,
+                      "выход из положения — тот флаг, который дифф действительно уменьшает")
+        part = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...{middle}")
+        self.assertEqual(part.returncode, 0, part.stderr)
+        self.assertLess(len(part.stdout), len(whole.stdout) * 3 // 4,
+                        "названный выход обязан уменьшать промпт, а не переименовывать отчёт")
+        # Вторая сторона: `--scope` остаётся тем, чем был, — делит ответственность за
+        # отчёт, и сообщение больше не выдаёт его за способ уменьшить чтение.
+        scoped = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD",
+                            "--scope", "первая")
+        self.assertEqual(scoped.returncode, 0, scoped.stderr)
+        self.assertIn("**первая**", scoped.stdout)
+        self.assertIn("H1-demo.fixreview-1-первая.md", scoped.stdout)
+        self.assertGreaterEqual(len(scoped.stdout), len(whole.stdout),
+                                "`--scope` дифф не уменьшает — и сообщение этого не обещает")
+
+    def test_каждая_роль_с_полным_списком_файлов_получает_и_его_объём(self):
+        """Бюджет чтения — не привилегия одной роли, а часть задания каждой, кому вручают
+        блок целиком. Замер получал только охотник; проверяющему доставался тот же список
+        «прочитать все» и ни слова о его цене — а это самая дорогая роль (165 → 330 ходов),
+        и без меры ей нечем сказать, что блок не помещается."""
+        for path in sorted((SKILL / "references").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            if "{{FILES}}" not in text:
+                continue
+            with self.subTest(файл=path.name):
+                self.assertIn("{{VOLUME}}", text,
+                              f"{path.name} вручает список файлов блока и молчит о его "
+                              f"объёме: роль узнаёт, что читать, и не узнаёт, сколько это")
+        self.s.write("src/one.ts", "a\n" * 200)
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        for role in ("hunter", "verify"):
+            out = self.s.run("prompt", "H1", "--role", role)
+            with self.subTest(роль=role):
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertRegex(out.stdout, r"Файлов: \d+\. Строк: \d+",
+                                 f"роль {role} получает список файлов без замера")
+                self.assertNotIn("{{", out.stdout, "и без незаполненных подстановок")
+
+    # Два раздела отчёта охотника про охват: что прочитано и что НЕ прочитано. Ворота
+    # читают второй, а предупреждение об объёме посылает непрочитанное в тот, который
+    # назовёт само, — и это обязан быть тот же раздел.
+    COVERAGE_SECTIONS = {"Охват": "- прочитано файлов: 0 из 1",
+                         "Ограничения охвата": "**Обязательный раздел, даже если он короткий.**"}
+    UNREAD = "- не прочитано, поимённо: src/one.ts"
+    LIMITS_REFUSAL = "'Coverage limits' section of the hunter report is empty"
+
+    def _hunter_naming_unread_in(self, section: str) -> str:
+        body = dict(self.COVERAGE_SECTIONS)
+        body[section] += "\n" + self.UNREAD
+        return ("# H1 — отчёт охотника\n\n## Гипотезы\n"
+                "- H1.1 — проверена: прочитано то, что влезло\n\n"
+                + "".join(f"## {h}\n{t}\n\n" for h, t in body.items()))
+
+    def test_отчёт_написанный_по_предупреждению_об_объёме_проходит_ворота(self):
+        """Предупреждение о непомерном блоке называет раздел, куда писать непрочитанное, и
+        ворота обязаны читать ИМЕННО его: сообщение звало в раздел про охват, а ворота
+        читают раздел ограничений охвата — отчёт, написанный ровно по предупреждению,
+        проверка отказывала. Раздел здесь не вписан в тест, а вычитан из самого
+        предупреждения: поменяется сообщение — поменяется и то, что пишет охотник."""
+        self.s.write("src/one.ts", "a\n" * 100)
+        self.s.blocks(paths=["src/one.ts"], readable_lines=50)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        prompt = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(prompt.returncode, 0, prompt.stderr)
+        warning = next((l for l in prompt.stdout.splitlines() if "⚠️" in l), "").lower()
+        self.assertIn("поимённо", warning, "предупреждения об объёме в промпте нет")
+        named = max((h for h in self.COVERAGE_SECTIONS
+                     if all(w[:5].lower() in warning for w in h.split())),
+                    key=len, default="")
+        self.assertIn(named, self.COVERAGE_SECTIONS,
+                      f"предупреждение не называет ни одного раздела отчёта: {warning}")
+        self.s.reports(hunter=self._hunter_naming_unread_in(named), verify=FULL_VERIFY)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "verified")
+        self.s.commit("отчёты")
+        out = self.s.run("check")
+        self.assertNotIn(self.LIMITS_REFUSAL, refused(out),
+                         "охотник написал непрочитанное туда, куда послало предупреждение, "
+                         "и ворота отказали: сообщение называет не тот раздел, который они "
+                         "читают")
+        # Вторая сторона: ворота не ослабли. Тот же отчёт с непрочитанным в СОСЕДНЕМ
+        # разделе по-прежнему отказывают — изменилось только то, куда посылает сообщение.
+        other = next(h for h in self.COVERAGE_SECTIONS if h != named)
+        self.s.reports(hunter=self._hunter_naming_unread_in(other))
+        self.s.commit("отчёт мимо раздела")
+        self.assertIn(self.LIMITS_REFUSAL, refused(self.s.run("check")),
+                      "непрочитанное названо мимо раздела ограничений охвата, а ворота молчат")
+
+    # Раздел отчёта проверяющего про охват: его заголовок ворота не читают (заголовки
+    # отброшены), а читают строки под ним — и там обязан стоять вердикт.
+    VERIFY_COVERAGE = {"en": "Block coverage status", "ru": "Состояние охвата блока"}
+    QUOTED_VERDICT = re.compile(r"[\"“«]([^\"”»\n]+)[\"”»]")
+
+    def test_отчёт_проверяющего_по_предупреждению_об_объёме_проходит_ворота(self):
+        """Предупреждение проверяющему — два указания: КУДА писать непрочитанное и ЧТО там
+        сказать. Раздел держит `NamedExitTest`, а слова — только этот тест: пути под
+        заголовком раздела вердиктом охвата не являются, и ворота отказывают отчёт
+        «no coverage verdict». Удалённая из сообщения оговорка оставляла весь набор
+        зелёным (T2 fix review round 3, R3-002) — тот же дефект, что T2-023, у второй роли.
+        Слова не вписаны в тест, а вычитаны из предупреждения на каждом языке: отчёт пишет
+        то, что велено, и ворота обязаны его принять."""
+        hunter = ("# h\n## Гипотезы\n- H1.1 — проверена: да\n"
+                  "## Ограничения охвата\n- не прочитано: src/one.ts\n")
+        for lang, section in self.VERIFY_COVERAGE.items():
+            with self.subTest(lang=lang):
+                s = Stand()
+                self.addCleanup(s.cleanup)
+                s.write("src/one.ts", "a\n" * 100)
+                s.blocks(paths=["src/one.ts"], readable_lines=50, lang=lang)
+                s.manifest(hypotheses=1)
+                s.commit()
+                s.run("init")
+                prompt = s.run("prompt", "H1", "--role", "verify")
+                self.assertEqual(prompt.returncode, 0, prompt.stderr)
+                warning = next((l for l in prompt.stdout.splitlines() if "⚠️" in l), "")
+                self.assertTrue(warning, "предупреждения об объёме в промпте проверяющего нет")
+                said = self.QUOTED_VERDICT.findall(warning)
+                self.assertTrue(said, f"предупреждение не даёт проверяющему слов, которыми "
+                                      f"сказать, что охват неполный: {warning}")
+                paths_only = (f"# v\n\n## Verdicts\nНаходок нет.\n\n## {section}\n"
+                              f"- src/one.ts\n")
+                s.reports(hunter=hunter, verify=paths_only.replace(
+                    f"## {section}\n", f"## {section}\n{said[-1]}.\n"))
+                s.run("set-status", "H1", "hunted")
+                s.run("set-status", "H1", "verified")
+                s.commit("отчёт по предупреждению")
+                self.assertNotIn("no coverage verdict", refused(s.run("check")),
+                                 f"проверяющий написал ровно то, что велело предупреждение "
+                                 f"({said[-1]!r}), и ворота отказали")
+                # Вторая сторона: одни пути под заголовком раздела вердиктом не являются —
+                # иначе тест выше зеленел бы и без слов, которые он проверяет.
+                s.reports(verify=paths_only)
+                s.commit("только пути")
+                self.assertIn("no coverage verdict", refused(s.run("check")),
+                              "пути без вердикта приняты: слова предупреждения не нагружены")
+
+    def test_правило_шаблона_называет_тот_же_выход_что_и_замер(self):
+        """Ведущая сессия читает сообщение об объёме, агент — правило 1 своего шаблона, и
+        разойтись им нельзя: правило звало просить половину через `--scope`, который диффа
+        не уменьшает, — тот же дефект вторым адресом, на обоих языках."""
+        for name, token in (("fixreview.md", "does not fit"),
+                            ("fixreview.ru.md", "не помещается")):
+            text = (SKILL / "references" / name).read_text(encoding="utf-8")
+            item = next(b for b in re.split(r"\n(?=\d+\. )", text) if token in b)
+            with self.subTest(файл=name):
+                self.assertIn("--diff", item,
+                              f"{name}: правило о неподъёмном диффе обязано называть флаг, "
+                              f"который дифф действительно уменьшает")
+
+    def test_дифф_вклеивается_один_раз_даже_если_манифест_о_нём_пишет(self):
+        """Названный объём обязан совпасть с тем, что приехало.
+
+        Дифф подставлялся отдельным проходом по СОБРАННОМУ тексту, и упоминания
+        `{{DIFF}}` внутри вклеенного манифеста получали дифф тоже. Замерено на этом
+        наборе: заявлено 464 КБ, приехало 1410 КБ — дифф вклеен трижды, а измерен один.
+        """
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        # Манифест пишет о самой подстановке — это законная цитата, а не место для диффа.
+        manifest = self.s.root / "docs/review/blocks/H1-demo.md"
+        manifest.write_text(manifest.read_text(encoding="utf-8")
+                            + "\n## Подстановки\n\nШаблон ревьюера правок берёт `{{DIFF}}`.\n",
+                            encoding="utf-8")
+        self.s.commit()
+        base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\nпочинено\n")
+        self.s.commit("починка")
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.count("````diff"), 1,
+                         "дифф вклеен ровно один раз — столько же, сколько измерено")
+        self.assertIn("+починено", out.stdout, "и вклеен он всё-таки целиком")
+        self.assertIn("берёт `{{DIFF}}`", out.stdout,
+                      "цитата в манифесте остаётся цитатой, а не превращается в дифф")
+
+    def test_подстановка_диффа_в_чужой_роли_это_отказ_а_не_текст(self):
+        """Вторая сторона той же правки: `{{DIFF}}` больше не исключение из проверки
+        незаполненных подстановок. Роль без диффа, назвавшая его в своём шаблоне, получает
+        отказ с именем подстановки, а не строку `{{DIFF}}` в задании.
+        """
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/prompts/hunter.md",
+                     "Ты охотник блока {{BLOCK_ID}}.\n\n{{DIFF}}\n")
+        self.s.write("docs/review/prompts/fixreview.md",
+                     "Ты ревьюер правок блока {{BLOCK_ID}}.\n\n{{DIFF}}\n")
+        self.s.commit()
+        base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\nпочинено\n")
+        self.s.commit("починка")
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 2, out.stdout)
+        self.assertIn("{{DIFF}}", out.stderr, "отказ называет подстановку, оставшуюся пустой")
+        # И та же подстановка в роли, у которой дифф есть, по-прежнему заполняется.
+        ok = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn("+починено", ok.stdout)
+        self.assertNotIn("{{DIFF}}", ok.stdout.split("````diff")[0])
+
     def test_закрытие_с_починками_требует_ревью_правок(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -5306,8 +5536,11 @@ class RepositoryContractTest(unittest.TestCase):
         того, что набор проверен. Число брали из головы: 98 против настоящих 248."""
         real = unittest.defaultTestLoader.discover(str(KIT / "tests")).countTestCases()
         self.assertGreater(real, 0)
+        # Русское число склоняет за собой существительное: 336 сценариЕВ, но 343
+        # сценариЯ. Образец, знающий одну форму, требовал бы от документа неграмотности
+        # или замолкал бы на числе, кончающемся на 2, 3, 4.
         for rel, pattern in (("README.md", r"(\d+) scenarios"),
-                             ("README.ru.md", r"(\d+) сценариев"),
+                             ("README.ru.md", r"(\d+) сценари(?:ев|я|й)"),
                              ("AGENTS.md", r"(\d+) scenarios")):
             text = (KIT / rel).read_text(encoding="utf-8")
             found = re.findall(pattern, text)
@@ -5421,6 +5654,81 @@ class RepositoryContractTest(unittest.TestCase):
             with self.subTest(файл=rel):
                 self.assertEqual([h for h in headings if h not in defined], [],
                                  f"{rel}: версии без ссылки на сравнение")
+
+    # Строка, идущая сразу за пунктом списка без пустой строки, в CommonMark — ленивое
+    # продолжение этого пункта, а не новый абзац: вводный абзац раздела, набранный так,
+    # уезжает внутрь чужой строки, и раздел остаётся без заголовка. Заметки к выпуску
+    # берутся из CHANGELOG дословно, и читает их не автор.
+    LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])\s")
+    FENCE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
+    # Ленивое продолжение бывает только у АБЗАЦА: строка, которая сама открывает блок,
+    # список обрывает и печатается там, где написана. Таких три (ограда — четвёртая, её
+    # правило считает отдельно): ATX-заголовок, тематический разрыв и html-блок типов 1–6.
+    # Строка таблицы сюда не входит: её шапку GFM собирает из последней строки абзаца, и
+    # `| a | b |` сразу за пунктом остаётся внутри пункта — послабление здесь ослепило бы
+    # правило на настоящем склеивании.
+    ENDS_LIST = re.compile(r"^ {0,3}(?:#{1,6}(?:\s|$)|(?:\*\s*){3,}$|(?:-\s*){3,}$"
+                           r"|(?:_\s*){3,}$|<[A-Za-z/!?])")
+
+    @classmethod
+    def _glued_to_list_item(cls, text: str) -> list[int]:
+        """Номера строк, которые разметка делает продолжением предыдущего пункта списка."""
+        glued, fenced, lines = [], False, text.split("\n")
+        for n, line in enumerate(lines):
+            if cls.FENCE.match(line):
+                fenced = not fenced
+                continue
+            prev = lines[n - 1] if n else ""
+            # Отступ и цитата — законное продолжение пункта, набранное намеренно.
+            if (not fenced and line.strip() and cls.LIST_ITEM.match(prev)
+                    and not cls.LIST_ITEM.match(line) and not cls.ENDS_LIST.match(line)
+                    and not line.startswith((" ", "\t", ">"))):
+                glued.append(n + 1)
+        return glued
+
+    def test_ни_один_абзац_не_приклеен_к_предыдущему_пункту_списка(self):
+        # Отчёты самого ревью сюда не входят: они пишутся агентами и удаляются вместе с
+        # `docs/review/`, а правило — о документах, которые репозиторий публикует.
+        swallowed = []
+        for rel in self._tracked("*.md", ":!docs/review"):
+            lines = (KIT / rel).read_text(encoding="utf-8").split("\n")
+            swallowed += [f"{rel}:{n}: {lines[n - 1][:60]}"
+                          for n in self._glued_to_list_item("\n".join(lines))]
+        self.assertEqual(swallowed, [],
+                         "абзац идёт сразу за пунктом списка, без пустой строки между ними, "
+                         "и разметка делает его продолжением этого пункта — вставьте пустую "
+                         "строку: " + "; ".join(swallowed))
+
+    # Обе стороны правила на документах, которых в репозитории нет: склеенным считается
+    # только то, что разметка действительно вносит в пункт.
+    GLUED = {
+        "абзац за пунктом": "- пункт списка\nВводный абзац раздела\n",
+        "абзац за нумерованным пунктом": "1. пункт списка\nВводный абзац раздела\n",
+    }
+    NOT_GLUED = {
+        "заголовок обрывает список": "- пункт списка\n## Заголовок раздела\n",
+        "тематический разрыв": "- пункт списка\n---\n",
+        "html-блок": "- пункт списка\n<div>врезка</div>\n",
+        "ограда кода": "- пункт списка\n```sh\nmake test\n```\n",
+        "продолжение с отступом": "- пункт списка\n  продолжение пункта\n",
+        "цитата": "- пункт списка\n> цитата\n",
+        "следующий пункт": "- пункт списка\n- следующий пункт\n",
+        "пустая строка между ними": "- пункт списка\n\nОтдельный абзац\n",
+        "пример внутри ограды": "```md\n- пункт списка\nабзац примера\n```\n",
+    }
+
+    def test_правило_про_склеенный_абзац_читается_на_выдуманном_документе(self):
+        """Правило запрещает — значит, проверено и то, что оно ПРОПУСКАЕТ: заголовок,
+        разрыв и html-блок сразу за пунктом список обрывают и рисуются как написаны, а
+        запрет на них выгонял бы автора править верную разметку."""
+        for why, text in self.GLUED.items():
+            with self.subTest(склеено=why):
+                self.assertEqual(self._glued_to_list_item(text), [2],
+                                 "правило не увидело абзаца, приклеенного к пункту")
+        for why, text in self.NOT_GLUED.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(self._glued_to_list_item(text), [],
+                                 "правило придирается к верной разметке")
 
     # Пары «оригинал — перевод»: обе половины обязаны вести друг на друга с первой строки.
     BILINGUAL = ("README", "CHANGELOG", "CODE_OF_CONDUCT")
@@ -6136,16 +6444,29 @@ class TemplateContractTest(unittest.TestCase):
     в образце черновика не было вовсе, и ворота про третий экземпляр класса не могли
     покраснеть ни на одном прогоне, написанном по образцу. Список полей берётся из
     ИСХОДНИКА: поле, которого ещё не написали, тоже обязано быть классифицировано.
+
+    Спрашивается не «слово встречается в шаблоне», а «шаблон даёт образец, который агент
+    копирует». Прежняя проверка искала подстроку по всему тексту, а каждое имя поля —
+    обычное слово прозы: `root` «числился названным» фразой «the whole root at once» и
+    строкой пути `"file":"path/from/repository/root"`. Измерено: из всех восьми шаблонов
+    удалены ВСЕ огороженные схемы черновика — узда осталась зелёной на всех тринадцати
+    полях по-английски, то есть ровно то, ради чего её писали, ею не держалось.
     """
 
     # Поля, которые проставляет сам инструмент: шаблону о них говорить нечего.
     TOOL_FIELDS = {"id", "code_sha", "imported_at", "updated_at", "restamped_at",
                    "fix_commit", "fixed_in", "rule"}
+    # Поля черновика: агент пишет их строкой JSON. Шаблон обязан назвать каждое КЛЮЧОМ
+    # схемы (`"поле":`) и внутри кода — в огороженном блоке или в обратных кавычках.
+    DRAFT_FIELDS = {"block", "severity", "confidence", "status", "file", "line", "claim",
+                    "scenario", "invariant", "root", "dup_of", "reject_reason"}
+    # Поля, которые инструмент проставляет по флагу: их пишет не черновик, а команда, и
+    # шаблон обязан назвать поле и команду в одном абзаце — иначе агент узнаёт имя поля и
+    # не узнаёт, чем его заполнить.
+    COMMAND_FIELDS = {"defer_reason": "set-finding"}
     # Поля, которые пишет АГЕНТ, — каждое обязано быть названо в шаблоне хоть одной роли,
     # и на каждом языке ревью отдельно.
-    AGENT_FIELDS = {"block", "severity", "confidence", "status", "file", "line", "claim",
-                    "scenario", "invariant", "root", "dup_of", "reject_reason",
-                    "defer_reason"}
+    AGENT_FIELDS = DRAFT_FIELDS | set(COMMAND_FIELDS)
     ROLES = ("hunter", "verify", "fix", "fixreview")
     LANGS = ("", "ru")
 
@@ -6173,6 +6494,24 @@ class TemplateContractTest(unittest.TestCase):
         return {role: (SKILL / "references" / f"{role}{suffix}").read_text(encoding="utf-8")
                 for role in self.ROLES}
 
+    @staticmethod
+    def _code(text: str) -> str:
+        """Только машинная часть шаблона: огороженные блоки и вставки в обратных кавычках.
+        Прозу агент не копирует, и объявлением поля она не является."""
+        fenced = re.findall(r"^ {0,3}`{3,4}.*?^ {0,3}`{3,4}", text, re.S | re.M)
+        spans = re.findall(r"`[^`\n]+`", text)
+        return "\n".join(fenced + spans)
+
+    @classmethod
+    def _named_in_schema(cls, bodies: dict[str, str], field: str) -> bool:
+        return any(re.search(rf'"{re.escape(field)}"\s*:', cls._code(b))
+                   for b in bodies.values())
+
+    @classmethod
+    def _named_beside_command(cls, bodies: dict[str, str], field: str, command: str) -> bool:
+        return any(f"`{command}" in para and f"`{field}`" in para
+                   for b in bodies.values() for para in re.split(r"\n\s*\n", b))
+
     def test_каждое_поле_реестра_названо_в_шаблоне_или_проставлено_инструментом(self):
         unknown = (self._register_fields(TOOL.read_text(encoding="utf-8"))
                    - self.TOOL_FIELDS - self.AGENT_FIELDS)
@@ -6184,12 +6523,40 @@ class TemplateContractTest(unittest.TestCase):
             "объявлял")
         for lang in self.LANGS:
             bodies = self._templates(lang)
-            for field in sorted(self.AGENT_FIELDS):
+            for field in sorted(self.DRAFT_FIELDS):
                 with self.subTest(lang=lang or "en", field=field):
                     self.assertTrue(
-                        any(field in body for body in bodies.values()),
-                        f"поле `{field}` не названо ни в одном шаблоне роли ({lang or 'en'}): "
-                        f"агент не узнает о нём, а ворота его спрашивают")
+                        self._named_in_schema(bodies, field),
+                        f"поле `{field}` не названо ключом схемы (`\"{field}\":`) ни в одном "
+                        f"шаблоне роли ({lang or 'en'}): агент копирует образец, а не прозу — "
+                        f"впишите поле в схему черновика того шаблона, чья роль его пишет")
+            for field, command in sorted(self.COMMAND_FIELDS.items()):
+                with self.subTest(lang=lang or "en", field=field):
+                    self.assertTrue(
+                        self._named_beside_command(bodies, field, command),
+                        f"поле `{field}` инструмент проставляет по флагу `{command}`, и ни "
+                        f"один шаблон роли ({lang or 'en'}) не называет их рядом: агент узнает "
+                        f"имя поля и не узнает, чем его заполнить")
+
+    def test_проза_поле_не_объявляет_а_ключ_схемы_объявляет(self):
+        """Обе стороны правила на выдуманных шаблонах: слово в тексте и то же слово внутри
+        пути — не объявление; ключ схемы — объявление, и в огороженном блоке, и в кавычках."""
+        prose = {"verify": 'Duplicates — by root, not by text, and the whole root at once.\n'
+                           'The path field holds `"file":"path/from/repository/root"`.\n'}
+        self.assertFalse(self._named_in_schema(prose, "root"))
+        fenced = {"hunter": '```json\n{"block":"H1","root":"имя класса"}\n```\n'}
+        self.assertTrue(self._named_in_schema(fenced, "root"))
+        span = {"verify": 'дубликаты — `"status":"duplicate","dup_of":"<id основной>"`;\n'}
+        self.assertTrue(self._named_in_schema(span, "dup_of"))
+
+    def test_поле_по_флагу_требует_команду_в_том_же_абзаце(self):
+        """Вторая сторона для полей, которых в черновике нет: имя поля отдельно от команды,
+        которая его пишет, — это имя без способа его заполнить."""
+        apart = {"fix": "Причина уходит в `defer_reason`.\n\nОткладывают так: "
+                        "`set-finding <ID> deferred --reason '…'`.\n"}
+        self.assertFalse(self._named_beside_command(apart, "defer_reason", "set-finding"))
+        together = {"fix": "`set-finding <ID> deferred --reason '…'` пишет `defer_reason`.\n"}
+        self.assertTrue(self._named_beside_command(together, "defer_reason", "set-finding"))
 
     def test_словарь_полей_читается_на_выдуманном_исходнике(self):
         """Обе стороны правила на исходнике, которого в инструменте нет: обращение к находке
@@ -6209,6 +6576,472 @@ class TemplateContractTest(unittest.TestCase):
                 suffix = ".md" if not lang else f".{lang}.md"
                 self.assertTrue((SKILL / "references" / f"{role}{suffix}").exists(),
                                 f"{role}{suffix}")
+
+
+class NamedExitTest(unittest.TestCase):
+    """УЗДА КЛАССА «документ называет выход, которого механизм не даёт».
+
+    Сообщение инструмента и правило шаблона — единственное, откуда агент узнаёт, куда
+    писать, каким флагом сузить работу и какой командой выйти из положения. Дважды подряд
+    названный выход оказывался не тем, что механизм даёт: `--scope`, который дифф не
+    уменьшает, и раздел про охват там, где ворота читают раздел ограничений охвата, —
+    отчёт, написанный ровно по предупреждению, ворота отказывали. Список починенных мест
+    такое не держит: следующее сообщение напишут копией соседнего.
+
+    Поэтому правило спрашивает КАЖДЫЙ названный выход: раздел — в отчёте той роли,
+    которой текст адресован, и такой, который ворота читают; флаг — объявленный точкой
+    входа набора; команда — та, у которой есть свой разбор. Кому адресовано сообщение,
+    выводится, а не объявляется: ключ `MSG` попадает в промпт через подстановку, а
+    подстановку несут шаблоны конкретных ролей.
+    """
+
+    ROLES = ("hunter", "verify", "fix", "fixreview")
+    LANGS = ("", "ru")
+    # Чужая программа объявляет свои флаги сама, и спрашивать их у набора незачем.
+    FOREIGN = ("git", "npx", "npm", "python3", "python", "make", "sh", "bash", "pip",
+               "ls", "grep", "cd", "claude", "skills-ref")
+    # Как текст зовёт сам инструмент: подстановкой, именем из blocks.json, файлом.
+    SELF = ("{cli}", "{CLI}", "{{CLI}}", "review", "review.py")
+    # Точки входа набора: флаг, названный агенту, обязан быть объявлен одной из них.
+    ENTRY_POINTS = ("scripts/review.py", "scripts/axes.py")
+    # Чем `check` читает отчёт каждой роли. Имена образцов спрашиваются у инструмента —
+    # исчезнувший образец роняет прогон отдельной строкой, а не молча делает раздел
+    # «нечитаемым». Отчёт исполнителя и отчёт ревьюера правок проверка не разбирает: она
+    # смотрит, что файл есть, — и раздела в них не называет никто.
+    REPORT_GATES = {"hunter": ("LIMITS_HEADING", "HYPOTHESIS_HEADING"),
+                    "verify": ("COVERAGE_VERDICT", "FINDING_VERDICT")}
+    # Название раздела ищется рядом со словом «раздел»: заголовки отчёта — обычные слова
+    # («Находки», «Охват»), и без этой пометки правило ловило бы прозу.
+    MARK = re.compile(r"section|раздел\w*", re.I)
+    QUOTED_NAME = re.compile(r"[\"“«'`]([^\"”»'`\n]{3,60})[\"”»'`]\s*$")
+    WORD = re.compile(r"[\w’']+")
+    SPAN = re.compile(r"`+([^`\n]+?)`+")
+    FLAG = re.compile(r"^--[a-z][\w-]*$")
+    # Слово короче трёх букв — служебное («и», «of»), и в названии раздела оно не
+    # опознаётся; пяти букв хватает, чтобы «ограничений» и «Ограничения» совпали, а
+    # «Охват» и «Ограничения охвата» — разошлись.
+    STEM = 5
+    # Служебные слова между словом «раздел» и названием: их пропускают, всё остальное
+    # обрывает название. Без этого «…что переворачивает половину вердиктов. Раздел,
+    # который чаще всего забывают» читалось как упоминание «Находок» через четыре слова.
+    GLUE = {"the", "a", "an", "of", "on", "in", "into", "under", "to", "your", "own",
+            "its", "this", "that", "my", "report", "reports", "below", "above",
+            "в", "во", "об", "о", "про", "по", "своего", "своём", "своем", "этого",
+            "отчёта", "отчёте", "отчета", "отчете", "моего", "ниже", "выше"}
+
+    @classmethod
+    def _stems(cls, name: str) -> tuple:
+        """Слова названия, укороченные до корня: документ склоняет заголовок («раздел
+        ограничений охвата») и пишет его через дефис («coverage-limits»), а речь об одном
+        и том же названии."""
+        return tuple(w[:cls.STEM].lower() for w in cls.WORD.findall(name) if len(w) > 2)
+
+    @classmethod
+    def _skeleton(cls, template: str) -> list[str]:
+        """Заголовки скелета отчёта — того, что шаблон роли даёт агенту скопировать."""
+        for block in re.findall(r"^ {0,3}`{3,4}\w*\n(.*?)^ {0,3}`{3,4}\s*$", template,
+                                re.S | re.M):
+            if re.match(r"^#\s+\{\{BLOCK_ID\}\}", block):
+                return [re.sub(r"^#+\s*", "", ln).strip()
+                        for ln in block.splitlines() if re.match(r"^#{2,6}\s+\S", ln)]
+        return []
+
+    @staticmethod
+    def _patterns(source: str) -> dict:
+        """Образцы инструмента — из его же исходника. Своя копия выражения разъехалась бы
+        с воротами молча, и узда объявляла бы читаемым раздел, который никто не читает."""
+        out = {}
+        for node in ast.parse(source).body:
+            if (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Call)
+                    and ast.unparse(node.value.func) == "re.compile"
+                    and node.value.args and isinstance(node.value.args[0], ast.Constant)):
+                flags = re.I if "IGNORECASE" in ast.unparse(node.value) else 0
+                out[node.targets[0].id] = re.compile(node.value.args[0].value, flags)
+        return out
+
+    @classmethod
+    def _vocabulary(cls, sources: dict) -> tuple[set, set]:
+        """Что механизм действительно даёт: флаги и команды точек входа.
+
+        Точка входа с подкомандами объявляет флаги через `add_argument`; та, что разбирает
+        `sys.argv` руками (`axes.py`), — обычной строкой, и брать её строки у первой
+        нельзя: у инструмента в списках лежат флаги git.
+        """
+        flags, commands = set(), set()
+        for src in sources.values():
+            tree = ast.parse(src)
+            calls = [n for n in ast.walk(tree)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+            has_parser = any(c.func.attr == "add_parser" for c in calls)
+            for c in calls:
+                if c.func.attr == "add_argument":
+                    flags |= {a.value for a in c.args if isinstance(a, ast.Constant)
+                              and isinstance(a.value, str) and cls.FLAG.match(a.value)}
+                if c.func.attr == "add_parser" and c.args and isinstance(c.args[0], ast.Constant):
+                    commands.add(c.args[0].value)
+            if not has_parser:
+                flags |= {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)
+                          and isinstance(n.value, str) and cls.FLAG.match(n.value)}
+        return flags, commands
+
+    @classmethod
+    def _readers(cls, tool: str, docs: dict) -> dict:
+        """Ключ `MSG` → роли, которые это сообщение прочитают.
+
+        Выводится, а не объявляется: сообщение печатает функция, функцию зовёт `cmd_prompt`
+        под именем подстановки, подстановку несут шаблоны конкретных ролей. Поэтому и
+        обратный снос ловится: подстановку добавили в шаблон роли, у чьего отчёта такого
+        раздела нет, — и правило краснеет, хотя ни одного сообщения не трогали.
+        """
+        tree = ast.parse(tool)
+        emitted, placeholder = {}, {}
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            for n in ast.walk(fn):
+                if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                        and n.func.id == "T" and n.args):
+                    continue
+                key = n.args[0]
+                if isinstance(key, ast.Constant):
+                    emitted.setdefault(fn.name, []).append((key.value, None))
+                elif isinstance(key, ast.IfExp):
+                    # `T("...verify" if role == "verify" else "...")` — домашняя запись
+                    # роль-зависимого сообщения (так же написан `proof_rule`).
+                    role = next((c.value for c in ast.walk(key.test)
+                                 if isinstance(c, ast.Constant) and isinstance(c.value, str)), None)
+                    for branch, only in ((key.body, role), (key.orelse, ("not", role))):
+                        if isinstance(branch, ast.Constant):
+                            emitted.setdefault(fn.name, []).append((branch.value, only))
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Dict):
+                continue
+            for k, v in zip(n.keys, n.values):
+                if isinstance(k, ast.Constant) and isinstance(k.value, str) \
+                        and k.value.startswith("{{"):
+                    for c in ast.walk(v):
+                        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name):
+                            placeholder[c.func.id] = k.value
+        out = {}
+        for fn, items in emitted.items():
+            ph = placeholder.get(fn)
+            if not ph:
+                continue
+            carry = {r for r in cls.ROLES if ph in docs.get(f"references/{r}.md", "")}
+            for key, only in items:
+                roles = set(carry)
+                if isinstance(only, str):
+                    roles &= {only}
+                elif isinstance(only, tuple):
+                    roles -= {only[1]}
+                out[key] = roles
+        return out
+
+    @classmethod
+    def _texts(cls, tool: str, docs: dict) -> list:
+        """Корпус: (где, текст, кто прочитает, язык). Сообщения инструмента — из `MSG` и
+        из отказов; строки документации набора — целиком, шаблон роли со своей ролью."""
+        tree = ast.parse(tool)
+        readers = cls._readers(tool, docs)
+        out, seen = [], set()
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "MSG" and isinstance(node.value, ast.Dict)):
+                continue
+            for lang_key, table in zip(node.value.keys, node.value.values):
+                lang = "" if lang_key.value == "en" else lang_key.value
+                for k, v in zip(table.keys, table.values):
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        seen.add(id(v))
+                        out.append((f"MSG[{lang_key.value}][{k.value}]", v.value,
+                                    readers.get(k.value), lang))
+        docstrings, inner = set(), set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) \
+                    and ast.get_docstring(node) is not None:
+                docstrings.add(id(node.body[0].value))
+            if isinstance(node, ast.JoinedStr):
+                inner |= {id(p) for p in ast.walk(node) if p is not node}
+        for node in ast.walk(tree):
+            if id(node) in docstrings or id(node) in inner or id(node) in seen:
+                continue
+            if isinstance(node, ast.JoinedStr):
+                # Отказ собирают f-строкой, и имя раздела в ней разорвано подстановкой:
+                # части склеиваются обратно, иначе команду `{CLI} init` не видно.
+                text = "".join(p.value if isinstance(p, ast.Constant)
+                               else "{" + ast.unparse(p.value) + "}" for p in node.values)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                text = node.value
+            else:
+                continue
+            # Короткая строка — имя поля или ключ, а не обращение к человеку.
+            if len(text) > 40:
+                out.append((f"review.py:{node.lineno}", text, None, ""))
+        for name, text in docs.items():
+            lang = "ru" if name.endswith(".ru.md") else ""
+            role = re.fullmatch(r"references/(\w+?)(?:\.ru)?\.md", name)
+            who = {role.group(1)} if role and role.group(1) in cls.ROLES else None
+            out.append((name, text, who, lang))
+        return out
+
+    @classmethod
+    def _mentions(cls, text: str, known: dict) -> list:
+        """Где текст называет раздел отчёта — по слову «раздел» рядом с названием.
+
+        Название в кавычках берётся целиком («What is NOT a finding» — раздел инвариантов,
+        а не отчёта, и совпасть ни с чем не должен). Без кавычек название обязано ПРИМЫКАТЬ
+        к слову «раздел» через служебные слова, и берётся самый ДЛИННЫЙ совпавший
+        заголовок, иначе «coverage-limits» читается как «Coverage».
+        """
+        out = []
+        for m in cls.MARK.finditer(text):
+            # Только свой абзац: за пустой строкой стоит соседний, и его последнее слово
+            # («## Контекст, меняющий оценку находок») названием этого раздела не является.
+            before = re.split(r"\n\s*\n", text[:m.start()])[-1]
+            after = re.split(r"\n\s*\n", text[m.end():])[0]
+            quoted = cls.QUOTED_NAME.search(before[-80:])
+            if not quoted and after[:1].strip() == "" and after.lstrip()[:1] in "\"“«'`":
+                quoted = re.match(r"[\"“«'`]([^\"”»'`\n]{3,60})[\"”»'`]", after.lstrip())
+            if quoted:
+                hit = [h for h in known if cls._stems(h) == cls._stems(quoted.group(1))]
+                out += [(quoted.group(1), h) for h in hit[:1]]
+                continue
+            tail = cls.WORD.findall(before)
+            while tail and tail[-1].lower() in cls.GLUE:
+                tail.pop()
+            head_side = cls.WORD.findall(after)
+            while head_side and head_side[0].lower() in cls.GLUE:
+                head_side.pop(0)
+            best = None
+            for head in known:
+                st = cls._stems(head)
+                if not st:
+                    continue
+                for run in (tail[-len(st):], head_side[:len(st)]):
+                    if len(run) == len(st) and cls._stems(" ".join(run)) == st:
+                        if best is None or len(st) > len(cls._stems(best[1])):
+                            best = (" ".join(run), head)
+            if best:
+                out.append(best)
+        return out
+
+    @classmethod
+    def _named_exits(cls, sources: dict, docs: dict) -> list[str]:
+        """Названные выходы, которых механизм не даёт: раздел, флаг, команда."""
+        tool = sources["scripts/review.py"]
+        patterns = cls._patterns(tool)
+        flags, commands = cls._vocabulary(sources)
+        bad = []
+        gates = {}
+        for role, named in cls.REPORT_GATES.items():
+            for gate in named:
+                if gate not in patterns:
+                    bad.append(f"{gate}: образца, которым `check` читает отчёт роли "
+                               f"{role}, в инструменте нет — перепишите REPORT_GATES под "
+                               f"новое имя, иначе узда считает раздел нечитаемым")
+            gates[role] = [patterns[g] for g in named if g in patterns]
+        skeleton, readable = {}, {}
+        for lang in cls.LANGS:
+            for role in cls.ROLES:
+                suffix = ".md" if not lang else f".{lang}.md"
+                heads = cls._skeleton(docs.get(f"references/{role}{suffix}", ""))
+                skeleton[(role, lang)] = heads
+                readable[(role, lang)] = [h for h in heads
+                                          if any(g.search("## " + h) for g in gates.get(role, []))]
+        for where, text, who, lang in cls._texts(tool, docs):
+            known = {h for (role, l), heads in skeleton.items() if l == lang for h in heads}
+            for name, head in cls._mentions(text, known):
+                owners = {r for r in cls.ROLES if head in skeleton[(r, lang)]}
+                if who is None:
+                    # Текст без адресата — общий документ набора: он описывает метод, и
+                    # названный раздел обязан читаться хоть у кого-то.
+                    if not any(head in readable[(r, lang)] for r in owners):
+                        bad.append(f"{where}: «{name}» — раздел, которого `check` не читает "
+                                   f"ни в одном отчёте")
+                    continue
+                for role in sorted(who):
+                    if head in readable[(role, lang)]:
+                        continue
+                    reads = ", ".join(sorted(readable[(role, lang)]) or ["ничего"])
+                    bad.append(
+                        f"{where}: «{name}» — раздел, которого отчёт роли {role} не имеет"
+                        if role not in owners else
+                        f"{where}: «{name}» — раздел отчёта роли {role}, которого `check` "
+                        f"не читает; читает: {reads}")
+            for span in cls.SPAN.findall(text):
+                tokens = span.split()
+                if not tokens or tokens[0] in cls.FOREIGN or tokens[0].endswith(".sh"):
+                    continue
+                rest = tokens
+                if tokens[0] in cls.SELF:
+                    rest = tokens[1:]
+                    if rest and re.fullmatch(r"[a-z][a-z-]+", rest[0]) and rest[0] not in commands:
+                        bad.append(f"{where}: `{span}` — команды `{rest[0]}` у инструмента "
+                                   f"нет; есть: {', '.join(sorted(commands))}")
+                elif tokens[0] in commands:
+                    rest = tokens[1:]
+                for token in rest:
+                    token = token.strip(",.;:)»")
+                    if cls.FLAG.match(token) and token not in flags:
+                        bad.append(f"{where}: `{span}` — флага `{token}` не объявляет ни "
+                                   f"одна точка входа набора")
+        return sorted(bad)
+
+    @classmethod
+    def _sources(cls) -> dict:
+        return {name: (SKILL / name).read_text(encoding="utf-8") for name in cls.ENTRY_POINTS}
+
+    @classmethod
+    def _documents(cls) -> dict:
+        return {p.relative_to(SKILL).as_posix(): p.read_text(encoding="utf-8")
+                for p in sorted(SKILL.rglob("*.md"))}
+
+    def test_каждый_названный_агенту_выход_механизм_действительно_даёт(self):
+        """УЗДА КЛАССА «документ называет выход, которого механизм не даёт».
+
+        Предупреждение о непомерном блоке звало охотника назвать непрочитанное в разделе
+        про охват, а ворота читают раздел ограничений охвата: отчёт, написанный ровно по
+        предупреждению, ворота отказывали — на обоих языках. Правило накрывает корень
+        целиком: все сообщения инструмента и все документы скилла, а не найденные места.
+        """
+        self.assertEqual(
+            self._named_exits(self._sources(), self._documents()), [],
+            "текст называет агенту выход, которого механизм не даёт: раздел, которого "
+            "ворота в отчёте этой роли не читают, несуществующий флаг или команду")
+
+    # Порча по одной на строку: сообщение называет соседний раздел, раздел чужой роли,
+    # несуществующий флаг, несуществующую команду. Каждая — то, как этот класс уже
+    # появлялся, и на каждой правило обязано покраснеть.
+    SPOILED = {
+        "соседний раздел (en)": ("in the coverage-limits section of your report",
+                                 "in the coverage section of your report"),
+        "соседний раздел (ru)": ("в разделе своего отчёта об ограничениях охвата",
+                                 "в разделе своего отчёта про охват"),
+        "раздел чужой роли": ("in the block-coverage-status section",
+                              "in the coverage-limits section"),
+        "несуществующий флаг": ("`--diff <first part>`", "`--scope-half <first part>`"),
+        "несуществующая команда": ("`{cli} findings`", "`{cli} finding-list`"),
+    }
+
+    def test_узда_краснеет_на_каждой_порче_сообщения(self):
+        """Страж доказывается мутацией: на неиспорченном исходнике он молчит (тест выше),
+        на каждой порче — называет её. Порча ставится в КОПИИ исходника."""
+        docs = self._documents()
+        for why, (was, now) in self.SPOILED.items():
+            spoiled = dict(self._sources())
+            source = spoiled["scripts/review.py"]
+            self.assertIn(was, source, f"порча «{why}» ставится мимо исходника: {was!r}")
+            spoiled["scripts/review.py"] = source.replace(was, now)
+            with self.subTest(порча=why):
+                ast.parse(spoiled["scripts/review.py"])
+                self.assertNotEqual(self._named_exits(spoiled, docs), [],
+                                    "узда не увидела порчи")
+
+    def test_узда_краснеет_когда_замер_уезжает_в_чужую_роль(self):
+        """Снос с другой стороны: сообщение не трогали, а подстановку с ним добавили в
+        шаблон роли, у чьего отчёта названного раздела нет. Адресат выводится из шаблонов,
+        поэтому такое правило видит."""
+        docs = dict(self._documents())
+        self.assertNotIn("{{VOLUME}}", docs["references/fix.md"])
+        docs["references/fix.md"] += "\n# Volume of work\n\n{{VOLUME}}\n"
+        self.assertNotEqual(self._named_exits(self._sources(), docs), [],
+                            "узда не увидела, что замер уехал к роли без такого раздела")
+
+    # Вторая сторона: что правило обязано ПРОПУСКАТЬ. Иначе первая же переформулировка
+    # сообщения окажется «нарушением», и узду снимут.
+    INNOCENT = {
+        "другими словами про тот же раздел": (
+            "in the coverage-limits section of your report",
+            "in the section on coverage limits of your report"),
+        "раздел инвариантов, а не отчёта": (
+            "Do not pretend you read it.",
+            "Do not pretend you read it. The “What is NOT a finding” section of the "
+            "invariants is mandatory."),
+        "флаг чужой программы": (
+            "Do not pretend you read it.",
+            "Do not pretend you read it. Compare with `git log HEAD..origin/master "
+            "--oneline` first."),
+        "команда и флаг, которые есть": (
+            "Do not pretend you read it.",
+            "Do not pretend you read it. The lead splits the block: `{cli} coverage "
+            "--no-write`."),
+    }
+
+    def test_узда_пропускает_верно_названный_выход(self):
+        docs = self._documents()
+        for why, (was, now) in self.INNOCENT.items():
+            innocent = dict(self._sources())
+            source = innocent["scripts/review.py"]
+            self.assertIn(was, source, f"образец «{why}» ставится мимо исходника")
+            innocent["scripts/review.py"] = source.replace(was, now, 1)
+            with self.subTest(образец=why):
+                self.assertEqual(self._named_exits(innocent, docs), [],
+                                 "узда придирается к верно названному выходу")
+
+    # Фраза, а не имя флага: `"--scope"` в add_argument — это объявление, а не текст,
+    # который человек читает. Порог отсекает его и оставляет предложения.
+    SCOPE_PHRASE = 40
+
+    @classmethod
+    def _scope_without_diff(cls, source: str) -> list[int]:
+        """Строки инструмента, которые называют `--scope` и молчат про `--diff`.
+
+        Второй экземпляр того же класса: флаг существует, но делает не то, за чем его
+        зовут, — правило выше такое не ловит, оно спрашивает словарь, а не смысл.
+        """
+        return sorted(node.lineno for node in ast.walk(ast.parse(source))
+                      if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                      and "--scope" in node.value and len(node.value) > cls.SCOPE_PHRASE
+                      and "--diff" not in node.value)
+
+    def test_везде_где_назван_scope_назван_и_флаг_уменьшающий_дифф(self):
+        """УЗДА КЛАССА «документ называет выход, которого механизм не даёт».
+
+        `--scope` дифф не уменьшает: промпт с ним на 120 байт БОЛЬШЕ. Любой текст,
+        предлагающий его там, где речь об объёме, обязан назвать рядом `--diff` — флаг,
+        который единственный и уменьшает. Правило накрывает и то, что ещё не написано:
+        строки инструмента и документы скилла целиком, а не четыре найденных места.
+        """
+        offenders = [f"{TOOL.name}:{n}"
+                     for n in self._scope_without_diff(TOOL.read_text(encoding="utf-8"))]
+        for path in sorted(SKILL.rglob("*.md")):
+            for para in re.split(r"\n\s*\n", path.read_text(encoding="utf-8")):
+                if "--scope" in para and "--diff" not in para:
+                    offenders.append(path.relative_to(SKILL).as_posix())
+        self.assertEqual(offenders, [],
+                         "`--scope` назван без `--diff` рядом: он делит ответственность за "
+                         "отчёт и не уменьшает дифф, и текст, предлагающий его как выход из "
+                         "объёма, посылает за тем, чего механизм не даёт — " + "; ".join(offenders))
+
+    def test_правило_про_scope_читается_на_выдуманном_исходнике(self):
+        """Обе стороны правила на исходнике, которого в инструменте нет."""
+        guilty = ('MSG = {"vol": "не помещается — возьми половину через `--scope <половина>`,'
+                  ' ведущая запустит второго"}\n')
+        self.assertEqual(self._scope_without_diff(guilty), [1])
+        innocent = ('MSG = {"vol": "не помещается — проси более узкий `--diff`; `--scope` '
+                    'называет половину в отчёте"}\n'
+                    'c.add_argument("--scope", help="половина правок этого ревьюера")\n')
+        self.assertEqual(self._scope_without_diff(innocent), [],
+                         "имя флага и текст, который называет оба флага, — не нарушение")
+
+    def test_узда_читает_образцы_ворот_у_инструмента(self):
+        """Без этого правило молча объявило бы нечитаемым любой раздел: имена образцов
+        записаны здесь, а выражения — в инструменте, и разъехаться им нельзя."""
+        patterns = self._patterns(self._sources()["scripts/review.py"])
+        for role, named in self.REPORT_GATES.items():
+            for gate in named:
+                with self.subTest(роль=role, образец=gate):
+                    self.assertIn(gate, patterns, f"{gate} в инструменте не найден")
+        docs = self._documents()
+        for role, lang, expect in (("hunter", "", "Coverage limits"),
+                                   ("hunter", "ru", "Ограничения охвата"),
+                                   ("verify", "", "Block coverage status"),
+                                   ("verify", "ru", "Состояние охвата блока")):
+            suffix = ".md" if not lang else f".{lang}.md"
+            heads = self._skeleton(docs[f"references/{role}{suffix}"])
+            with self.subTest(роль=role, язык=lang or "en"):
+                self.assertIn(expect, heads, "скелет отчёта роли прочитан неверно")
 
 
 class DraftByTheTemplateTest(unittest.TestCase):
@@ -6249,8 +7082,9 @@ class DraftByTheTemplateTest(unittest.TestCase):
         self.draft(*(self.row(i, root=klass) for i in range(3)))
         self._import()
         self.assertIn("3 × " + klass, self.s.run("roots").stdout)
-        self.assertIn("and no guard", self.s.run("check").stdout,
-                      "три экземпляра одного корня обязаны потребовать узду")
+        self.assertIn("and no guard", refused(self.s.run("check")),
+                      "три экземпляра одного корня обязаны потребовать узду — отказом, "
+                      "а не предупреждением")
 
     def test_без_поля_root_тот_же_черновик_ворота_не_зажигает(self):
         """Мера дефекта: ровно те же три находки без `root` не группируются никак."""
@@ -6273,7 +7107,9 @@ class DraftByTheTemplateTest(unittest.TestCase):
         self.draft(self.row(0, status="rejected", confidence="rejected",
                             claim="дефекта нет: маршрут обёрнут в RequirePermission"))
         self._import()
-        self.assertIn("reject reason is not recorded", self.s.run("check").stdout)
+        self.assertIn("reject reason is not recorded", refused(self.s.run("check")),
+                      "причина, спрятанная в заголовке, обязана ронять проверку, "
+                      "а не печататься предупреждением")
 
     def test_дубль_написанный_по_образцу_не_роняет_проверку(self):
         self.draft(self.row(0), self.row(1, status="duplicate", dup_of="H1-001"))
@@ -6672,16 +7508,65 @@ class DeferredIsAnAcceptedRiskTest(unittest.TestCase):
         self.s.run("coverage")
         self.s.run("import", "H1")
         self.s.run("findings")
-        self.assertIn("deferred without a reason", self.s.run("check").stdout)
+        out = self.s.run("check")
+        self.assertIn("deferred without a reason", refused(out),
+                      "отложенная без причины обязана ронять проверку, а не печататься "
+                      "предупреждением: иначе ревью закрывается с неподписанным риском")
 
-    def test_урок_про_отложенное_говорит_то_же_что_инструмент(self):
-        for name, token in (("lessons.md", "accepted risk"), ("lessons.ru.md", "принятый риск")):
-            with self.subTest(file=name):
-                text = (SKILL / "references" / name).read_text(encoding="utf-8")
-                item = next(b for b in re.split(r"\n(?=\d+\. )", text) if "`deferred`" in b)
-                self.assertIn(token, item,
-                              f"{name}: урок об отложенной находке расходится с тем, что делает "
-                              f"с ней инструмент — сводка публикует её принятым риском")
+    def test_отказ_ворот_говорит_то_же_что_сводка(self):
+        """Хвост самого отказа держался ничем: откаченный к прежней формулировке, он снова
+        обещал, что к концу ревью каждую отложенную чинят или отвергают, — обещание,
+        которого инструмент не держит, а сводка ему прямо противоречит."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "medium", "confidence": "confirmed", "status": "deferred",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        message = refused(self.s.run("check"))
+        self.assertIn("accepted risk", message,
+                      "отказ обязан назвать то, чем отложенная находка станет: принятым риском")
+        self.assertNotIn("fixed or rejected", message,
+                         "отказ обещал починку или отказ к концу ревью — инструмент этого "
+                         "не требует, а сводка публикует находку принятым риском")
+
+    # Тексты, отвечающие на вопрос «что такое отложенная находка к концу ревью», и место
+    # ответа в каждом: слово-указатель, от которого ответ обязан стоять рядом. Ответ один
+    # на все — урок держался тестом, а условия завершения в `SKILL.md` не держались ничем,
+    # и откат одной фразы проходил всей сюитой молча.
+    ANSWERS = (
+        ("references/lessons.md", "`deferred`", "accepted risk"),
+        ("references/lessons.ru.md", "`deferred`", "принятый риск"),
+        ("references/fix.md", "deferred --reason", "accepted risk"),
+        ("references/fix.ru.md", "deferred --reason", "принят"),
+        ("assets/entry-point.md", "`deferred`", "accepted risk"),
+        ("assets/entry-point.ru.md", "`deferred`", "принятый риск"),
+        ("SKILL.md", "When the review is finished", "accepted risk"),
+    )
+    # Ответ обязан стоять при указателе, а не где-то в файле: окно взято с запасом от
+    # измеренного — самый далёкий из семи ответов отстоит на 128 символов (`SKILL.md`,
+    # условия завершения), ближайший на 43. Триста — примерно абзац, и файл, где ответ
+    # уехал дальше абзаца, читается как файл без ответа.
+    ANSWER_WINDOW = 300
+
+    def test_все_тексты_набора_дают_один_ответ_об_отложенной(self):
+        for rel, anchor, token in self.ANSWERS:
+            text = (SKILL / rel).read_text(encoding="utf-8")
+            windows = [text[m.end():m.end() + self.ANSWER_WINDOW]
+                       for m in re.finditer(re.escape(anchor), text)]
+            with self.subTest(файл=rel):
+                self.assertTrue(windows, f"{rel}: не нашлось даже `{anchor}`")
+                self.assertTrue(
+                    any(token in w for w in windows),
+                    f"{rel}: рядом с «{anchor}» не сказано, что отложенная находка — это "
+                    f"{token}; инструмент отвечает на этот вопрос так, и документ, "
+                    f"поправленный в одном месте, противоречит остальным шести")
 
 
 if __name__ == "__main__":
