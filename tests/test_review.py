@@ -3285,6 +3285,30 @@ class GitTruthTest(unittest.TestCase):
         self.assertNotIn("src/generated/x.ts", out.stdout)
 
 
+# Аргументы, при которых команда ДОХОДИТ ДО СВОЕГО ТЕЛА. Одного набора на всех не бывает:
+# `review set-status H1 s.md` — это `argparse`, отказавший до начала команды, и правило,
+# звавшее всех одинаково, проверяло бы его отказ, а не поведение команды. Измерено дважды:
+# при общем наборе `H1 s.md` до тела доходили три команды из двадцати трёх, а при наборах
+# `()` и `("H1",)` — двадцать из двадцати трёх, и мимо правила проходили ровно `set-status`,
+# `set-finding` и `log`, то есть три из тех, что ПИШУТ. Таблица одна на все обходы команд.
+BODY_ARGV = {
+    "init": (), "version": (), "setup": (), "status": (), "next": (),
+    "coverage": (), "prompt": ("H1",), "set-status": ("H1", "running"),
+    "import": ("H1",), "set-finding": ("H1-001", "open"), "hypotheses": ("H1",),
+    "restamp": ("H1",), "backfill": (), "inventory": (), "sizes": (),
+    "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
+    "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
+}
+# Отказ argparse — это не поведение команды: он печатается до её начала.
+ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are required",
+                    "invalid choice")
+
+
+def argparse_refused(stderr: str) -> str:
+    """Жалоба argparse в выводе: команда до своего тела не дошла, и обход её не проверил."""
+    return next((said for said in ARGPARSE_REFUSED if said in stderr), "")
+
+
 class WriteBoundaryTest(unittest.TestCase):
     """УЗДА КЛАССА «инструмент пишет не там, где обещано».
 
@@ -3320,16 +3344,38 @@ class WriteBoundaryTest(unittest.TestCase):
                 out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
         return out
 
+    # `summary` зовётся без `--out`: путь по умолчанию — то самое разрешённое исключение,
+    # которое проверяет это правило, а `--out` — просьба человека, и её держит отдельный
+    # тест ниже.
+    ARGV = dict(BODY_ARGV, summary=())
+
     def test_ни_одна_команда_не_пишет_вне_каталога_ревью(self):
+        """Каждая команда зовётся с аргументами, при которых она ДОХОДИТ ДО ТЕЛА.
+
+        Пока обход звал всех через `()` и `("H1",)`, три команды — `set-status`,
+        `set-finding` и `log` — отвергал argparse раньше их кода, и под правилом о границе
+        записи они не были вовсе: ровно три из тех, что пишут. Отказ argparse поэтому не
+        засчитывается как проход — иначе обход перечисляет команды, не запуская их.
+        """
         helped = self.s.run("--help").stdout
         names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
         self.assertTrue(names, helped)
         commands = names.group(1).split(",")
         self.assertIn("summary", commands)
+        self.assertEqual(sorted(set(self.ARGV) - set(commands)), [],
+                         "в таблице есть команда, которой у инструмента больше нет")
         before = self._snapshot()
         for cmd in commands:
-            for args in ((), ("H1",)):
-                self.s.run(cmd, *args)
+            with self.subTest(cmd=cmd):
+                self.assertIn(cmd, self.ARGV,
+                              "новая команда: впишите в BODY_ARGV аргументы, при которых "
+                              "она доходит до своего тела, — иначе правило проверяет "
+                              "отказ argparse, а не запись команды")
+            out = self.s.run(cmd, *self.ARGV.get(cmd, ()))
+            with self.subTest(cmd=cmd, args=self.ARGV.get(cmd, ())):
+                self.assertFalse(argparse_refused(out.stderr),
+                                 f"{cmd}: команда не начиналась — поправьте BODY_ARGV: "
+                                 f"{out.stderr[-300:]}")
         after = self._snapshot()
         appeared = {rel for rel in after if rel not in before}
         changed = {rel for rel in before if after.get(rel, before[rel]) != before[rel]}
@@ -3508,21 +3554,10 @@ class HandWrittenInputTest(unittest.TestCase):
         "blocks не списком": lambda d: d.update(blocks={"id": "H1"}),
     }
 
-    # Аргументы, при которых команда ДОХОДИТ ДО СВОЕГО ТЕЛА. Одного набора на всех не
-    # бывает: `review set-status H1 s.md` — это `argparse`, отказавший до начала команды,
-    # и правило ниже проверяло бы его отказ, а не поведение команды. Измерено: при общем
-    # наборе `H1 s.md` до тела доходили три команды из двадцати трёх.
-    ARGV = {
-        "init": (), "version": (), "setup": (), "status": (), "next": (),
-        "coverage": (), "prompt": ("H1",), "set-status": ("H1", "running"),
-        "import": ("H1",), "set-finding": ("H1-001", "open"), "hypotheses": ("H1",),
-        "restamp": ("H1",), "backfill": (), "inventory": (), "sizes": (),
-        "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
-        "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
-    }
-    # Отказ argparse — это не поведение команды: он печатается до её начала.
-    ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are required",
-                        "invalid choice")
+    # Аргументы, при которых команда доходит до своего тела, — общая таблица `BODY_ARGV`:
+    # обходы команд обязаны звать их одинаково, иначе один из них снова проверит отказ
+    # argparse вместо самой команды.
+    ARGV = BODY_ARGV
 
     def _damage(self, how) -> None:
         bj = self.s.root / "docs/review/blocks.json"
@@ -3567,10 +3602,9 @@ class HandWrittenInputTest(unittest.TestCase):
                     with self.subTest(cmd=cmd, args=args):
                         self.assertNotIn("Traceback", out.stderr,
                                          f"{name} / {cmd} {args}: {out.stderr[-400:]}")
-                        for said in self.ARGPARSE_REFUSED:
-                            self.assertNotIn(said, out.stderr,
-                                             f"{name} / {cmd}: команда не начиналась — "
-                                             "поправьте ARGV")
+                        self.assertFalse(argparse_refused(out.stderr),
+                                         f"{name} / {cmd}: команда не начиналась — "
+                                         f"поправьте BODY_ARGV")
 
     def test_отказ_на_битом_определении_называет_поле_и_файл(self):
         """Отказ читает тот, кто видит инструмент впервые: он обязан назвать, что править."""
