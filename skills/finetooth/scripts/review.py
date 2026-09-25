@@ -202,6 +202,17 @@ ROLES = ["hunter", "verify", "fix", "fixreview"]
 # scanners), the proof is the artifacts from the manifest. A block without `paths` is a
 # live system.
 PROOFS = ("read", "measured")
+# A cross-cutting block's acceptance criterion is usually an enumeration — "every place that
+# changes data", "every call and its constraint" — and that is a sweep over the whole program,
+# not the block's files. The readability ceiling counted only `paths`, so a block "within the
+# ceiling" demanded ten times more (a live review: 5.7k lines in the block, 47k in the sweep;
+# setfork H3: 8 files by the counter, 89 by the criterion). The sweep is declared, sized apart
+# and done by a script, not by attention.
+SWEEP_DIR_NAME = "sweeps"
+ENUMERATION = re.compile(
+    r"\b(?:все|всех|всем|каждый|каждое|каждого|каждую)\s+(?:мест|вызов|точк|пут|маршрут|запис|обращен|использован|вхожден)"
+    r"|\b(?:every|all)\s+(?:places?|calls?|sites?|routes?|writes?|paths?|quer(?:y|ies)|callers?|usages?|occurrences?)\b",
+    re.IGNORECASE)
 # Review languages. The tool's own messages are always English; what is translated into
 # the project's language is what the agent reads in the prompt and what a human reads in
 # the docs/review/ artifacts: rule 1, headings, the reading budget, findings.md, the
@@ -245,6 +256,7 @@ MSG = {
   "refs_cut": "\n\n({n} files. The list is collapsed to patterns — expand the part you need yourself: `git ls-files -- <pattern>`.)",
   "vol_head": "Files: {n}. Lines: {lines}. Order of magnitude: ~{k}k tokens just to read, before any reasoning or tool calls.",
   "vol_fits": "This fits what can be read in one session (ceiling {limit} lines).",
+  "vol_sweep": "\n**The acceptance criterion sweeps beyond the block:** {n} more files, {lines} lines (`sweep` in blocks.json). Do not read them one by one — attention falls off at the end of a long list. Enumerate the places mechanically: a script at `docs/review/sweeps/{id}.<ext>` (grep, a parser) that prints every place with its path and line; commit it, then read the places it found. The script is the proof that the list is complete.",
   "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage-limits section of your report. Do not pretend you read it.",
   "vol_over_verify": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the block-coverage-status section of your report, opening it with the words \"Coverage is incomplete\". Do not pretend you read it.",
   "vol_border": "\nWhere the budget line runs (largest first, cumulative):",
@@ -298,6 +310,7 @@ MSG = {
   "refs_cut": "\n\n({n} файлов. Список сокращён до шаблонов — разверни нужную часть сам: `git ls-files -- <шаблон>`.)",
   "vol_head": "Файлов: {n}. Строк: {lines}. Порядок величины: ~{k}k токенов только на чтение, без рассуждений и вызовов инструментов.",
   "vol_fits": "Это укладывается в то, что читается за сеанс (порог {limit} строк).",
+  "vol_sweep": "\n**Критерий приёмки обходит больше, чем блок:** ещё {n} файлов, {lines} строк (`sweep` в blocks.json). Не читай их по одному — к концу длинного списка внимание падает. Перечисли места механически: скрипт `docs/review/sweeps/{id}.<расширение>` (grep, разбор кода) печатает каждое место с путём и строкой; закоммить его и читай найденные места. Скрипт — доказательство, что список полон.",
   "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта об ограничениях охвата. Не делайте вид, что прочитали.",
   "vol_over_verify": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта о состоянии охвата блока, открыв его словами «Охват неполный». Не делайте вид, что прочитали.",
   "vol_border": "\nГде проходит граница бюджета (по убыванию размера, накопительно):",
@@ -646,6 +659,10 @@ def check_definition(defn: dict) -> None:
                 die(f"docs/review/blocks.json: {where} has `{field}` = `{b[field]}` — "
                     f"it becomes part of a file name under docs/review/, so it cannot "
                     f"contain a path separator")
+        if "sweep" in b and not (isinstance(b["sweep"], list)
+                                 and all(isinstance(x, str) and x for x in b["sweep"])):
+            die(f"docs/review/blocks.json: {where} has `sweep` that is not a list of path "
+                f"patterns — the files the acceptance criterion requires to enumerate over")
         if b["id"] in seen:
             die(f"docs/review/blocks.json: two blocks share the id `{b['id']}` — the id is "
                 f"the block's name in the state, in the findings and in the reports")
@@ -1037,6 +1054,33 @@ def cmd_inventory(args) -> int:
     return 0
 
 
+def sweep_lines(b: dict) -> tuple[int, int]:
+    """Files and lines the block's `sweep` covers beyond its own `paths`."""
+    if not b.get("sweep"):
+        return 0, 0
+    own = git_files(b.get("paths", [])) if b.get("paths") else set()
+    extra = sorted(git_files(b["sweep"]) - own)
+    return len(extra), sum(file_lines(f) or 0 for f in extra)
+
+
+def sweep_script(b: dict) -> Path | None:
+    d = REVIEW / SWEEP_DIR_NAME
+    if not d.is_dir():
+        return None
+    hits = sorted(p for p in d.iterdir() if p.is_file() and p.stem == b["id"])
+    return hits[0] if hits else None
+
+
+def enumerates_beyond(b: dict) -> bool:
+    """Does the manifest's acceptance criterion ask to enumerate places program-wide?"""
+    m = manifest_path(b)
+    if not m.exists():
+        return False
+    body = section_body(m.read_text(encoding="utf-8"), ACCEPTANCE_HEADING) or []
+    # what the criterion SAYS, not an example quoted in it
+    return bool(ENUMERATION.search("\n".join(unquoted(body, "text"))))
+
+
 def cmd_sizes(args) -> int:
     """Size of every block against the readability ceiling: what to split before it is too late."""
     defn = blocks()
@@ -1055,6 +1099,9 @@ def cmd_sizes(args) -> int:
             over += 1
         elif proof == "measured":
             mark = "measured, the ceiling does not apply"
+        sn, sl = sweep_lines(b)
+        if sn:
+            mark = (mark + "; " if mark else "") + f"+ sweep {sn} files / {sl} lines (mechanical, not read)"
         print(f"{b['id']:<6} {proof:<9} {n:>6} {lines:>8}  {mark}")
     if over:
         print(f"\nblocks above the ceiling: {over}")
@@ -1925,7 +1972,9 @@ def cmd_prompt(args) -> int:
         "{{FIX_REPORT}}": report_path(b, "fix", args.round),
         "{{DIFF_RANGE}}": args.diff or "",
         "{{DIFF_VOLUME}}": diff_volume(diff) if diff else "",
-        "{{VOLUME}}": volume_note(files, args.role),
+        "{{VOLUME}}": volume_note(files, args.role) + (
+            T("vol_sweep", n=sweep_lines(b)[0], lines=sweep_lines(b)[1], id=b["id"])
+            if sweep_lines(b)[0] else ""),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
         "{{RECORDED}}": render_recorded_for(b["id"]),
@@ -3641,6 +3690,23 @@ def cmd_check(args) -> int:
             f"describe what is already fixed; `git fetch` and compare with {ref} before "
             f"filing them"
         )
+
+    # An enumeration criterion is a sweep over the program: declared, and done by a script.
+    for bid, b in idx.items():
+        if enumerates_beyond(b) and not b.get("sweep"):
+            gates.refuse(
+                "sweep/undeclared",
+                f"{bid}: the acceptance criterion enumerates places across the program "
+                f"(\"every place…\", \"all calls…\"), but the block declares no `sweep` — the "
+                f"ceiling then counts a tenth of the work; add `sweep` (the patterns the "
+                f"enumeration covers) to blocks.json")
+        status = st["blocks"].get(bid, {}).get("status", "todo")
+        if b.get("sweep") and status not in ("todo", "running") and not sweep_script(b):
+            gates.refuse(
+                "sweep/no-script",
+                f"{bid}: the block declares a sweep but there is no sweep script at "
+                f"docs/review/{SWEEP_DIR_NAME}/{bid}.<ext> — the list of places is complete "
+                f"only if a script produced it; commit the script the hunter used")
 
     # A block that cannot be read in one session is a promise, not a block.
     for bid, b in idx.items():

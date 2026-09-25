@@ -1473,6 +1473,14 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("src/модуль:раз.ts:1: H1-001", out.stdout, out.stdout)
         self.assertNotIn("\\320", out.stdout, "путь пришёл экранированным")
 
+    def test_охотник_может_исполнять(self):
+        """Три блока подряд (T1–T3) охотнику отказывали в python3, и блок `proof: measured`
+        доказывался чтением. Список разрешений охотника обязан включать исполнение."""
+        text = (SKILL / "assets" / "run-role.sh").read_text(encoding="utf-8")
+        hunter = next(ln for ln in text.splitlines() if ln.strip().startswith("hunter)"))
+        for tool in ("Bash(python3 *)", "Bash(npm test *)", "Bash(node *)"):
+            self.assertIn(tool, hunter)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -5455,6 +5463,8 @@ class GateRegistryTest(unittest.TestCase):
         ("blocks/too-big-to-read",              "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
         ("refs/findings-named-in-code",         "test_refs_находит_номер_находки_в_коде_и_только_его"),
         ("findings/fix-debt-age",               "test_check_предупреждает_о_находке_старше_недели"),
+        ("sweep/undeclared",                    "test_перечисление_без_sweep_краснеет"),
+        ("sweep/no-script",                     "test_sweep_без_скрипта_после_охоты_краснеет"),
     ]
 
     def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):
@@ -6762,6 +6772,11 @@ jobs:
 
     READMES = ("README.md", "README.ru.md")
     _tracked = staticmethod(tracked)
+    # Отчёты ревью, которые репозиторий хранит, но не пишет сам: реестр `docs/review/`
+    # (сносится вместе с ревью) и корпус вердиктов — те же отчёты T1 ДОСЛОВНО, на которых
+    # заморожен разборщик (`expected.json`); поправить в них разметку значит сдвинуть его
+    # вход. Правила о публикуемых документах обходят оба места одним списком.
+    VERBATIM_REPORTS = (":(exclude)docs/review/", ":(exclude)tests/corpus/verdicts/finetooth/")
 
     def test_опись_набора_называет_все_команды(self):
         """Раздел «Что внутри» — единственное место, где репозиторий перечисляет сам себя;
@@ -6796,10 +6811,10 @@ jobs:
     # `_glued_to_list_item`; оба прохода ниже (T2 и T4 нашли один и тот же дефект с двух
     # сторон) и обе пары образцов держат ОДНУ функцию, чтобы их знание не разъехалось.
     def test_ни_один_абзац_не_приклеен_к_предыдущему_пункту_списка(self):
-        # Отчёты самого ревью сюда не входят: они пишутся агентами и удаляются вместе с
-        # `docs/review/`, а правило — о документах, которые репозиторий публикует.
+        # Отчёты самого ревью сюда не входят (`VERBATIM_REPORTS`): их пишут агенты, а
+        # правило — о документах, которые репозиторий публикует.
         swallowed = []
-        for rel in self._tracked("*.md", ":!docs/review"):
+        for rel in self._tracked("*.md", *self.VERBATIM_REPORTS):
             lines = (KIT / rel).read_text(encoding="utf-8").split("\n")
             swallowed += [f"{rel}:{n}: {lines[n - 1][:60]}"
                           for n in _glued_lines("\n".join(lines))]
@@ -6849,9 +6864,10 @@ jobs:
 
         Не корнем единым: шаблоны ролей — нумерованные списки правил, по которым работает
         агент, и абзац, уехавший внутрь правила 4, меняет смысл ровно так же. Вне правила
-        остаётся только `docs/review/` — аппарат ревью, который сносится вместе с ним и
-        чьи отчёты не переписываются."""
-        for rel in self._tracked("*.md", ":(exclude)docs/review/"):
+        остаются только отчёты ревью (`VERBATIM_REPORTS`): `docs/review/` — аппарат,
+        который сносится вместе с ревью, и дословные отчёты корпуса вердиктов, — их не
+        переписывают."""
+        for rel in self._tracked("*.md", *self.VERBATIM_REPORTS):
             with self.subTest(файл=rel):
                 self.assertEqual(
                     _glued_to_list_item((KIT / rel).read_text(encoding="utf-8")), [],
@@ -9870,6 +9886,73 @@ class DeferredIsAnAcceptedRiskTest(unittest.TestCase):
                     f"{token}; инструмент отвечает на этот вопрос так, и документ, "
                     f"поправленный в одном месте, противоречит остальным шести")
 
+
+class SweepTest(unittest.TestCase):
+    """The ceiling counted the block's files, while an enumeration criterion ("every place
+    that changes data") sweeps the whole program — a live block of 5.7k lines demanded 47k
+    (issue #25). The sweep is declared, sized apart and proven by a script."""
+
+    def setUp(self):
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        for i in range(3):
+            self.s.write(f"lib/w{i}.ts", "write()\n" * 50)
+
+    def manifest(self, criterion: str):
+        self.s.manifest(hypotheses=1)
+        m = Path(self.s.root, "docs/review/blocks/H1-demo.md")
+        text = m.read_text(encoding="utf-8")
+        head = text[:text.index("## Критерий приёмки")]
+        m.write_text(head + "## Критерий приёмки\n\n" + criterion + "\n", encoding="utf-8")
+
+    def blocks(self, sweep=None):
+        self.s.blocks(paths=["src/one.ts"], exclusions=[{"pattern": "lib/**", "reason": "стенд"}])
+        if sweep is not None:
+            bj = Path(self.s.root, "docs/review/blocks.json")
+            d = json.loads(bj.read_text(encoding="utf-8"))
+            d["blocks"][0]["sweep"] = sweep
+            bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+
+    def prepare(self, sweep=None, criterion="Таблица: перечислены все места, где меняются данные.", status=None):
+        self.blocks(sweep)
+        self.manifest(criterion)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        if status:
+            self.s.run("set-status", "H1", status)
+
+    # forbidden
+    def test_перечисление_без_sweep_краснеет(self):
+        self.prepare()
+        out = self.s.run("check")
+        self.assertIn("declares no `sweep`", refused(out), out.stdout)
+
+    def test_sweep_без_скрипта_после_охоты_краснеет(self):
+        self.prepare(sweep=["lib/**"], status="hunted")
+        out = self.s.run("check")
+        self.assertIn("no sweep script", refused(out), out.stdout)
+
+    # allowed
+    def test_критерий_без_перечисления_не_требует_sweep(self):
+        self.prepare(criterion="Таблица «вход → ожидание → факт» по каждой гипотезе.")
+        out = self.s.run("check").stdout
+        self.assertNotIn("declares no `sweep`", out)
+
+    def test_объявленный_обход_со_скриптом_проходит_и_виден_в_размерах(self):
+        self.prepare(sweep=["lib/**"])
+        self.s.write("docs/review/sweeps/H1.sh", "git grep -n 'write(' -- lib\n")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "sweep")
+        self.s.run("set-status", "H1", "hunted")
+        out = self.s.run("check").stdout
+        self.assertNotIn("declares no `sweep`", out)
+        self.assertNotIn("no sweep script", out)
+        sizes = self.s.run("sizes").stdout
+        self.assertIn("+ sweep 3 files / 150 lines", sizes)
+        prompt = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("docs/review/sweeps/H1", prompt)
 
 if __name__ == "__main__":
     unittest.main()

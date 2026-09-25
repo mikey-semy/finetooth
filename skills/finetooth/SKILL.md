@@ -61,7 +61,9 @@ one of your own:
    sitting (the `readable_lines` ceiling, 6000 lines by default; `review sizes` shows who is
    above it). A block that reading cannot prove (test quality, performance, scanners) gets
    `"proof": "measured"`: the proof is the artifacts from the manifest, and the ceiling does
-   not apply. A block without `paths` is a live system. Sample —
+   not apply. A criterion that enumerates across the program ("every place that changes
+   data") is a sweep, not reading: declare it in `sweep`, and the hunter enumerates by a
+   script at `docs/review/sweeps/<ID>.<ext>`, then reads the hits. A block without `paths` is a live system. Sample —
    [assets/blocks.example.json](assets/blocks.example.json).
 4. `review init`, then `review coverage` — work through the unowned files until there are
    zero. **A human assigns a file to a block**: a file caught by a pattern match will be
