@@ -5465,6 +5465,103 @@ class DcoGateTest(unittest.TestCase):
         self.assertTrue(os.access(self.SCRIPT, os.X_OK), "dco.sh не исполняемый")
 
 
+def _workflow_steps(text: str) -> list[str]:
+    """Командные строки рабочего процесса: тело каждого `run:`, по строке за раз.
+
+    Искать по всему тексту процесса нельзя, и это измерено: `python3` встречается в шаге,
+    который ставит валидатор скилла, а `tests` — в имени самого процесса (`name: tests`),
+    так что узда, требовавшая двух таких слов где угодно, оставалась зелёной и когда из CI
+    удаляли шаг с прогоном тестов, и когда удаляли весь его job. Запускает команды только
+    `run:`, и сверять надо с ним.
+    """
+    lines, steps, i = text.splitlines(), [], 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)(?:-\s+)?run:[ \t]*([|>][-+]?)?[ \t]*(.*)$", lines[i])
+        i += 1
+        if not m:
+            continue
+        indent, folded, inline = m.group(1), m.group(2), m.group(3).strip()
+        if not folded:
+            steps.append(inline)
+            continue
+        # Тело блочного значения — всё, что отбито глубже ключа.
+        while i < len(lines) and (not lines[i].strip()
+                                  or lines[i].startswith(indent + " ")):
+            if lines[i].strip():
+                steps.append(lines[i].strip())
+            i += 1
+    return steps
+
+
+def _runs_command(cmd: str, step: str) -> bool:
+    """Шаг гоняет ИМЕННО эту команду: та же программа и все её доводы, в том же порядке.
+
+    Программа сверяется по имени, а не по пути: в CI валидатор лежит в venv под
+    `$RUNNER_TEMP`, а зовётся тем же именем. Доводы шага могут быть шире доводов
+    документа (`-v` у прогона тестов), но ни один довод документа не может пропасть.
+    Диапазон коммитов CI подставляет из события, поэтому довод с `..` сверяется по форме.
+    """
+    want, got = cmd.split(), step.split()
+    if not want or not got:
+        return False
+    if Path(want[0].strip("\"'")).name != Path(got[0].strip("\"'")).name:
+        return False
+    rest = got[1:]
+    for arg in want[1:]:
+        if ".." in arg:
+            if not any(".." in g for g in rest):
+                return False
+            continue
+        if arg not in rest:
+            return False
+        rest = rest[rest.index(arg) + 1:]
+    return True
+
+
+def _gates_not_run(commands: list[str], steps: list[str]) -> list[str]:
+    """Команды, которые документ велит гонять, а ни один шаг процесса не гоняет."""
+    return [cmd for cmd in commands
+            if not any(_runs_command(cmd, step) for step in steps)]
+
+
+def _glued_to_list_item(text: str) -> list[str]:
+    """Абзацы, приклеенные к пункту списка: строка текста сразу под пунктом, без пустой.
+
+    По правилам markdown такой абзац — ЧАСТЬ пункта (ленивое продолжение), а не свой
+    абзац. Вводный абзац блока попал внутрь записи про `NOTICE.md`, и пятнадцать пунктов
+    блока оказались под заголовком, которого в разметке нет, — а заметки о выпуске берут
+    этот раздел как есть.
+    """
+    glued, fence, previous = [], "", ""
+    for i, line in enumerate(text.splitlines(), 1):
+        edge = re.match(r"^\s*(```+|~~~+)", line)
+        if fence:
+            if edge and edge.group(1)[0] == fence[0] and len(edge.group(1)) >= len(fence):
+                fence = ""
+            continue
+        if edge:
+            fence = edge.group(1)
+            previous = line
+            continue
+        # Продолжение с отступом, пустая строка, следующий пункт, заголовок, цитата и
+        # таблица пунктом не проглатываются: абзац — это текст, начатый с той же колонки.
+        if (re.match(r"^\s*[-*+] ", previous) and line.strip()
+                and not re.match(r"^(\s|[-*+] |\d+[.)] |#|>|\||\[)", line)):
+            glued.append(f"{i}: {line.strip()[:70]}")
+        previous = line
+    return glued
+
+
+def scenario_count() -> int:
+    """Сколько в наборе сценариев — тем числом, которое называют документы.
+
+    Загрузчик СВОЙ, а не `defaultTestLoader`: тот несёт в себе образцы из `-k`, и под
+    фильтром замер давал единицу. Число, которое зависит от способа запуска, — не замер, и
+    сверять с ним публичное число нельзя.
+    """
+    return unittest.TestLoader().discover(str(KIT / "tests")).countTestCases()
+
+
 def _ordinal_share(value: float) -> str:
     """0.10 → "tenth": доля, как её называют словом в английском тексте."""
     return {2: "half", 3: "third", 4: "quarter", 5: "fifth", 10: "tenth"}[round(1 / value)]
@@ -5483,10 +5580,17 @@ class RepositoryContractTest(unittest.TestCase):
     утверждение либо держится прогоном, либо разъезжается с кодом молча.
     """
 
-    def test_число_сценариев_в_документах_не_больше_настоящего(self):
+    def test_число_сценариев_в_документах_равно_настоящему(self):
         """README (обоих языков) и AGENTS.md называют число сценариев как доказательство
-        того, что набор проверен. Число брали из головы: 98 против настоящих 248."""
-        real = unittest.defaultTestLoader.discover(str(KIT / "tests")).countTestCases()
+        того, что набор проверен. Число брали из головы: 98 против настоящих 248.
+
+        Равенство, а не полоса. Полоса «не больше настоящего и не меньше девяти десятых»
+        заводилась, чтобы не краснел каждый PR с новым тестом, — и вместе с этим разрешала
+        публичному числу отставать навсегда: раунд закрылся с 270 в документах против 296 в
+        прогоне, и это ровно то состояние, из-за которого читатель не может понять, что
+        именно у него не так. Замер стоит одной правки в трёх файлах, и отказ её называет.
+        """
+        real = scenario_count()
         self.assertGreater(real, 0)
         for rel, pattern in (("README.md", r"(\d+) scenarios"),
                              ("README.ru.md", r"(\d+) сценариев"),
@@ -5496,13 +5600,27 @@ class RepositoryContractTest(unittest.TestCase):
             with self.subTest(файл=rel):
                 self.assertTrue(found, f"{rel}: число сценариев не названо")
                 for n in found:
-                    # Не больше настоящего — документ не обещает проверки, которой нет; и не
-                    # отстаёт больше чем на десятую часть. Точное равенство ломало каждый PR,
-                    # добавивший тест (после слияния трёх веток починки: 270 против 296).
-                    self.assertLessEqual(int(n), real,
-                                         f"{rel} обещает {n} сценариев, а их {real}")
-                    self.assertGreaterEqual(int(n), real * 9 // 10,
-                                            f"{rel} называет {n} сценариев, а их уже {real} — обновите число")
+                    self.assertEqual(
+                        int(n), real,
+                        f"{rel} называет {n} сценариев, а их {real}. Число сценариев — "
+                        f"замер: прогоните `python3 -m unittest discover -s tests` и "
+                        f"впишите {real} в README.md, README.ru.md и AGENTS.md")
+
+    def test_замер_числа_сценариев_не_зависит_от_способа_запуска(self):
+        """Обратная сторона точного равенства: замер обязан быть одним и тем же, как бы ни
+        звали прогон. `defaultTestLoader` несёт образцы `-k` в себе, и под фильтром счёт
+        давал единицу — с ним точное равенство было бы невыполнимо ни при каком числе в
+        документах, а полоса молча сравнивала документ с отфильтрованным прогоном."""
+        whole = scenario_count()
+        self.assertGreater(whole, 1)
+        saved = unittest.defaultTestLoader.testNamePatterns
+        unittest.defaultTestLoader.testNamePatterns = ["*такого_теста_в_наборе_нет*"]
+        try:
+            self.assertEqual(scenario_count(), whole,
+                             "замер числа сценариев зависит от образцов `-k`: считайте "
+                             "своим загрузчиком, а не defaultTestLoader")
+        finally:
+            unittest.defaultTestLoader.testNamePatterns = saved
 
     # Порог, названный в публичном документе, обязан читаться из того же места, откуда его
     # берёт инструмент. Пары «константа → как она обязана звучать в тексте»: README описывал
@@ -5540,32 +5658,85 @@ class RepositoryContractTest(unittest.TestCase):
     # объявлено обязательным, а держит его честное слово автора предложения.
     GATE_BLOCKS = ("CONTRIBUTING.md",)
 
-    def test_каждые_объявленные_ворота_гоняет_ci(self):
-        """УЗДА КОРНЯ «правило объявлено обязательным, и не держит его ничто». Прогон
-        тестов, валидатор скилла и подпись DCO названы в CONTRIBUTING как обязательные;
-        до этой узды подпись не проверял никто."""
-        workflows = "\n".join(p.read_text(encoding="utf-8")
-                              for p in sorted((KIT / ".github" / "workflows").glob("*.yml")))
+    @classmethod
+    def _declared_gates(cls) -> list[str]:
+        """Команды из `sh`-блоков документов, которые велят их гонять."""
         commands = []
-        for rel in self.GATE_BLOCKS:
+        for rel in cls.GATE_BLOCKS:
             text = (KIT / rel).read_text(encoding="utf-8")
             for block in re.findall(r"```sh\n(.*?)```", text, re.S):
                 for line in block.splitlines():
                     line = re.sub(r"\s+#.*$", "", line).strip()
                     if line:
                         commands.append(line)
+        return commands
+
+    @staticmethod
+    def _workflow_steps_of_repository() -> list[str]:
+        return _workflow_steps("\n".join(
+            p.read_text(encoding="utf-8")
+            for p in sorted((KIT / ".github" / "workflows").glob("*.yml"))))
+
+    def test_каждые_объявленные_ворота_гоняет_ci(self):
+        """УЗДА КОРНЯ «правило объявлено обязательным, и не держит его ничто». Прогон
+        тестов, валидатор скилла и подпись DCO названы в CONTRIBUTING как обязательные;
+        до этой узды подпись не проверял никто.
+
+        Сверяется ШАГ процесса, а не текст файла: пока узда искала два слова команды где
+        угодно в процессах, `python3` находился в шаге установки валидатора, а `tests` — в
+        имени процесса, и удалить из CI и шаг с прогоном тестов, и весь его job можно было,
+        не покраснев (измерено оба раза).
+        """
+        commands = self._declared_gates()
         self.assertTrue(commands, "в CONTRIBUTING не нашлось ни одной команды ворот")
-        for cmd in commands:
-            tokens = cmd.split()
-            anchors = [Path(tokens[0]).name]
-            last = tokens[-1]
-            if ".." not in last and not last.startswith("-") and len(tokens) > 1:
-                anchors.append(last)
-            with self.subTest(команда=cmd):
-                for anchor in anchors:
-                    self.assertTrue(anchor in workflows,
-                                    f"CONTRIBUTING велит гонять `{cmd}`, а CI этого не "
-                                    f"делает: в рабочих процессах нет `{anchor}`")
+        steps = self._workflow_steps_of_repository()
+        self.assertTrue(steps, "в рабочих процессах не нашлось ни одного шага `run:`")
+        self.assertEqual(
+            _gates_not_run(commands, steps), [],
+            "CONTRIBUTING велит гонять эти команды, а ни один шаг рабочего процесса их не "
+            "гоняет: правило объявлено обязательным, и держит его честное слово автора")
+
+    # Обе стороны правила — на процессе, которого в репозитории нет. Соответствие по двум
+    # словам где угодно ловило ровно то, чего не бывает: пока правило было таким, оба
+    # нарушения ниже проходили зелёными.
+    INVENTED_WORKFLOW = """name: tests
+jobs:
+  unittest:
+    steps:
+      - uses: actions/checkout@abc
+      - name: Run the tests
+        run: python3 -m unittest discover -s tests -v
+  skill:
+    steps:
+      - name: Validate the skill format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/skills-ref"
+          "$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth
+  dco:
+    steps:
+      - run: .github/dco.sh ${{ github.event.pull_request.base.sha }}..${{ github.sha }}
+"""
+    INVENTED_GATES = ("python3 -m unittest discover -s tests",
+                      "skills-ref validate skills/finetooth",
+                      ".github/dco.sh origin/dev..HEAD")
+
+    def test_узда_видит_ворота_которых_ci_не_гоняет(self):
+        """Нарушение обязано ронять прогон, а честный процесс — проходить: команда
+        названа шагом по-своему (валидатор из venv, диапазон из события, лишний `-v`) и
+        всё равно засчитывается."""
+        whole = _workflow_steps(self.INVENTED_WORKFLOW)
+        self.assertEqual(_gates_not_run(list(self.INVENTED_GATES), whole), [],
+                         "узда придирается к процессу, который команды гоняет")
+        without_step = self.INVENTED_WORKFLOW.replace(
+            "        run: python3 -m unittest discover -s tests -v\n", "")
+        self.assertEqual(
+            _gates_not_run(list(self.INVENTED_GATES), _workflow_steps(without_step)),
+            [self.INVENTED_GATES[0]], "узда не увидела удалённый шаг с прогоном тестов")
+        stubbed = self.INVENTED_WORKFLOW.replace(
+            '"$RUNNER_TEMP/skills-ref/bin/skills-ref" validate skills/finetooth', "true")
+        self.assertEqual(
+            _gates_not_run(list(self.INVENTED_GATES), _workflow_steps(stubbed)),
+            [self.INVENTED_GATES[1]], "узда не увидела подменённый валидатор")
 
     READMES = ("README.md", "README.ru.md")
 
@@ -5603,6 +5774,44 @@ class RepositoryContractTest(unittest.TestCase):
             with self.subTest(файл=rel):
                 self.assertEqual([h for h in headings if h not in defined], [],
                                  f"{rel}: версии без ссылки на сравнение")
+
+    def test_в_документах_нет_абзаца_приклеенного_к_пункту_списка(self):
+        """Заметки о выпуске берут раздел «Unreleased» как есть (RELEASING, ворота 4), а
+        абзац, стоящий вплотную под пунктом списка, по правилам markdown становится частью
+        пункта. Так вводный абзац блока T2 оказался внутри записи про `NOTICE.md`, и
+        пятнадцать пунктов блока пришли под заголовком, которого в разметке нет —
+        одинаково в обоих языках. Список документов берётся у git: новый документ в корне
+        попадает под правило сам."""
+        for rel in self._tracked(":(glob)*.md"):
+            with self.subTest(файл=rel):
+                self.assertEqual(
+                    _glued_to_list_item((KIT / rel).read_text(encoding="utf-8")), [],
+                    f"{rel}: абзац приклеен к пункту списка — отбейте его пустой строкой, "
+                    f"иначе разметка считает его продолжением пункта")
+
+    # Обе стороны правила, на разметке, которой в документах нет.
+    GLUED_SHAPES = {
+        "абзац вплотную под пунктом": "- пункт\nАбзац.\n",
+        "абзац под вложенным пунктом": "- пункт\n  - вложенный\nАбзац.\n",
+    }
+    NOT_GLUED_SHAPES = {
+        "абзац отбит пустой строкой": "- пункт\n\nАбзац.\n",
+        "продолжение с отступом": "- пункт\n  продолжение.\n",
+        "следующий пункт": "- пункт\n- другой пункт\n",
+        "заголовок": "- пункт\n## Раздел\n",
+        "ссылка сравнения": "- пункт\n[0.6.0]: https://example.com\n",
+        "пункт внутри ограды": "```\n- пункт\nтекст\n```\n",
+    }
+
+    def test_узда_видит_абзац_приклеенный_к_пункту(self):
+        for why, src in self.GLUED_SHAPES.items():
+            with self.subTest(разметка=why):
+                self.assertNotEqual(_glued_to_list_item(src), [],
+                                    "узда не увидела приклеенный абзац")
+        for why, src in self.NOT_GLUED_SHAPES.items():
+            with self.subTest(невиновный=why):
+                self.assertEqual(_glued_to_list_item(src), [],
+                                 "узда придирается к верной разметке")
 
     # Пары «оригинал — перевод»: обе половины обязаны вести друг на друга с первой строки.
     BILINGUAL = ("README", "CHANGELOG", "CODE_OF_CONDUCT")
@@ -5994,7 +6203,11 @@ def report_sections(md):
     # (1) жить в отдельной функции, а не прямо в тесте — иначе его нечем покормить, — и
     # (2) быть прогнанным на ВЫДУМАННОМ исходнике: только так видно, что оно замечает
     # форму, которой ещё никто не писал.
-    SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__")
+    # Настоящий предмет правила: исходник инструмента, исходник набора — и ФАЙЛ
+    # РЕПОЗИТОРИЯ. Правило про рабочий процесс CI сверяло команду по двум словам где угодно
+    # в его тексте и оставалось зелёным, когда из CI удаляли весь прогон тестов: та же
+    # болезнь, что у правил по исходнику, только предмет — документ, а не код.
+    SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__", "KIT /")
 
     @classmethod
     def _rules_without_samples(cls, source: str) -> tuple[list[str], list[str]]:
@@ -6045,6 +6258,9 @@ def report_sections(md):
         "правило без выдуманного образца": (
             "class R:\n    def test_x(self):\n"
             "        self.assertEqual(_new_rule(self.SOURCE), [])\n", 1),
+        "правило по файлу репозитория без выдуманного образца": (
+            "class R:\n    def test_x(self):\n"
+            "        self.assertEqual(_new_rule((KIT / 'CHANGELOG.md').read_text()), [])\n", 1),
     }
 
     def test_узда_видит_правило_которое_никто_не_кормил(self):
