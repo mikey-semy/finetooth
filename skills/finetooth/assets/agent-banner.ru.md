@@ -4,18 +4,22 @@
 (`CLAUDE.md`, `AGENTS.md`, `.cursorrules` — что используется у вас). Без него
 новая сессия просто не узнает, что ревью существует, и начнёт своё параллельное.
 
+`{{PROJECT}}` и `{{CLI}}` подставляет команда `setup` — она печатает готовый баннер в своём
+списке дел: команда, которую баннер велит запустить, обязана быть той, которой этот проект
+на самом деле зовёт инструмент. Вставляя файл руками, подставьте их руками.
+
 Умирает вместе с каталогом ревью — об этом сказано в нём самом.
 
 ---
 
-> ## ⏳ A full-project review is in progress — read `docs/review/README.md` first
+> ## ⏳ Идёт сплошное ревью проекта {{PROJECT}} — сначала прочитай `docs/review/README.md`
 >
-> The whole code base is being reviewed block by block before the customer
-> install. The review outlives any single context window, so **all of its state
-> lives on disk, not in a conversation**: run `make review-status` to see where
-> it stands and which block is next. Do not start a fresh review of your own and
-> do not fix findings outside its rules — both are described in that README.
+> Вся кодовая база просматривается блок за блоком. Ревью переживает любое
+> отдельное окно контекста, поэтому **всё его состояние лежит на диске, а не в
+> переписке**: запусти `{{CLI}} status` — увидишь, где мы находимся и какой блок
+> следующий. Не начинай своё параллельное ревью и не чини находки в обход его
+> правил — и о том, и о другом сказано в этом README.
 >
-> When the review closes, `docs/review/` is deleted in one MR and this banner
-> goes with it. The lasting lessons move into this file, into ADRs and into
-> tests; the scaffolding does not survive the building.
+> Когда ревью закончится, `docs/review/` удаляется одним изменением, и этот
+> баннер уходит вместе с ним. Уроки, которые остаются, переезжают в этот файл,
+> в ADR и в тесты: леса не переживают здания.

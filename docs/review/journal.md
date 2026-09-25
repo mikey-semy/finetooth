@@ -33,3 +33,5 @@
 - **2026-09-25T06:08:20Z** · `T4` — fix — 18 findings closed, 0 rejected; two root classes closed by a rule (documented numbers read from the source, declared gates run by CI); the DCO now has a check
 - **2026-09-25T06:13:44Z** · `T4` — fix — 
 - **2026-09-25T06:14:27Z** · `T4` — fix — spend: 65 min, 231 turns, 230 tool calls, input 42.1M tokens (99% from cache, 290k written), output 139k, re-reads 0, cost estimate $27.29, model claude-opus-5 (logged by the lead)
+- **2026-09-25T05:48:11Z** · `T2` — fix — 
+- **2026-09-25T05:49:31Z** · `T2` — fix — spend: 39 min, 252 turns, 251 tool calls, input 52.1M tokens (99% from cache, 325k written), output 147k, re-reads 0, cost estimate $32.83, model claude-opus-5 (logged by the lead: the runner copy could not reach axes.py)

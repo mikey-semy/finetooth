@@ -67,7 +67,10 @@ def default_cli() -> str:
     written in by the installer, and a copy installed by hand advised a command that did
     not exist. Now the path is known on its own: inside the project — relative, in the
     home directory — via `~`, otherwise absolute. A project that calls the tool its own
-    way (`npm run review --`, `make review`) writes that in the `cli` field of `blocks.json`.
+    way writes that in the `cli` field of `blocks.json` — and it has to be a command that
+    takes the subcommand and its flags after it (`npm run review --`, a shell wrapper).
+    `make` is not one: it reads `--role` as its own option, so a project on `make` keeps
+    the targets for the everyday commands and leaves `cli` unset.
     """
     here = Path(__file__).resolve()
     for base, prefix in ((ROOT, ""), (Path.home(), "~/")):
@@ -138,6 +141,38 @@ PROOFS = ("read", "measured")
 # the docs/review/ artifacts: rule 1, headings, the reading budget, findings.md, the
 # journal, the setup scaffolds.
 LANGS = ("en", "ru")
+# Assets the setup hands to the project. The English name is the canonical one; a copy in
+# another language sits next to it with the language before the extension
+# (`entry-point.ru.md`). The names live here and not in the text of `cmd_setup`, because a
+# checklist that hardcodes them names the English samples to a Russian review — and the
+# translated copies were then reachable from nowhere in the kit.
+ASSET_ENTRY = "entry-point.md"
+ASSET_BANNER = "agent-banner.md"
+ASSET_INVARIANTS = "invariants.example.md"
+ASSET_MANIFEST = "manifest.example.md"
+ASSET_JOURNAL = "journal.example.md"
+ASSET_BLOCKS = "blocks.example.json"
+
+
+def asset(name: str, lang: str) -> Path:
+    """The asset in the review language, falling back to the English one.
+
+    A definition sample is the same in any language, and a project may translate only
+    part of the set: a missing copy is not a refusal, it is the English file.
+    """
+    assets = SKILL_DIR / "assets"
+    stem, dot, ext = name.rpartition(".")
+    localized = assets / f"{stem}.{lang}{dot}{ext}"
+    return localized if lang != "en" and localized.exists() else assets / name
+
+
+def fill(text: str, project: str, cli: str) -> str:
+    """Substitutions of the scaffolds: the project's name and the command it calls the
+    tool by. A scaffold that names `make review-status` to a project without a Makefile
+    sends every future session to a command that does not exist."""
+    return text.replace("{{PROJECT}}", project).replace("{{CLI}}", cli)
+
+
 MSG = {
  "en": {
   "none": "(none)",
@@ -159,6 +194,7 @@ MSG = {
   "files_measured": "Block files ({n}) — the block's area; proof is the manifest's artifacts",
   "files_read": "Block files ({n}) — read all",
   "scope_line": " Your half of the diff: **{scope}** — read the rest for context, file findings for your half.",
+  "diff_vol": "The diff below: {kb} KB, {lines} lines. Order of magnitude: ~{k}k tokens just to read it, before any reasoning or tool calls. If that does not fit what you can hold at once, do not read half of it and report on the whole: say so in the report and take one half through `--scope <half>` — the lead runs a second reviewer on the other, and the two reports get names of their own.",
   "no_open_findings": "(no open findings for this block — ask the lead session why the fixer was started)",
   "rec_none": "(nothing is recorded against this block yet)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(recorded {date})_",
@@ -210,6 +246,7 @@ MSG = {
   "files_measured": "Файлы блока ({n} шт.) — область блока; доказательство — артефакты манифеста",
   "files_read": "Файлы блока ({n} шт.) — прочитать все",
   "scope_line": " Твоя половина диффа: **{scope}** — остальное читай для контекста, находки оформляй по своей половине.",
+  "diff_vol": "Дифф ниже: {kb} КБ, {lines} строк. Порядок величины: ~{k}k токенов только на чтение, до рассуждений и вызовов инструментов. Если это не помещается в то, что ты держишь за раз, — не читай половину, отчитываясь за целое: скажи об этом в отчёте и возьми одну половину через `--scope <половина>`; ведущая сессия запустит второго ревьюера на другую, и у отчётов будут свои имена.",
   "no_open_findings": "(открытых находок по блоку нет — уточни у ведущей сессии, зачем запущен фиксер)",
   "rec_none": "(за блоком пока ничего не записано)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(записана {date})_",
@@ -1751,6 +1788,21 @@ def diff_text(rng: str) -> str:
     return f"{stat.stdout}\n````diff\n{full.stdout}\n````"
 
 
+def diff_volume(diff: str) -> str:
+    """How much the fix reviewer is asked to read — the measure the hunter already gets.
+
+    The budget belongs in the assignment, not in the lead session's head. The fix reviewer
+    was handed a diff of any size with the rule "read it in full" and no condition: the
+    first round of the kit's own tool block was 193 KB, and nothing in the prompt said so
+    or named the way out. `--scope` is the way out, and it has to stand where the volume
+    does. The token estimate is the same rough one as for the file list: about four
+    characters per token is common knowledge and more honest here than an exact count,
+    because every model has its own tokenizer.
+    """
+    return T("diff_vol", kb=max(1, len(diff.encode("utf-8")) // 1024),
+             lines=diff.count("\n"), k=max(1, len(diff) // 4000))
+
+
 PLACEHOLDER = re.compile(r"\{\{[A-Z_]+\}\}")
 
 
@@ -1787,6 +1839,9 @@ def cmd_prompt(args) -> int:
     files = sorted(git_files(b.get("paths", [])) - excluded)
     refs = sorted(git_files(b.get("ref_paths", [])) - excluded - set(files))
     report = report_path(b, args.role, args.round, args.scope)
+    # Taken once: the volume line and the diff itself talk about the same text, and a
+    # second `git diff` of a 193 KB range would only risk them disagreeing.
+    diff = diff_text(args.diff) if args.role == "fixreview" else ""
 
     body = template.read_text(encoding="utf-8")
     subs = {
@@ -1808,6 +1863,7 @@ def cmd_prompt(args) -> int:
         "{{SCOPE_LINE}}": T("scope_line", scope=args.scope) if args.scope else "",
         "{{FIX_REPORT}}": report_path(b, "fix", args.round),
         "{{DIFF_RANGE}}": args.diff or "",
+        "{{DIFF_VOLUME}}": diff_volume(diff) if diff else "",
         "{{VOLUME}}": volume_note(files),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
@@ -1833,8 +1889,8 @@ def cmd_prompt(args) -> int:
     body = PLACEHOLDER.sub(lambda m: subs.get(m.group(0), m.group(0)), body)
     if left:
         die(f"template {template.name} has substitutions left without a value: {', '.join(left)}")
-    if args.role == "fixreview":
-        body = body.replace("{{DIFF}}", diff_text(args.diff))
+    if diff:
+        body = body.replace("{{DIFF}}", diff)
     print(body)
     return 0
 
@@ -3008,11 +3064,14 @@ def cmd_check(args) -> int:
                 and f["file"] not in tracked and not f["file"].startswith("(")):
             problems.append(f"finding {fid}: file {f['file']} is not in the repository")
         # A deferred finding does not count as open and therefore survives the whole
-        # review unnoticed. The reason is the only thing that will make anyone come back to it.
+        # review unnoticed. The reason is what turns it from silence into a decision: the
+        # summary publishes deferred findings as accepted risks, by that reason and no
+        # other text. The message used to demand that every deferral be resolved before
+        # the end, which is not what the tool holds and not what the summary does with it.
         if f.get("status") == "deferred" and not (f.get("defer_reason") or "").strip():
             problems.append(
                 f"finding {fid}: deferred without a reason — `{CLI} set-finding {fid} deferred "
-                f"--reason '...'`; by the end of the review every deferred finding is fixed or rejected with a reason"
+                f"--reason '...'`; a deferral is an accepted risk, and the summary publishes it by that reason"
             )
         if f.get("status") == "fixed" and f.get("fix_commit") and ":" in str(f["fix_commit"]):
             # A fix in a NEIGHBOURING repository: `<repository>:<commit>`. It is not here and
@@ -3510,9 +3569,8 @@ def cmd_setup(args) -> int:
     put(BLOCKS_FILE, json.dumps(skel, ensure_ascii=False, indent=2) + "\n")
     put(INVARIANTS_FILE, (INVARIANTS_SKELETON if lang == "ru" else INVARIANTS_SKELETON_EN).format(project=project))
     cli = args.cli or default_cli()
-    entry_name = "entry-point.md" if lang == "en" else f"entry-point.{lang}.md"
-    entry = (SKILL_DIR / "assets" / entry_name).read_text(encoding="utf-8")
-    put(REVIEW / "README.md", entry.replace("{{PROJECT}}", project).replace("{{CLI}}", cli))
+    entry = asset(ASSET_ENTRY, lang).read_text(encoding="utf-8")
+    put(REVIEW / "README.md", fill(entry, project, cli))
     for d in ("blocks", "reports"):
         (REVIEW / d).mkdir(parents=True, exist_ok=True)
 
@@ -3528,20 +3586,30 @@ def cmd_setup(args) -> int:
     if not any(k in known for k in ("__pycache__", "*.pyc", "*.py[cod]")):
         print("\n⚠️ .gitignore has no __pycache__/ — add it, otherwise the tool's bytecode "
               "ends up in a commit")
-    assets = SKILL_DIR / "assets"
+    # The banner is not written anywhere by the tool — it goes into the project's own root
+    # instructions file, which is not ours to edit. So it is printed ready to paste: its
+    # whole point is to name the command a future session must run, and a sample that says
+    # `make review-status` to a project without a Makefile sends every session to a
+    # command that does not exist.
+    banner = asset(ASSET_BANNER, lang).read_text(encoding="utf-8")
+    banner = fill(banner.split("\n---\n", 1)[-1].strip(), project, cli)
     print(f"""
 Next — by hand, and this is not a formality:
 
 1. docs/review/invariants.md — the rules of YOUR project. The most important file: it is
-   pasted to every agent and decides what the agent will count as a defect. Example: {assets / 'invariants.example.md'}
+   pasted to every agent and decides what the agent will count as a defect. Example: {asset(ASSET_INVARIANTS, lang)}
 2. docs/review/blocks.json — `gates` (the project's gate commands) and the blocks: cross-cutting
-   first, domain ones next, live-system ones last. Example: {assets / 'blocks.example.json'}
+   first, domain ones next, live-system ones last. Example: {asset(ASSET_BLOCKS, lang)}
 3. The manifest of the first block — docs/review/blocks/<ID>-<slug>.md: 10–15 hypotheses about your
-   project and the acceptance criterion. Example: {assets / 'manifest.example.md'}
+   project and the acceptance criterion. Example: {asset(ASSET_MANIFEST, lang)}
 4. `{cli} init`, then `{cli} coverage` — and deal with the unowned files until there are
    none left. This is where everything forgotten surfaces.
-5. The banner in the root instructions file ({assets / 'agent-banner.md'}), otherwise a new session
-   will not know a review is in progress and will start its own parallel one.""")
+5. `{cli} log <ID> "what was decided and why"` — from the first decision on: findings a
+   re-run recovers, decisions it does not. What a useful line looks like: {asset(ASSET_JOURNAL, lang)}
+6. The banner in the root instructions file ({asset(ASSET_BANNER, lang)}), otherwise a new session
+   will not know a review is in progress and will start its own parallel one. Ready to paste:
+
+{banner}""")
     return 0
 
 

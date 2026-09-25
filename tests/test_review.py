@@ -2168,6 +2168,30 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertIn("**backend**", out.stdout)
         self.assertNotIn("{{", out.stdout.split("````diff")[0], "все подстановки заполнены")
 
+    def test_ревьюер_правок_знает_объём_диффа_и_про_scope(self):
+        """Бюджет стоит в самом задании, а не в голове ведущей сессии.
+
+        Дифф первого круга блока об инструменте был 193 КБ; правило говорило «читай
+        целиком» без условия, объём не назывался нигде, а `--scope` не упоминался ни в
+        одном из двух шаблонов. Агент читает сколько влезло и отчитывается за целое.
+        """
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\n" + "изменено\n" * 300)
+        self.s.commit("правка")
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        head = out.stdout.split("````diff")[0]
+        self.assertRegex(head, r"Дифф ниже: \d+ КБ, \d+ строк")
+        self.assertIn("--scope", head, "выход из положения назван там же, где объём")
+        hunter = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertNotIn("Дифф ниже", hunter, "замер диффа не протекает в другие роли")
+        self.assertNotIn("{{", hunter, "и не оставляет незаполненной подстановки")
+
     def test_закрытие_с_починками_требует_ревью_правок(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -4922,6 +4946,559 @@ class RecordedFindingsImportTest(unittest.TestCase):
         out = self.s.run("import", "H1", "--append")
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertIn("V2-001", out.stdout + out.stderr)
+
+class TemplateContractTest(unittest.TestCase):
+    """УЗДА КЛАССА «ворота спрашивают то, о чём шаблон роли молчит».
+
+    Если `check` читает у находки поле, которого нет ни в одном шаблоне, честно написанный
+    отчёт краснеет, а выхода агенту никто не назвал. Измерено дважды: причину отказа
+    шаблон проверяющего велел писать в `claim`, а ворота ждали `reject_reason`; поля `root`
+    в образце черновика не было вовсе, и ворота про третий экземпляр класса не могли
+    покраснеть ни на одном прогоне, написанном по образцу. Список полей берётся из
+    ИСХОДНИКА: поле, которого ещё не написали, тоже обязано быть классифицировано.
+    """
+
+    # Поля, которые проставляет сам инструмент: шаблону о них говорить нечего.
+    TOOL_FIELDS = {"id", "code_sha", "imported_at", "updated_at", "restamped_at",
+                   "fix_commit", "fixed_in", "rule"}
+    # Поля, которые пишет АГЕНТ, — каждое обязано быть названо в шаблоне хоть одной роли,
+    # и на каждом языке ревью отдельно.
+    AGENT_FIELDS = {"block", "severity", "confidence", "status", "file", "line", "claim",
+                    "scenario", "invariant", "root", "dup_of", "reject_reason",
+                    "defer_reason"}
+    ROLES = ("hunter", "verify", "fix", "fixreview")
+    LANGS = ("", "ru")
+
+    @staticmethod
+    def _register_fields() -> set[str]:
+        """Словарь полей записи реестра — из обращений к находке в самом инструменте."""
+        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+        holders, out = {"f", "row"}, set()
+        for n in ast.walk(tree):
+            key = base = None
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr in ("get", "setdefault")
+                    and isinstance(n.func.value, ast.Name) and n.args
+                    and isinstance(n.args[0], ast.Constant)):
+                base, key = n.func.value.id, n.args[0].value
+            elif (isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name)
+                  and isinstance(n.slice, ast.Constant)):
+                base, key = n.value.id, n.slice.value
+            if base in holders and isinstance(key, str):
+                out.add(key)
+        return out
+
+    def _templates(self, lang: str) -> dict[str, str]:
+        suffix = ".md" if not lang else f".{lang}.md"
+        return {role: (SKILL / "references" / f"{role}{suffix}").read_text(encoding="utf-8")
+                for role in self.ROLES}
+
+    def test_каждое_поле_реестра_названо_в_шаблоне_или_проставлено_инструментом(self):
+        unknown = self._register_fields() - self.TOOL_FIELDS - self.AGENT_FIELDS
+        self.assertEqual(
+            sorted(unknown), [],
+            "у находки появилось поле, о котором правило не знает: решите, пишет его агент "
+            "(тогда назовите его в шаблонах обеих языковых версий и впишите в AGENT_FIELDS) "
+            "или инструмент (TOOL_FIELDS) — иначе ворота будут спрашивать то, чего никто не "
+            "объявлял")
+        for lang in self.LANGS:
+            bodies = self._templates(lang)
+            for field in sorted(self.AGENT_FIELDS):
+                with self.subTest(lang=lang or "en", field=field):
+                    self.assertTrue(
+                        any(field in body for body in bodies.values()),
+                        f"поле `{field}` не названо ни в одном шаблоне роли ({lang or 'en'}): "
+                        f"агент не узнает о нём, а ворота его спрашивают")
+
+    def test_шаблоны_ролей_есть_на_обоих_языках(self):
+        for lang in self.LANGS:
+            for role in self.ROLES:
+                suffix = ".md" if not lang else f".{lang}.md"
+                self.assertTrue((SKILL / "references" / f"{role}{suffix}").exists(),
+                                f"{role}{suffix}")
+
+
+class DraftByTheTemplateTest(unittest.TestCase):
+    """Черновик находок, написанный ровно по шаблону, проходит `import` и `check`.
+
+    Обратная сторона узды: правило выше держит, что поле названо, а это — что запись,
+    сделанная по названному образцу, не роняет ворота.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        for i in range(4):
+            self.s.write(f"src/f{i}.ts", "a\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+
+    def draft(self, *rows: dict) -> None:
+        self.s.write("docs/review/reports/H1-findings.jsonl",
+                     "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+    def row(self, n: int, **extra) -> dict:
+        return {"block": "H1", "severity": "medium", "confidence": "confirmed",
+                "status": "open", "file": f"src/f{n}.ts", "line": 1,
+                "claim": f"рукописная копия предиката {n}", "scenario": "на границе",
+                **extra}
+
+    def _import(self) -> None:
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.s.run("findings")
+
+    def test_корень_из_образца_собирает_класс_и_зажигает_ворота_про_узду(self):
+        klass = "рукописная копия предиката"
+        self.draft(*(self.row(i, root=klass) for i in range(3)))
+        self._import()
+        self.assertIn("3 × " + klass, self.s.run("roots").stdout)
+        self.assertIn("and no guard", self.s.run("check").stdout,
+                      "три экземпляра одного корня обязаны потребовать узду")
+
+    def test_без_поля_root_тот_же_черновик_ворота_не_зажигает(self):
+        """Мера дефекта: ровно те же три находки без `root` не группируются никак."""
+        self.draft(*(self.row(i) for i in range(3)))
+        self._import()
+        self.assertIn("no roots recorded", self.s.run("roots").stdout)
+        self.assertNotIn("and no guard", self.s.run("check").stdout)
+
+    def test_отказ_написанный_по_образцу_не_роняет_проверку(self):
+        self.draft(self.row(0, status="rejected", confidence="rejected",
+                            reject_reason="маршрут обёрнут в RequirePermission, сценарий недостижим"),
+                   self.row(1))
+        self._import()
+        out = self.s.run("check")
+        self.assertNotIn("reject reason is not recorded", out.stdout)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_отказ_с_причиной_только_в_claim_по_прежнему_ловится(self):
+        """Вторая сторона: причина, спрятанная в заголовке, — не запись причины."""
+        self.draft(self.row(0, status="rejected", confidence="rejected",
+                            claim="дефекта нет: маршрут обёрнут в RequirePermission"))
+        self._import()
+        self.assertIn("reject reason is not recorded", self.s.run("check").stdout)
+
+    def test_дубль_написанный_по_образцу_не_роняет_проверку(self):
+        self.draft(self.row(0), self.row(1, status="duplicate", dup_of="H1-001"))
+        self._import()
+        out = self.s.run("check")
+        self.assertNotIn("marked duplicate", out.stdout)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+
+class ShippedSampleTest(unittest.TestCase):
+    """УЗДА КЛАССА «образец, который инструмент сам отвергает».
+
+    На образцы ссылаются и `SKILL.md`, и три отказа `check_definition`, и README примера:
+    их открывают первыми и по ним делают своё. Найдено четыре штуки сразу — пример
+    `examples/toy` не проходил `check` по двум причинам, называл номер находки в коде,
+    а `blocks.example.json` нарушал порядок фаз, — то есть единственное показательное
+    состояние ревью учило тому, что набор запрещает. Список мест такое не держит: правило
+    гоняет сами ворота по тому, что уезжает пользователю.
+    """
+
+    def stand(self, src: Path) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="finetooth-sample-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        shutil.copytree(src, root, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        for cmd in (["init", "-q", "."], ["config", "user.email", "t@example.com"],
+                    ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "sample"]):
+            subprocess.run(["git", "-C", str(root), *cmd], capture_output=True, check=True)
+        return root
+
+    def run_in(self, root: Path, *args: str) -> subprocess.CompletedProcess:
+        env = dict(os.environ, LC_ALL="C.UTF-8")
+        return subprocess.run(["python3", str(TOOL), *args], cwd=root,
+                              capture_output=True, text=True, env=env)
+
+    def test_пример_toy_проходит_ворота_как_обещает_его_README(self):
+        """README примера велит скопировать его в свежий репозиторий и позвать `check`."""
+        root = self.stand(KIT / "examples" / "toy")
+        for cmd in (("check",), ("refs",), ("coverage", "--no-write")):
+            out = self.run_in(root, *cmd)
+            self.assertEqual(out.returncode, 0,
+                             f"`{' '.join(cmd)}` на примере: " + out.stdout + out.stderr)
+
+    def test_образец_определения_блоков_проходит_ворота(self):
+        """`blocks.example.json` — то, на что показывают три отказа самого инструмента."""
+        root = self.stand(KIT / "examples" / "toy")
+        shutil.rmtree(root / "docs" / "review")
+        (root / "docs" / "review" / "blocks").mkdir(parents=True)
+        (root / "docs" / "review" / "reports").mkdir(parents=True)
+        d = json.loads((SKILL / "assets" / "blocks.example.json").read_text(encoding="utf-8"))
+        # Пути образца обобщены и в этом дереве не существуют; ворота про мёртвый шаблон
+        # проверяются своим тестом, а здесь проверяется само определение.
+        d["exclusions"] = [{"pattern": "docs/review", "reason": "аппарат"},
+                           {"pattern": "README.md", "reason": "не код"},
+                           {"pattern": ".gitignore", "reason": "не код"}]
+        for b in d["blocks"]:
+            b["paths"] = ["src", "tests"] if b["paths"] else []
+            b["ref_paths"] = []
+        (root / "docs/review/blocks.json").write_text(
+            json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "sample definition"],
+                       capture_output=True, check=True)
+        self.assertEqual(self.run_in(root, "init").returncode, 0)
+        out = self.run_in(root, "check")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_ворота_про_порядок_фаз_живы(self):
+        """Обратная сторона: переставленный образец по-прежнему краснеет."""
+        root = self.stand(KIT / "examples" / "toy")
+        bj = root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"].reverse()
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "commit", "-qam", "phases"],
+                       capture_output=True, check=True)
+        self.assertIn("comes after phase", self.run_in(root, "check").stdout)
+
+
+class BilingualAssetTest(unittest.TestCase):
+    """УЗДА КЛАССА «перевод, который не переведён, и подсказка не из CLI».
+
+    Договор двуязычия: строка, которая есть на одном языке и нет на другом, — дефект.
+    Русский баннер нёс английский текст слово в слово (переведено было только пояснение
+    вокруг), а `setup --lang ru` называл в своём списке дел английские образцы — и четыре
+    русских файла набора не были упомянуты нигде. Рядом второй класс: тот же баннер
+    вписывал `make review-status` намертво, и проект без Makefile рассылал каждой своей
+    сессии несуществующую команду.
+    """
+
+    WORD = re.compile(r"[A-Za-z]{3,}")
+    CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+    # Ассеты, которые уезжают в чужой проект и читаются там человеком и агентом: команду
+    # они обязаны брать из {{CLI}}. Образцы целей сборки (`makefile-snippet.mk`,
+    # `package-json-snippet.json`) — наоборот, сами и есть эти команды.
+    HANDED_OVER = ("entry-point", "agent-banner")
+    PROJECT_COMMANDS = re.compile(r"\b(make review|npm run review|just review)")
+
+    def ru_pairs(self) -> list[tuple[Path, Path]]:
+        out = []
+        for d in ("references", "assets"):
+            for ru in sorted((SKILL / d).glob("*.ru.*")):
+                en = ru.with_name(ru.name.replace(".ru.", ".", 1))
+                self.assertTrue(en.exists(), f"{ru.name} без английского оригинала")
+                out.append((en, ru))
+        return out
+
+    def english_prose(self, text: str) -> list[str]:
+        """Строки без единой кириллической буквы, которые при этом являются прозой.
+
+        Команда, путь и код по-английски и должны быть; пять и больше слов подряд вне
+        ограды и вне обратных кавычек — это непереведённый текст.
+        """
+        out, fenced = [], False
+        for line in text.splitlines():
+            if line.lstrip().startswith(("```", "~~~")):
+                fenced = not fenced
+                continue
+            if fenced or self.CYRILLIC.search(line):
+                continue
+            bare = re.sub(r"`[^`]*`", " ", re.sub(r"https?://\S+", " ", line))
+            if len(self.WORD.findall(bare)) >= 5:
+                out.append(line)
+        return out
+
+    def test_русская_копия_действительно_переведена(self):
+        pairs = self.ru_pairs()
+        self.assertGreater(len(pairs), 5, "русских копий стало подозрительно мало")
+        for en, ru in pairs:
+            with self.subTest(file=ru.name):
+                left = self.english_prose(ru.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    left[:3], [],
+                    f"{ru.name}: {len(left)} строк английской прозы — суффикс .ru для того "
+                    f"и нужен, чтобы вставляли перевод, а не оригинал")
+
+    def test_ассеты_для_чужого_проекта_берут_команду_из_подстановки(self):
+        for name in self.HANDED_OVER:
+            for path in sorted((SKILL / "assets").glob(f"{name}*")):
+                with self.subTest(file=path.name):
+                    text = path.read_text(encoding="utf-8")
+                    hit = self.PROJECT_COMMANDS.search(text)
+                    self.assertIsNone(
+                        hit, f"{path.name} называет команду конкретного проекта "
+                             f"({hit.group(0) if hit else ''}) — подсказки собираются из CLI")
+                    self.assertIn("{{CLI}}", text,
+                                  f"{path.name} не берёт команду проекта ниоткуда")
+
+    def test_таблица_сообщений_одинакова_на_обоих_языках(self):
+        """`T()` падает KeyError во время работы, а не при импорте: строка, заведённая на
+        одном языке, роняет прогон роли у того, кто ведёт ревью на другом."""
+        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+        msg = next(n.value for n in ast.walk(tree)
+                   if isinstance(n, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == "MSG" for t in n.targets))
+        keys = {lang.value: {k.value for k in table.keys}
+                for lang, table in zip(msg.keys, msg.values)}
+        self.assertEqual(sorted(keys), ["en", "ru"])
+        self.assertEqual(sorted(keys["en"] - keys["ru"]), [], "ключ есть только в en")
+        self.assertEqual(sorted(keys["ru"] - keys["en"]), [], "ключ есть только в ru")
+
+    def test_образцы_целей_сборки_команду_называть_обязаны(self):
+        """Обратная сторона правила: снипеты целей и есть эти команды."""
+        self.assertRegex((SKILL / "assets" / "makefile-snippet.mk").read_text(encoding="utf-8"),
+                         r"review-status")
+        self.assertIn("review", json.loads(
+            (SKILL / "assets" / "package-json-snippet.json").read_text(encoding="utf-8"))["scripts"])
+
+
+class SetupLanguageTest(unittest.TestCase):
+    """`setup --lang ru` называет русские образцы, а баннер печатает готовым к вставке."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="finetooth-setup-lang-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(["git", "-C", str(self.root), "config", k, v], check=True)
+        (self.root / "app.ts").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"], check=True)
+
+    def setup(self, *extra: str) -> str:
+        out = subprocess.run(["python3", str(TOOL), "setup", *extra], cwd=self.root,
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    def named_assets(self, text: str) -> list[str]:
+        return re.findall(r"/skills/finetooth/assets/([\w.\-]+)", text)
+
+    def test_русское_ревью_получает_русские_образцы(self):
+        out = self.setup("--lang", "ru", "--project", "Проект", "--cli", "npm run review --")
+        named = self.named_assets(out)
+        self.assertTrue(named, "список дел перестал называть образцы: " + out)
+        for name in named:
+            with self.subTest(asset=name):
+                self.assertTrue((SKILL / "assets" / name).exists(), name)
+                ru_name = re.sub(r"\.(\w+)$", r".ru.\1", name.replace(".ru.", ".", 1))
+                if (SKILL / "assets" / ru_name).exists():
+                    self.assertEqual(name, ru_name,
+                                     f"русскому ревью назван английский образец {name}")
+        # Точку входа setup не называет, а переносит: её достижимость видна в том, что
+        # записано на диск.
+        self.assertIn("# Сплошное ревью Проект",
+                      (self.root / "docs/review/README.md").read_text(encoding="utf-8"),
+                      "точка входа взята не на языке ревью")
+        # Остальные русские ассеты обязаны быть названы: иначе они едут в поставке, и
+        # найти их пользователю неоткуда — ровно так и жили четыре из них.
+        for ru in sorted((SKILL / "assets").glob("*.ru.*")):
+            if ru.name.startswith("entry-point"):
+                continue
+            self.assertIn(ru.name, named, f"{ru.name} не назван ничем в наборе")
+
+    def test_английское_ревью_получает_английские_образцы(self):
+        """Вторая сторона: русские копии не должны протечь в английский список дел."""
+        named = self.named_assets(self.setup("--project", "Demo"))
+        self.assertTrue(named)
+        for name in named:
+            self.assertNotIn(".ru.", name, f"английскому ревью назван русский образец {name}")
+
+    def test_баннер_печатается_готовым_и_с_командой_проекта(self):
+        out = self.setup("--project", "Demo", "--cli", "npm run review --")
+        self.assertIn("npm run review -- status", out,
+                      "баннер обязан называть команду, которой проект зовёт инструмент")
+        self.assertIn("A whole-repository review of Demo is in progress", out)
+        self.assertNotIn("{{", out, "в напечатанном баннере не осталось подстановок")
+        ru = self.setup("--lang", "ru", "--project", "Проект")
+        self.assertIn("Идёт сплошное ревью проекта Проект", ru)
+        self.assertNotIn("{{", ru)
+
+
+class DocumentedSurfaceTest(unittest.TestCase):
+    """УЗДА КЛАССА «документация отстала от инструмента».
+
+    Три места сразу: `roots` — вид на класс дефекта, на который опираются ворота про третий
+    экземпляр, — не называли ни сообщения инструмента, ни `SKILL.md`, ни точка входа, и
+    узнать о ней было неоткуда; `--round` у исполнителя был настоящим и недокументированным,
+    из-за чего второй круг затирал отчёт первого, а ревьюер правок того круга смотрел на
+    файл, который никто не писал; сама точка входа не знала ни роли fixreview, ни ворот
+    починки. Список команд берётся из ИСХОДНИКА: команда, которой ещё нет, тоже обязана
+    быть названа.
+    """
+
+    @staticmethod
+    def subcommands() -> list[str]:
+        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+        return sorted({n.args[0].value for n in ast.walk(tree)
+                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                       and n.func.attr == "add_parser" and n.args
+                       and isinstance(n.args[0], ast.Constant)})
+
+    def test_каждая_команда_инструмента_названа_в_skill_md(self):
+        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        # Названа — значит показана КОМАНДОЙ: слова `version` и `hypotheses` встречаются в
+        # прозе сами по себе, и правило, читающее их как упоминание команды, пропустило бы
+        # обе (измерено на прежнем SKILL.md).
+        missing = [c for c in self.subcommands()
+                   if not re.search(rf"review(?:\.py)?\s+{re.escape(c)}\b", text)]
+        self.assertEqual(
+            missing, [],
+            "команды инструмента, которых нет в SKILL.md: ведущая сессия читает его и точку "
+            "входа — о том, чего там нет, она не узнает ниоткуда")
+
+    def test_точка_входа_знает_про_роли_и_ворота_инструмента(self):
+        """Точку входа `setup` кладёт в проект, и дальше её читают вместо SKILL.md."""
+        for name in ("entry-point.md", "entry-point.ru.md"):
+            text = (SKILL / "assets" / name).read_text(encoding="utf-8")
+            for token in ("fixreview", "--append", "restamp", "backfill", "fix_gate", "deferred"):
+                with self.subTest(file=name, token=token):
+                    self.assertIn(token, text,
+                                  f"{name} не знает про {token} — а `check` про него знает")
+
+    def test_круг_починки_виден_и_в_промпте_и_в_имени_отчёта(self):
+        s = Stand()
+        self.addCleanup(s.cleanup)
+        s.write("src/one.ts", "a\n")
+        s.blocks(paths=["src/one.ts"])
+        s.manifest(hypotheses=1)
+        s.commit()
+        s.run("init")
+        first = s.run("prompt", "H1", "--role", "fix").stdout
+        self.assertIn("H1-demo.fix.md", first)
+        self.assertIn("Круг починки: **1**", first, "исполнитель обязан знать свой круг")
+        second = s.run("prompt", "H1", "--role", "fix", "--round", "2").stdout
+        self.assertIn("H1-demo.fix-2.md", second,
+                      "второй круг обязан писать в свой файл, а не затирать первый")
+        self.assertIn("Круг починки: **2**", second)
+        base = s.git("rev-parse", "HEAD").stdout.strip()
+        s.write("src/one.ts", "a\nfixed\n")
+        s.commit("fix")
+        review = s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD",
+                       "--round", "2").stdout
+        self.assertIn("H1-demo.fix-2.md", review.split("````diff")[0],
+                      "ревьюер правок круга 2 читает отчёт исполнителя того же круга")
+
+
+class CliContractTest(unittest.TestCase):
+    """Значение поля `cli` подставляется в КАЖДУЮ подсказку вместе с флагами.
+
+    `SKILL.md` предлагал в качестве примера `make review`, а make читает `--role` и
+    `--reason` своими опциями и останавливается: подсказка `make review prompt H1 --role
+    verify` не работает, и обобщённой цели `review` в образце целей нет — а `npm run
+    review --` работает и в образце определён.
+    """
+
+    def test_документация_не_предлагает_make_как_значение_cli(self):
+        for name, path in (("SKILL.md", SKILL / "SKILL.md"), ("review.py", TOOL)):
+            with self.subTest(file=name):
+                self.assertNotRegex(
+                    path.read_text(encoding="utf-8"), r"`make review`",
+                    f"{name} предлагает как `cli` команду, которая не донесёт флаг")
+        self.assertIn("cli", (SKILL / "assets" / "makefile-snippet.mk").read_text(encoding="utf-8"),
+                      "образец целей обязан сказать, почему make не годится в `cli`")
+
+    def test_предложенная_форма_cli_определена_образцом_и_доносит_флаги(self):
+        """Обратная сторона: то, что документация называет, обязано существовать."""
+        scripts = json.loads((SKILL / "assets" / "package-json-snippet.json")
+                             .read_text(encoding="utf-8"))["scripts"]
+        self.assertIn("review", scripts, "обобщённая цель обязана быть в образце")
+        self.assertIn("npm run review --", (SKILL / "SKILL.md").read_text(encoding="utf-8"))
+        s = Stand()
+        self.addCleanup(s.cleanup)
+        s.write("src/one.ts", "a\n")
+        s.blocks(paths=["src/one.ts"])
+        bj = s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["cli"] = "npm run review --"
+        bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        s.write("lib/orphan.ts", "b\n")
+        s.commit()
+        s.run("init")
+        out = s.run("coverage")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("npm run review -- status", out.stdout,
+                      "подсказка собирается из `cli` целиком, вместе с подкомандой")
+        s.run("coverage")
+        s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "rejected",
+            "file": "src/one.ts", "claim": "дефекта нет"}, ensure_ascii=False) + "\n")
+        s.run("import", "H1")
+        s.run("findings")
+        self.assertIn("npm run review -- set-finding H1-001 rejected --reason",
+                      s.run("check").stdout,
+                      "отказ обязан донести до пользователя и флаг, а не только подкоманду")
+
+
+class DeferredIsAnAcceptedRiskTest(unittest.TestCase):
+    """Что такое отложенная находка к концу ревью — у набора один ответ, а не два.
+
+    Урок 13 требовал перед завершением каждую отложенную починить или отвергнуть, а
+    инструмент отправляет её в сводку принятым риском и требует только причину; условия
+    завершения в `SKILL.md` и в точке входа отложенного не упоминали вовсе. Ведущая сессия,
+    прочитавшая уроки первыми, держала ревью открытым ради находок, которые ревью и должны
+    были покинуть; прочитавшая в другом порядке — считала дефектом сам раздел сводки.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def test_отложенная_с_причиной_доживает_до_сводки_принятым_риском(self):
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "medium", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n",
+                       verify="# отчёт проверяющего\n\n## Вердикты по находкам охотника\n"
+                              "Находка охотника подтверждена: воспроизвёл вызовом на матрице значений.\n\n"
+                              "## Состояние охвата блока\nОхват полный: файл прочитан, гипотеза прогнана.\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        out = self.s.run("set-finding", "H1-001", "deferred", "--reason", "ждёт блок H2")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.s.run("findings")
+        self.s.run("set-status", "H1", "closed")
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0,
+                         "отложенная с причиной не должна держать ревью красным: " + check.stdout)
+        self.assertIn("all blocks closed", self.s.run("status").stdout,
+                      "ревью с отложенной находкой считается завершённым")
+        self.assertEqual(self.s.run("summary").returncode, 0)
+        summary = (self.s.root / "docs" / "review-summary.md").read_text(encoding="utf-8")
+        self.assertIn("Принятые риски", summary)
+        self.assertIn("ждёт блок H2", summary,
+                      "принятый риск уезжает из ревью вместе с причиной")
+
+    def test_отложенная_без_причины_по_прежнему_роняет_проверку(self):
+        """Вторая сторона: запрещено не откладывать, а откладывать молча."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "medium", "confidence": "confirmed", "status": "deferred",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        self.assertIn("deferred without a reason", self.s.run("check").stdout)
+
+    def test_урок_про_отложенное_говорит_то_же_что_инструмент(self):
+        for name, token in (("lessons.md", "accepted risk"), ("lessons.ru.md", "принятый риск")):
+            with self.subTest(file=name):
+                text = (SKILL / "references" / name).read_text(encoding="utf-8")
+                item = next(b for b in re.split(r"\n(?=\d+\. )", text) if "`deferred`" in b)
+                self.assertIn(token, item,
+                              f"{name}: урок об отложенной находке расходится с тем, что делает "
+                              f"с ней инструмент — сводка публикует её принятым риском")
+
 
 if __name__ == "__main__":
     unittest.main()

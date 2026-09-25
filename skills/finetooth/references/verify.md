@@ -72,7 +72,14 @@ finding must rest on what you **did**, not on what you read.
 Two findings are duplicates if **fixing the root of one makes the other nonexistent**. The
 wording is not ours: that is how findings are deduplicated in competitive audits, and it is
 the only definition that can be applied mechanically. A duplicate is marked with a reference
-to the primary finding, not deleted.
+to the primary finding, not deleted: `"status":"duplicate","dup_of":"<id of the primary>"`.
+The state check refuses a duplicate that does not say of what, and a reference to a rejected
+finding or to another duplicate.
+
+Instances of one class that are **not** duplicates — five copies of one predicate, each
+needing its own fix — carry the class name in `root` instead, the same string in every one
+of them. From the third instance the state check demands the class be closed by a guard
+rather than by three separate fixes, and it can only count instances that share the field.
 
 # Project invariants
 
@@ -117,11 +124,23 @@ Complete / incomplete — and what exactly remains.
 
 ## 2. Final findings file — overwrite `docs/review/reports/{{BLOCK_ID}}-findings.jsonl`
 
+One finding per line, in the hunter's format (without the `id` field — the tool assigns it,
+and a finding already recorded against the block keeps the id it has):
+
+```json
+{"block":"{{BLOCK_ID}}","severity":"critical|high|medium|low","confidence":"confirmed|plausible|rejected","status":"open|rejected|duplicate","file":"path/from/repository/root","line":123,"claim":"what is wrong, in one line","scenario":"failure scenario","invariant":"the violated invariant or ADR, if any","root":"the class name, the same string in every instance"}
+```
+
 It becomes **final** for the block. Include in it:
-- confirmed hunter findings with corrected severity, `"confidence":"confirmed"`;
+- confirmed hunter findings with corrected severity, `"confidence":"confirmed"`, and the
+  hunter's `root` carried over wherever it named a class;
 - unresolved ones — `"confidence":"plausible"`;
 - rejected ones — `"confidence":"rejected","status":"rejected"` and the rejection reason in
-  `claim` (keeping them matters: otherwise the next review will find the same thing again);
+  its own field, `"reject_reason":"what exactly rules the scenario out"` (keeping them
+  matters: otherwise the next review will find the same thing again). The state check
+  refuses a rejected finding whose reason is recorded nowhere — `claim` stays a title, the
+  reason goes into `reject_reason`;
+- duplicates — `"status":"duplicate","dup_of":"<id of the primary finding>"`;
 - your own new findings.
 
 **`claim` is a title, not a verification log.** One sentence about what is wrong, no longer

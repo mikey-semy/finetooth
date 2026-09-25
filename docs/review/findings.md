@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **30** of 116 records.
+Open: **15** of 116 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **30** of 116 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (6 open / 37)
+## medium (4 open / 37)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -47,8 +47,8 @@ Open: **30** of 116 records.
 | T1-063 | T1 | fixed | `skills/finetooth/scripts/review.py:2662` | [R7-005, round 7] the round's central rule — no basis, no verdict — does not reach the table or the free form, so it is bypassed by writing the same answer as a table |
 | T1-064 | T1 | deferred | `skills/finetooth/scripts/review.py:3195` | [R7-006, round 7] the file-map gate reads the report raw, so the block's file list can be satisfied entirely out of a quotation |
 | T1-065 | T1 | fixed | `skills/finetooth/scripts/review.py:3229` | [R7-007, round 7] the R6-004 fix is untested: reverting the gate's `"quoted"` mode leaves the whole suite green |
-| T2-001 | T2 | open | `skills/finetooth/references/verify.md:123` | The verifier template tells the agent to put a rejection reason in `claim`, but check accepts it only when the claim starts with a rejection word or a reject_reason field is present — neither is mentioned |
-| T2-002 | T2 | open | `skills/finetooth/references/hunter.md:155` | The draft-findings JSON schema in every role template omits `root` and `dup_of`, so the three-instance guard gate and the duplicate gate can never be satisfied by an agent following the template |
+| T2-001 | T2 | fixed | `skills/finetooth/references/verify.md:123` | The verifier template tells the agent to put a rejection reason in `claim`, but check accepts it only when the claim starts with a rejection word or a reject_reason field is present — neither is mentioned |
+| T2-002 | T2 | fixed | `skills/finetooth/references/hunter.md:155` | The draft-findings JSON schema in every role template omits `root` and `dup_of`, so the three-instance guard gate and the duplicate gate can never be satisfied by an agent following the template |
 | T3-001 | T3 | open | `tests/test_review.py:3951` | Five cmd_check gates moved from problems to warnings leave all 248 tests green: check exits 0 on the state it refused, because GATES keys a gate by its message and those gate tests never assert the exit code |
 | T3-002 | T3 | open | `tests/test_review.py:3925` | _check_gates matches only `problems.append(x)` on a Name, so a gate written with `+=` or `extend` yields no key, needs no GATES entry and no test, and the registry stays green |
 | T3-003 | T3 | open | `tests/test_review.py:4034` | GateRegistryTest checks only that the test named beside a gate exists; nothing ties the two, so a gate registered against any existing test name satisfies the guard with zero coverage |
@@ -57,7 +57,7 @@ Open: **30** of 116 records.
 | T4-003 | T4 | fixed | `SECURITY.md:3` | The stated security boundary ('writes to docs/review/', 'sends nothing over the network') is false for `summary` and for assets/run-role.sh |
 | T4-016 | T4 | fixed | `skills/finetooth/scripts/review.py:564` | `init` answers a Python traceback on a blocks.json without the top-level review_id, and the guard test that forbids exactly that stays green |
 
-## low (24 open / 74)
+## low (11 open / 74)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -96,19 +96,19 @@ Open: **30** of 116 records.
 | T1-066 | T1 | deferred | `tests/test_review.py:4074` | [R7-008, round 7] T1-058 is recorded `fixed` while the half of it about the class guard is untouched — a third span parser is still invisible |
 | T1-067 | T1 | fixed | `CHANGELOG.md:19` | [R7-009, round 7] the changelog and the fix report say the new table holds 29 lines; it holds 28 |
 | T1-068 | T1 | fixed | `skills/finetooth/scripts/review.py:3231` | [R7-010, round 7] a coverage-limits section swallowed by an unclosed fence is reported as a missing section, and the message does not name the cause |
-| T2-003 | T2 | open | `skills/finetooth/SKILL.md:92` | SKILL.md documents `--round` only for the fix reviewer, so a second fix round overwrites round 1's fix report and the round-2 fixreview prompt points at a file nobody was told to write |
-| T2-004 | T2 | open | `examples/toy/src/billing/quota.ts:1` | The shipped toy example names a register finding id in a code comment — the practice fix.md rule 5 and the entry point forbid — and the id it cites is the wrong finding |
-| T2-005 | T2 | open | `examples/toy/docs/review/blocks.json:12` | examples/toy does not pass `check`: its own README.md is owned by no block and covered by no exclusion, contradicting the example's instruction that check passes on it |
-| T2-006 | T2 | open | `skills/finetooth/assets/blocks.example.json:115` | The sample block definition violates the phase-order gate: the array runs phase 1, phase 2, phase 1, phase 3, and check refuses a phase that decreases along the array |
-| T2-007 | T2 | open | `skills/finetooth/assets/agent-banner.ru.md:11` | The Russian banner asset carries the English banner verbatim: only the surrounding explanation is Russian, the text meant to be pasted is not translated |
-| T2-008 | T2 | open | `skills/finetooth/scripts/review.py:3509` | `setup --lang ru` names the English samples in its checklist, and the Russian copies of invariants.example, manifest.example, journal.example and agent-banner are referenced by nothing in the kit |
-| T2-009 | T2 | open | `skills/finetooth/assets/entry-point.md:46` | The entry point that setup copies into every project as docs/review/README.md is behind the tool: no fixreview role or report name, no fix gate, no import --append, and its prompts/ list omits fixreview.md |
-| T2-010 | T2 | open | `skills/finetooth/references/fixreview.md:71` | The fix reviewer is handed a diff of any size with no statement of that size and no mention of --scope, while the hunter's prompt carries a measured reading budget |
-| T2-011 | T2 | open | `skills/finetooth/references/lessons.md:58` | Lesson 13 requires every deferred finding to be fixed or rejected before the review ends, while the tool and SKILL.md treat a deferred finding with a reason as an accepted risk that ships in the summary |
-| T2-012 | T2 | open | `skills/finetooth/assets/makefile-snippet.mk:17` | The Makefile snippet defines no generic `review` target, while SKILL.md offers `make review` as an example value for the cli field that every hint is built from |
-| T2-013 | T2 | open | `examples/toy/docs/review/findings.md:3` | The toy's findings.md header holds the literal `<skill>` path while its blocks.json sets no `cli`, so the file can never equal the regenerated one and check is red in every copy of the example |
-| T2-014 | T2 | open | `skills/finetooth/SKILL.md:126` | `roots`, the class view the three-instance guard gate rests on, is named by no message of the tool, by no line of SKILL.md and by no line of the entry point, so a lead cannot learn it exists |
-| T2-015 | T2 | open | `skills/finetooth/assets/agent-banner.md:13` | Both banner assets hardcode `make review-status` with no {{CLI}} placeholder, and setup substitutes nothing in them, so a project without a Makefile pastes a dead command into every session |
+| T2-003 | T2 | fixed | `skills/finetooth/SKILL.md:92` | SKILL.md documents `--round` only for the fix reviewer, so a second fix round overwrites round 1's fix report and the round-2 fixreview prompt points at a file nobody was told to write |
+| T2-004 | T2 | fixed | `examples/toy/src/billing/quota.ts:1` | The shipped toy example names a register finding id in a code comment — the practice fix.md rule 5 and the entry point forbid — and the id it cites is the wrong finding |
+| T2-005 | T2 | fixed | `examples/toy/docs/review/blocks.json:12` | examples/toy does not pass `check`: its own README.md is owned by no block and covered by no exclusion, contradicting the example's instruction that check passes on it |
+| T2-006 | T2 | fixed | `skills/finetooth/assets/blocks.example.json:115` | The sample block definition violates the phase-order gate: the array runs phase 1, phase 2, phase 1, phase 3, and check refuses a phase that decreases along the array |
+| T2-007 | T2 | fixed | `skills/finetooth/assets/agent-banner.ru.md:11` | The Russian banner asset carries the English banner verbatim: only the surrounding explanation is Russian, the text meant to be pasted is not translated |
+| T2-008 | T2 | fixed | `skills/finetooth/scripts/review.py:3509` | `setup --lang ru` names the English samples in its checklist, and the Russian copies of invariants.example, manifest.example, journal.example and agent-banner are referenced by nothing in the kit |
+| T2-009 | T2 | fixed | `skills/finetooth/assets/entry-point.md:46` | The entry point that setup copies into every project as docs/review/README.md is behind the tool: no fixreview role or report name, no fix gate, no import --append, and its prompts/ list omits fixreview.md |
+| T2-010 | T2 | fixed | `skills/finetooth/references/fixreview.md:71` | The fix reviewer is handed a diff of any size with no statement of that size and no mention of --scope, while the hunter's prompt carries a measured reading budget |
+| T2-011 | T2 | fixed | `skills/finetooth/references/lessons.md:58` | Lesson 13 requires every deferred finding to be fixed or rejected before the review ends, while the tool and SKILL.md treat a deferred finding with a reason as an accepted risk that ships in the summary |
+| T2-012 | T2 | fixed | `skills/finetooth/assets/makefile-snippet.mk:17` | The Makefile snippet defines no generic `review` target, while SKILL.md offers `make review` as an example value for the cli field that every hint is built from |
+| T2-013 | T2 | fixed | `examples/toy/docs/review/findings.md:3` | The toy's findings.md header holds the literal `<skill>` path while its blocks.json sets no `cli`, so the file can never equal the regenerated one and check is red in every copy of the example |
+| T2-014 | T2 | fixed | `skills/finetooth/SKILL.md:126` | `roots`, the class view the three-instance guard gate rests on, is named by no message of the tool, by no line of SKILL.md and by no line of the entry point, so a lead cannot learn it exists |
+| T2-015 | T2 | fixed | `skills/finetooth/assets/agent-banner.md:13` | Both banner assets hardcode `make review-status` with no {{CLI}} placeholder, and setup substitutes nothing in them, so a project without a Makefile pastes a dead command into every session |
 | T3-005 | T3 | open | `tests/test_review.py:3059` | The no-traceback class guard passes one fixed argv to every subcommand; argparse rejects it for 20 of the 23, so their bodies never run and the guard proves nothing about them |
 | T3-006 | T3 | open | `tests/test_review.py:2250` | Nothing compares the key sets of MSG['en'] and MSG['ru'], so deleting a translation leaves the suite green while T() raises KeyError at run time on the path that needs it |
 | T3-007 | T3 | open | `tests/test_review.py:3600` | Mechanisms outside cmd_check that no test reaches: import's claim cap, block_risk's refusal, review_lang's fallback and cmd_next — each removable with the whole suite green |
