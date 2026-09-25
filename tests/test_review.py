@@ -4020,6 +4020,8 @@ class GateRegistryTest(unittest.TestCase):
         (': files, lines — cannot be read in one session', "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
         ('open finding(s) older than days (oldest d): — ', "test_check_предупреждает_о_находке_старше_недели"),
         ('reference(s) to findings in the code: — the id', "test_refs_находит_номер_находки_в_коде_и_только_его"),
+        (': the acceptance criterion enumerates places a', "test_перечисление_без_sweep_краснеет"),
+        (': the block declares a sweep but there is no s', "test_sweep_без_скрипта_после_охоты_краснеет"),
     ]
 
     def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):
@@ -4468,6 +4470,72 @@ class RecordedFindingsImportTest(unittest.TestCase):
         out = self.s.run("import", "H1", "--append")
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertIn("V2-001", out.stdout + out.stderr)
+
+
+class SweepTest(unittest.TestCase):
+    """The ceiling counted the block's files, while an enumeration criterion ("every place
+    that changes data") sweeps the whole program — a live block of 5.7k lines demanded 47k
+    (issue #25). The sweep is declared, sized apart and proven by a script."""
+
+    def setUp(self):
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        for i in range(3):
+            self.s.write(f"lib/w{i}.ts", "write()\n" * 50)
+
+    def manifest(self, criterion: str):
+        self.s.manifest(hypotheses=1)
+        m = Path(self.s.root, "docs/review/blocks/H1-demo.md")
+        text = m.read_text(encoding="utf-8")
+        head = text[:text.index("## Критерий приёмки")]
+        m.write_text(head + "## Критерий приёмки\n\n" + criterion + "\n", encoding="utf-8")
+
+    def blocks(self, sweep=None):
+        self.s.blocks(paths=["src/one.ts"], exclusions=[{"pattern": "lib/**", "reason": "стенд"}])
+        if sweep is not None:
+            bj = Path(self.s.root, "docs/review/blocks.json")
+            d = json.loads(bj.read_text(encoding="utf-8"))
+            d["blocks"][0]["sweep"] = sweep
+            bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+
+    def prepare(self, sweep=None, criterion="Таблица: перечислены все места, где меняются данные.", status=None):
+        self.blocks(sweep)
+        self.manifest(criterion)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        if status:
+            self.s.run("set-status", "H1", status)
+
+    # forbidden
+    def test_перечисление_без_sweep_краснеет(self):
+        self.prepare()
+        self.assertIn("declares no `sweep`", self.s.run("check").stdout)
+
+    def test_sweep_без_скрипта_после_охоты_краснеет(self):
+        self.prepare(sweep=["lib/**"], status="hunted")
+        self.assertIn("no sweep script", self.s.run("check").stdout)
+
+    # allowed
+    def test_критерий_без_перечисления_не_требует_sweep(self):
+        self.prepare(criterion="Таблица «вход → ожидание → факт» по каждой гипотезе.")
+        out = self.s.run("check").stdout
+        self.assertNotIn("declares no `sweep`", out)
+
+    def test_объявленный_обход_со_скриптом_проходит_и_виден_в_размерах(self):
+        self.prepare(sweep=["lib/**"])
+        self.s.write("docs/review/sweeps/H1.sh", "git grep -n 'write(' -- lib\n")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "sweep")
+        self.s.run("set-status", "H1", "hunted")
+        out = self.s.run("check").stdout
+        self.assertNotIn("declares no `sweep`", out)
+        self.assertNotIn("no sweep script", out)
+        sizes = self.s.run("sizes").stdout
+        self.assertIn("+ sweep 3 files / 150 lines", sizes)
+        prompt = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertIn("docs/review/sweeps/H1", prompt)
 
 if __name__ == "__main__":
     unittest.main()
