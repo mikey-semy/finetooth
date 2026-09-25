@@ -1215,6 +1215,28 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("check").stdout
         self.assertIn("no 'Coverage limits' section outside a fence", out)
 
+    def test_refs_находит_номер_находки_в_коде_и_только_его(self):
+        """Номер находки в комментарии умирает вместе с каталогом ревью."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.write("src/two.ts", "// see H1-001: the fix\n// H1-999 is not ours\n// H1-0012 neither\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        self.s.git("add", "-A")
+        self.s.git("commit", "-q", "-m", "reg")
+        out = self.s.run("refs")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("src/two.ts:1: H1-001", out.stdout)
+        self.assertNotIn("H1-999", out.stdout)
+        self.assertNotIn("H1-0012", out.stdout)
+        self.assertNotIn("docs/review/", out.stdout.split("\n\n")[0])   # the register itself is not a reference
+        self.assertIn("reference(s) to findings in the code", self.s.run("check").stdout)
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -3989,6 +4011,7 @@ class GateRegistryTest(unittest.TestCase):
         (": proof '' is not in the vocabulary:", "test_род_доказательства_вне_словаря"),
         (': files, lines — cannot be read in one session', "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
         ('open finding(s) older than days (oldest d): — ', "test_check_предупреждает_о_находке_старше_недели"),
+        ('reference(s) to findings in the code: — the id', "test_refs_находит_номер_находки_в_коде_и_только_его"),
     ]
 
     def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):

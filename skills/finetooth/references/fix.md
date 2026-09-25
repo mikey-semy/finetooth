@@ -102,10 +102,16 @@ one will appear on its own.
 
 1. Fixes in the working tree, split into meaningful commits — in the style and language
    accepted in the project (see the invariants and the `git log` history).
-2. The file `{{REPORT_PATH}}`: for every finding — what was done → in which commit → which
-   test catches it → **does it go red on the reverted fix** (and does the revert build).
-   As separate sections: incidental fixes (each with its own test) and rejected findings
-   with the reason.
+2. The file `{{REPORT_PATH}}`, written as you go:
+   - a table: finding → verdict (closed / rejected) → commit;
+   - for every finding: the probe that **reproduced it on the current code before the fix**;
+     what was done; which test catches it; **does it go red on the reverted fix** (and does
+     the revert build) — and the other side: what the fix must still allow, and the test that
+     holds that;
+   - incidental fixes, each with its own test;
+   - **found, not fixed** — the same class elsewhere, listed by path and grouped, the decision
+     left to the lead; observations outside the assignment, separately;
+   - rejected findings with the reason; what was run, with the result.
 3. In the reply to me — only a summary: closed N, rejected M (with reasons), which gates
    were run and with what result.
 

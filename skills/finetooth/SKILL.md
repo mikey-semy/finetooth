@@ -102,8 +102,11 @@ one of your own:
    `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope <half>]`.
    The diff is pasted into the prompt whole; two agents on two halves of the diff is fine. Its
    confirmed findings go into the register as a top-up import (`import <ID> --append`), even
-   the ones already fixed. Rounds repeat while the reviewer answers "another round is needed";
-   a round that finds a defect introduced by the previous round is a signal to stop and think.
+   the ones already fixed. A new round only for a finding of medium or higher; low ones are
+   fixed by the fixer or by the lead, and a lead's fix is marked in the journal and the PR as
+   having no independent review. When the top finding sits inside the previous round's diff
+   two rounds in a row, in one class, stop: the next move is a human's — build the behaviour
+   table (or the corpus) first, or revert the class to its last strict state.
 9. Only after that `review set-status <ID> closed`: without a fix reviewer's report a block
    with fixes cannot be closed.
 
