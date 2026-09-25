@@ -120,12 +120,18 @@ one of your own:
    The diff is pasted into the prompt whole, and `--scope` names a reviewer's half in its
    report without shrinking it: a diff too large for one agent is split by giving each a
    narrower `--diff` range. Its
-   confirmed findings go into the register as a top-up import (`import <ID> --append`), even
-   the ones already fixed. A new round only for a finding of medium or higher; low ones are
-   fixed by the fixer or by the lead, and a lead's fix is marked in the journal and the PR as
-   having no independent review. When the top finding sits inside the previous round's diff
-   two rounds in a row, in one class, stop: the next move is a human's — build the behaviour
-   table (or the corpus) first, or revert the class to its last strict state.
+   confirmed findings go into the register as a top-up import, even the ones already fixed,
+   with the command its prompt names: `import <ID> --append --round N --diff <base>..<tip>`
+   records which review found them (`found_in`). A new round only for a finding of medium or
+   higher; low ones are fixed by the fixer or by the lead, and a lead's fix is marked in the
+   journal and the PR as having no independent review. **The loop signal:** when the top
+   finding of review N−1 (medium or higher) lies on a line fix round N−1 wrote, by the lines of
+   its diff, `prompt --role fix --round N` refuses and `check` warns — another round would fix
+   its own last fix. The next move is a human's: a different mechanism, a revert of the class
+   to its last strict state, or closing the block. Record it with
+   `review decide <ID> "<decision>"` (it goes to the journal and into the next fix and fix
+   review prompts, and lifts the refusal); a decision to close is carried out with `set-status`.
+   Give each round its own `--diff` range and the signal means "this round".
 9. Only after that `review set-status <ID> closed`: without a fix reviewer's report a block
    with fixes cannot be closed.
 
@@ -156,7 +162,7 @@ without a fix review; a block and a finding closed on a different version of the
 (fingerprints — `review restamp` if the changes are unrelated, `review backfill` for records
 older than the fingerprints); a finding without a rejection reason, a fix commit that does not
 touch the file, a duplicate of a nonexistent finding, a guard at a nonexistent path; a tree
-more than a week behind the server.
+more than a week behind the server; the loop signal without a recorded decision (a warning).
 
 ## In CI and on the platform
 

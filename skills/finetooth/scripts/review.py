@@ -164,6 +164,11 @@ FINDINGS_MD = REVIEW / "findings.md"
 COVERAGE_FILE = REVIEW / "coverage.tsv"
 JOURNAL_FILE = REVIEW / "journal.md"
 INVARIANTS_FILE = REVIEW / "invariants.md"
+# The human's decisions on a block, one JSON line each (`decide`). A file of its own, not a
+# field in state.json: state is "where we are now" and `init --force` rewrites it from
+# scratch, while a decision is history the next round's prompt must keep carrying — the
+# same append-only shape as the register, next to it.
+DECISIONS_FILE = REVIEW / "decisions.jsonl"
 
 # A block moves forward only through these, in this order. `blocked` is the one
 # side exit: a block that cannot proceed until another one lands.
@@ -198,6 +203,10 @@ FIX_AGE_DAYS = 7
 CLAIM_MAX = 220
 SCENARIO_MAX = 700
 ROLES = ["hunter", "verify", "fix", "fixreview"]
+# The severity from which a fix-review finding earns another round — rule 11 of the fix
+# reviewer's template, from the method author's own review: low ones are fixed by the lead
+# without a round. The loop signal asks the same question of the previous round's top finding.
+ROUND_SEVERITY = "medium"
 # The block's proof kind. `read` — every file is read in full and named in the report;
 # `measured` — reading proves nothing (180 thousand lines of tests, performance,
 # scanners), the proof is the artifacts from the manifest. A block without `paths` is a
@@ -285,6 +294,8 @@ MSG = {
   "no_open_findings": "(no open findings for this block — ask the lead session why the fixer was started)",
   "rec_none": "(nothing is recorded against this block yet)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(recorded {date})_",
+  "dec_none": "(no human decision is recorded for this block — work by the rules above)",
+  "dec_row": "- **{date}**, after fix review round {round}: {text}",
   "f_where": "**Location:**", "f_claim": "**What is wrong:**", "f_scenario": "**Failure scenario:**", "f_invariant": "**Violated invariant:**", "f_conf": "confidence",
   "md_title": "# Review findings", "md_gen": "> This file is GENERATED from `findings.jsonl` by `{cli} findings`.", "md_noedit": "> Do not edit by hand — edit the jsonl and regenerate.",
   "md_open": "Open: **{live}** of {total} records.", "md_sev": "## {sev} ({open} open / {total})", "md_cols": "| id | block | status | location | what is wrong |",
@@ -353,6 +364,8 @@ MSG = {
   "no_open_findings": "(открытых находок по блоку нет — уточни у ведущей сессии, зачем запущен фиксер)",
   "rec_none": "(за блоком пока ничего не записано)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(записана {date})_",
+  "dec_none": "(решений человека по блоку не записано — работай по правилам выше)",
+  "dec_row": "- **{date}**, после ревью правок круга {round}: {text}",
   "f_where": "**Место:**", "f_claim": "**Что не так:**", "f_scenario": "**Сценарий отказа:**", "f_invariant": "**Нарушенный инвариант:**", "f_conf": "уверенность",
   "md_title": "# Находки ревью", "md_gen": "> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `{cli} findings`.", "md_noedit": "> Не редактируй его руками — правь jsonl и перегенерируй.",
   "md_open": "Открыто: **{live}** из {total} записей.", "md_sev": "## {sev} ({open} открыто / {total})", "md_cols": "| id | блок | статус | место | что не так |",
@@ -2186,6 +2199,8 @@ def cmd_prompt(args) -> int:
         die(f"{b['id']}: proof '{proof}' is not in the vocabulary: {', '.join(PROOFS)}")
     if args.role == "fixreview" and not args.diff:
         die("the fix reviewer needs a diff: --diff <range>, for example main...HEAD")
+    if args.role == "fix" and (why := loop_stop(b["id"], args.round, findings())):
+        die(why)
     # The project may keep its own version of a role template in `docs/review/prompts/` —
     # then that one is taken. If not — the skill's template: an own copy is not required
     # and does not fall behind it.
@@ -2229,6 +2244,11 @@ def cmd_prompt(args) -> int:
         "{{SCOPE_LINE}}": T("scope_line", scope=args.scope) if args.scope else "",
         "{{FIX_REPORT}}": report_path(b, "fix", args.round),
         "{{DIFF_RANGE}}": args.diff or "",
+        # The range as two commit ids, for the import command the fix reviewer's template
+        # names: `main...HEAD` means another diff once the next round commits, and the loop
+        # signal reads the lines of THIS round's diff.
+        "{{DIFF_PINNED}}": (pinned_range(args.diff) or args.diff) if args.diff else "",
+        "{{DECISIONS}}": render_decisions_for(b["id"]),
         "{{DIFF_VOLUME}}": diff_volume(diff) if diff else "",
         "{{VOLUME}}": volume_note(files, args.role) + (
             T("vol_sweep", n=sweep_lines(b)[0], lines=sweep_lines(b)[1], id=b["id"])
@@ -2332,6 +2352,26 @@ def cmd_import(args) -> int:
     src = block_findings_path(idx[args.block])
     if not src.exists():
         die(f"no findings file for the block: {src.relative_to(ROOT)}")
+    # Which fix review found the new rows: the loop signal reads it. Written by the tool from
+    # the command the fix reviewer's template assembles, not by a human — the leads of the
+    # kit's own review appended "(fix review round N, RN-00M)" to the claim by hand, and a
+    # claim is prose nothing can read back.
+    found_in = None
+    if (args.round is None) != (args.diff is None):
+        die("--round and --diff go together: the fix review round that found the findings "
+            "and the diff it read, as the fix reviewer's prompt names them")
+    if args.round is not None:
+        if not args.append:
+            die("--round/--diff mark findings a fix review added on top of the register — "
+                f"they go with --append: `{CLI} import {args.block} --append --round N --diff <range>`")
+        if args.round < 1:
+            die(f"--round {args.round}: rounds are counted from 1")
+        pinned = pinned_range(args.diff)
+        if not pinned:
+            die(f"--diff {args.diff}: not a commit range git can resolve — name it as "
+                f"`A..B` or `A...B`; the loop signal reads the lines that range changed, and "
+                f"a diff against the working tree changes under it")
+        found_in = {"role": "fixreview", "round": args.round, "diff": pinned}
 
     incoming = []
     for n, line in enumerate(src.read_text(encoding="utf-8").splitlines(), 1):
@@ -2394,6 +2434,8 @@ def cmd_import(args) -> int:
             f.setdefault("confidence", "plausible")
             f.setdefault("fix_commit", None)
             f.setdefault("dup_of", None)
+            if found_in:
+                f["found_in"] = dict(found_in)
             f["imported_at"] = now()
             f["code_sha"] = file_sha(f.get("file", ""))
             added.append(f)
@@ -2511,6 +2553,170 @@ def cmd_import(args) -> int:
     live = sum(1 for f in incoming if f.get("status") == "open")
     print(f"{args.block}: imported {len(incoming)} records, {live} of them open")
     print(f"do not forget: {CLI} findings && {CLI} check")
+    return 0
+
+
+# ------------------------------------------------------------------ loop signal
+#
+# The kit's own review ran three blocks through two and three fix rounds each (T2–T4, issue
+# #9). From round 2 on, almost every fix-review finding sat in the code the previous round
+# had written — mostly inside the guard that round added to close a class — and each round's
+# guard got its own hole found by the next. The round counter is not the signal; the place
+# is: when the top finding of fix review N−1 lies on a line fix round N−1 changed, round N
+# repeats the pattern, and what stopped it every time was a human's decision. So the tool
+# asks for that decision before another round, and carries it into the next prompts.
+
+
+def pinned_range(rng: str) -> str | None:
+    """`A...B` or `A..B` as `<base>..<tip>` commit ids, or None when it is not a range of commits.
+
+    `git diff A...B` is the diff from their merge base to B, so that is the base pinned. A
+    symbolic range moves with the branch: `main...HEAD` read after the next round commits is
+    another diff, and a finding would be judged against lines its round never wrote.
+    """
+    sym = "..." in rng
+    a, sep, b = rng.partition("..." if sym else "..")
+    if not sep or a.startswith("-") or b.startswith("-"):
+        return None
+    a, b = a or "HEAD", b or "HEAD"
+    tip = git("rev-parse", "--verify", "--quiet", f"{b}^{{commit}}")
+    base = (git("merge-base", a, b) if sym
+            else git("rev-parse", "--verify", "--quiet", f"{a}^{{commit}}"))
+    if tip.code != 0 or base.code != 0 or not base.out.split():
+        return None
+    return f"{base.out.split()[0]}..{tip.out.strip()}"
+
+
+# A hunk header of `git diff -U0`: the new side starts at `+c` and runs `d` lines, and a
+# missing `,d` means one line (git's own convention). `d` = 0 is a pure deletion: no line of
+# the new file was written by it.
+DIFF_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
+
+
+def diff_spans(rng: str, rel: str) -> list[tuple[int, int]] | None:
+    """The lines of `rel` the range wrote, as `(first, last)` spans of the new side; None when
+    git cannot read the range. Asked per file, so no path is parsed out of a patch."""
+    out = git("diff", "--no-ext-diff", "--no-color", "-U0", rng, "--", f":(literal){rel}")
+    if out.code != 0:
+        return None
+    spans = []
+    for m in DIFF_HUNK.finditer(out.out):
+        first, count = int(m.group(1)), int(m.group(2) or "1")
+        if count:
+            spans.append((first, first + count - 1))
+    return spans
+
+
+def found_round(f: dict) -> int | None:
+    """The fix review round that found the finding, when `import --round` recorded one.
+    Records from before the field — and anything hand-written in its place — have none."""
+    fi = f.get("found_in")
+    if not isinstance(fi, dict) or fi.get("role") != "fixreview":
+        return None
+    rnd = fi.get("round")
+    return rnd if isinstance(rnd, int) and not isinstance(rnd, bool) else None
+
+
+def last_review_round(block_id: str, rows: list[dict]) -> int:
+    """The latest fix review round that put findings into the block's register; 0 if none."""
+    return max((r for f in rows if f.get("block") == block_id
+                and (r := found_round(f)) is not None), default=0)
+
+
+def in_own_diff(f: dict) -> bool:
+    """Does the finding's file:line lie on a line its round's diff wrote? By LINE, not by
+    file: a finding elsewhere in a file the round touched is not the round's own code."""
+    line, rng = f.get("line"), (f.get("found_in") or {}).get("diff")
+    if not isinstance(line, int) or isinstance(line, bool) or not rng or not f.get("file"):
+        return False
+    return any(a <= line <= b for a, b in diff_spans(str(rng), f["file"]) or [])
+
+
+def decisions() -> list[dict]:
+    """The human's decisions, in the order they were taken."""
+    if not DECISIONS_FILE.exists():
+        return []
+    out = []
+    for n, line in enumerate(DECISIONS_FILE.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            die(f"{DECISIONS_FILE.relative_to(ROOT)} line {n}: not JSON — {exc}; it is written "
+                f"by `{CLI} decide`, fix the line by hand")
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def loop_stop(block_id: str, rnd: int, rows: list[dict]) -> str | None:
+    """Why fix round `rnd` is a human's move, not the next agent's — or None.
+
+    The top finding of fix review `rnd − 1` (by severity, among its open ones) is medium or
+    higher and lies inside the diff of fix round `rnd − 1`, and no decision was recorded
+    after that review. Findings without `found_in` take no part: nothing says which round
+    found them.
+    """
+    prev = rnd - 1
+    if prev < 1:
+        return None
+    theirs = [f for f in rows if f.get("block") == block_id and f.get("status") == "open"
+              and found_round(f) == prev]
+    order = {s: i for i, s in enumerate(SEVERITIES)}
+    top = min((order.get(f.get("severity"), len(order)) for f in theirs), default=len(order))
+    if top > order[ROUND_SEVERITY]:
+        return None
+    inside = [f for f in sorted(theirs, key=lambda f: f.get("id", ""))
+              if order.get(f.get("severity")) == top and in_own_diff(f)]
+    if not inside:
+        return None
+    if any(d.get("block") == block_id and isinstance(d.get("round"), int)
+           and d["round"] >= prev for d in decisions()):
+        return None
+    f = inside[0]
+    return (f"loop signal: the top finding lies in the code the previous round wrote — the "
+            f"human decides. {f.get('id')} ({f.get('severity')}, {f.get('file')}:{f.get('line')}) "
+            f"of fix review round {prev} sits on a line fix round {prev} changed "
+            f"({f['found_in']['diff']}); another round would repeat that pattern. Record the "
+            f"decision — a different mechanism, a revert of the class, or closing the block — "
+            f"with `{CLI} decide {block_id} \"<decision>\"`: it goes into the next fix and fix "
+            f"review prompts. If the decision is to close the block: `{CLI} set-status {block_id} closed`.")
+
+
+def render_decisions_for(block_id: str) -> str:
+    rows = [d for d in decisions() if d.get("block") == block_id]
+    if not rows:
+        return T("dec_none")
+    return "\n".join(T("dec_row", date=str(d.get("at") or "")[:10], round=d.get("round", "?"),
+                       text=d.get("text", "")) for d in rows)
+
+
+def journal(block: str, text: str) -> None:
+    """Append a dated line to the journal — the log a human reads."""
+    if not JOURNAL_FILE.exists():
+        JOURNAL_FILE.write_text(T("journal_head"), encoding="utf-8")
+    with JOURNAL_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(f"- **{now()}** · `{block}` — {text}\n")
+
+
+def cmd_decide(args) -> int:
+    """Record a human's decision on a block: the answer to the loop signal."""
+    if args.block not in block_index(blocks()):
+        die(f"unknown block {args.block}")
+    text = " ".join(args.text.split())
+    if not text:
+        die("the decision is empty — write what was decided: the next fixer gets it as it is")
+    rnd = last_review_round(args.block, findings()) if args.round is None else args.round
+    if rnd < 0:
+        die(f"--round {rnd}: rounds are counted from 1 (0 — before any fix review)")
+    row = {"block": args.block, "round": rnd, "at": now(), "text": text}
+    with DECISIONS_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # The journal is where a human looks for what was decided; the file is what the tool reads.
+    journal(args.block, f"decision after fix review round {rnd}: {text}")
+    print(f"{args.block}: decision recorded after fix review round {rnd} — "
+          f"`{CLI} prompt {args.block} --role fix --round {rnd + 1}` carries it")
     return 0
 
 
@@ -3990,6 +4196,16 @@ def cmd_check(args) -> int:
                 f"(ceiling {limit}). Split the block, or the report will lie about coverage"
             )
 
+    # The loop signal, as `prompt --role fix` will refuse it: said here too, because the lead
+    # reads `check` after every import, and the stop belongs before the next round is cut, not
+    # at the moment its prompt is asked for. A warning: the state is not wrong, the next
+    # move is a human's. A closed block has no next round.
+    for bid in idx:
+        if st["blocks"].get(bid, {}).get("status") == "closed":
+            continue
+        if why := loop_stop(bid, last_review_round(bid, rows) + 1, rows):
+            gates.warn("loop/top-finding-in-own-diff", f"{bid}: {why}")
+
     refs = review_refs()
     if refs:
         sample = ", ".join(f"{p}:{n} ({fid})" for p, n, fid, _ in refs[:4])
@@ -4012,11 +4228,7 @@ def cmd_check(args) -> int:
 
 def cmd_log(args) -> int:
     """Append a dated line to the journal. Decisions are what a re-run cannot recover."""
-    if not JOURNAL_FILE.exists():
-        JOURNAL_FILE.write_text(T("journal_head"), encoding="utf-8")
-    entry = f"- **{now()}** · `{args.block}` — {args.text}\n"
-    with JOURNAL_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(entry)
+    journal(args.block, args.text)
     print("written to journal.md")
     return 0
 
@@ -4207,6 +4419,15 @@ def main() -> int:
     c.add_argument("--force", action="store_true", help="overwrite the block's findings already taken into work")
     c.add_argument("--append", action="store_true",
                    help="top-up import: append new findings without touching the recorded and fixed ones")
+    c.add_argument("--round", type=int,
+                   help="with --append: the fix review round that found the new findings (recorded as found_in)")
+    c.add_argument("--diff", help="with --round: the diff range that fix review read (pinned to commit ids)")
+
+    c = sub.add_parser("decide", help="record a human's decision on a block — the answer to the loop signal")
+    c.add_argument("block")
+    c.add_argument("text")
+    c.add_argument("--round", type=int,
+                   help="the fix review round the decision follows (default: the latest one in the register)")
 
     c = sub.add_parser("set-finding", help="move a finding (or several): fixed / rejected / duplicate / deferred")
     c.add_argument("finding", nargs="+")
@@ -4265,7 +4486,7 @@ def main() -> int:
     return {
         "init": cmd_init, "version": cmd_version, "status": cmd_status, "next": cmd_next, "coverage": cmd_coverage,
         "prompt": cmd_prompt, "set-status": cmd_set_status, "findings": cmd_findings,
-        "check": cmd_check, "log": cmd_log, "import": cmd_import,
+        "check": cmd_check, "log": cmd_log, "import": cmd_import, "decide": cmd_decide,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
         "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order, "refs": cmd_refs, "summary": cmd_summary, "sarif": cmd_sarif,

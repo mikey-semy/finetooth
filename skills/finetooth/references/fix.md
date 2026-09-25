@@ -84,6 +84,16 @@ task is to **close them correctly**, not quickly.
 
 {{INVARIANTS}}
 
+# Decisions of the human on this block
+
+{{DECISIONS}}
+
+A decision comes before the rules and the findings below: it is taken when the previous fix
+review's top finding lay in the code the previous round wrote — the tool refuses another round
+until one is recorded, because one more fix of the same kind repeats the loop. Work to it: if
+it changes the mechanism, the findings are closed by the new mechanism, not patched one by
+one; if it moves part of the work out, do not do that part.
+
 # Findings to close
 
 {{FINDINGS}}
