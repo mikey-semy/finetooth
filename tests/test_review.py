@@ -4604,5 +4604,75 @@ class DraftByTheTemplateTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
 
 
+class ShippedSampleTest(unittest.TestCase):
+    """УЗДА КЛАССА «образец, который инструмент сам отвергает».
+
+    На образцы ссылаются и `SKILL.md`, и три отказа `check_definition`, и README примера:
+    их открывают первыми и по ним делают своё. Найдено четыре штуки сразу — пример
+    `examples/toy` не проходил `check` по двум причинам, называл номер находки в коде,
+    а `blocks.example.json` нарушал порядок фаз, — то есть единственное показательное
+    состояние ревью учило тому, что набор запрещает. Список мест такое не держит: правило
+    гоняет сами ворота по тому, что уезжает пользователю.
+    """
+
+    def stand(self, src: Path) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="finetooth-sample-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        shutil.copytree(src, root, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        for cmd in (["init", "-q", "."], ["config", "user.email", "t@example.com"],
+                    ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "sample"]):
+            subprocess.run(["git", "-C", str(root), *cmd], capture_output=True, check=True)
+        return root
+
+    def run_in(self, root: Path, *args: str) -> subprocess.CompletedProcess:
+        env = dict(os.environ, LC_ALL="C.UTF-8")
+        return subprocess.run(["python3", str(TOOL), *args], cwd=root,
+                              capture_output=True, text=True, env=env)
+
+    def test_пример_toy_проходит_ворота_как_обещает_его_README(self):
+        """README примера велит скопировать его в свежий репозиторий и позвать `check`."""
+        root = self.stand(KIT / "examples" / "toy")
+        for cmd in (("check",), ("refs",), ("coverage", "--no-write")):
+            out = self.run_in(root, *cmd)
+            self.assertEqual(out.returncode, 0,
+                             f"`{' '.join(cmd)}` на примере: " + out.stdout + out.stderr)
+
+    def test_образец_определения_блоков_проходит_ворота(self):
+        """`blocks.example.json` — то, на что показывают три отказа самого инструмента."""
+        root = self.stand(KIT / "examples" / "toy")
+        shutil.rmtree(root / "docs" / "review")
+        (root / "docs" / "review" / "blocks").mkdir(parents=True)
+        (root / "docs" / "review" / "reports").mkdir(parents=True)
+        d = json.loads((SKILL / "assets" / "blocks.example.json").read_text(encoding="utf-8"))
+        # Пути образца обобщены и в этом дереве не существуют; ворота про мёртвый шаблон
+        # проверяются своим тестом, а здесь проверяется само определение.
+        d["exclusions"] = [{"pattern": "docs/review", "reason": "аппарат"},
+                           {"pattern": "README.md", "reason": "не код"},
+                           {"pattern": ".gitignore", "reason": "не код"}]
+        for b in d["blocks"]:
+            b["paths"] = ["src", "tests"] if b["paths"] else []
+            b["ref_paths"] = []
+        (root / "docs/review/blocks.json").write_text(
+            json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "sample definition"],
+                       capture_output=True, check=True)
+        self.assertEqual(self.run_in(root, "init").returncode, 0)
+        out = self.run_in(root, "check")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_ворота_про_порядок_фаз_живы(self):
+        """Обратная сторона: переставленный образец по-прежнему краснеет."""
+        root = self.stand(KIT / "examples" / "toy")
+        bj = root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["blocks"].reverse()
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "commit", "-qam", "phases"],
+                       capture_output=True, check=True)
+        self.assertIn("comes after phase", self.run_in(root, "check").stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
