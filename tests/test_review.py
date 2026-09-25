@@ -1315,6 +1315,25 @@ class ReviewToolTest(unittest.TestCase):
         self.assertNotIn("docs/review/", out.stdout.split("\n\n")[0])   # the register itself is not a reference
         self.assertIn("reference(s) to findings in the code", warned(self.s.run("check")))
 
+    def test_refs_называет_не_ASCII_путь_как_он_есть(self):
+        """`git grep` экранирует такой путь по-C и разделяет поля двоеточием, которое в
+        пути законно: оператор получал `"src/\\320\\274…"` и путь, обрезанный по первому
+        двоеточию, — то есть адрес, по которому ничего не найти."""
+        self.s.write("src/модуль:раз.ts", "// см. H1-001 — причина\n")
+        self.s.blocks(paths=["src"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/модуль:раз.ts", "claim": "дефект", "scenario": "x делает y"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+        out = self.s.run("refs")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("src/модуль:раз.ts:1: H1-001", out.stdout, out.stdout)
+        self.assertNotIn("\\320", out.stdout, "путь пришёл экранированным")
+
     def test_дубль_указывает_на_живую_находку(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -2375,6 +2394,60 @@ class LanguageTest(unittest.TestCase):
         self.assertIn("ревьюер-охотник", out)
         self.assertIn("Прочитай КАЖДЫЙ файл", out)
 
+    def test_обе_языковые_таблицы_держат_одни_ключи_и_подстановки(self):
+        """УЗДА КЛАССА «строка есть на одном языке и нет на другом».
+
+        `T()` берёт ключ из таблицы ВЫБРАННОГО языка и падает `KeyError` в работе, а не
+        при импорте. Удаление русского `refs_cut` оставляло весь прогон зелёным —
+        измерено: ни один тест не даёт блоку больше REF_LIST_LIMIT файлов контекста, и
+        ветка не исполняется никогда; так же не исполняются `vol_more`, `sum_seams`,
+        `f_invariant`. Проект с русским ревью и 81 файлом контекста получал бы трейсбек
+        из `prompt` — команды, которая выдаёт агенту задание.
+
+        Подстановки сверяются заодно: перевод с другим именем поля падает тем же
+        образом, только уже в `format`.
+        """
+        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+        table = next(ast.literal_eval(n.value) for n in tree.body
+                     if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "MSG")
+        langs = sorted(table)
+        self.assertEqual(langs, ["en", "ru"], "языков стало больше — правило сверяет все")
+        first, *rest = langs
+        for lang in rest:
+            self.assertEqual(sorted(set(table[first]) - set(table[lang])), [],
+                             f"строки есть в {first} и нет в {lang}")
+            self.assertEqual(sorted(set(table[lang]) - set(table[first])), [],
+                             f"строки есть в {lang} и нет в {first}")
+        for key in table[first]:
+            fields = {lang: set(re.findall(r"\{(\w+)", table[lang][key])) for lang in langs}
+            self.assertEqual(len(set(map(frozenset, fields.values()))), 1,
+                             f"подстановки строки `{key}` расходятся по языкам: {fields}")
+
+    def test_у_каждого_шаблона_и_образца_есть_второй_язык(self):
+        """Та же узда для файлов: шаблон роли или образец, переведённый наполовину,
+        оставляет проект одного из языков без того, что обещает `SKILL.md`."""
+        for folder in ("references", "assets"):
+            names = {p.name for p in (SKILL / folder).glob("*.md")}
+            for name in sorted(names):
+                twin = name.replace(".ru.md", ".md") if name.endswith(".ru.md") \
+                    else name[:-3] + ".ru.md"
+                with self.subTest(файл=f"{folder}/{name}"):
+                    self.assertIn(twin, names, f"{folder}/{name} без пары {twin}")
+
+    def test_язык_которого_нет_не_роняет_инструмент(self):
+        """`lang` пишут руками, и `ru-RU` — обычная описка. Ни один гейт `check` поле не
+        проверяет, так что запасной английский — единственное, что стоит между опиской и
+        трейсбеком из `prompt`."""
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"], lang="ru-RU")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.assertEqual(self.s.run("init").returncode, 0)
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("You are a hunter reviewer", out.stdout, "запасной язык — английский")
+
     def test_без_поля_lang_язык_английский(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"], lang="en")
@@ -2946,6 +3019,53 @@ class GitTruthTest(unittest.TestCase):
         self.s.commit("правка после просмотра")
         self.s.run("coverage")
         self.assertIn("changed after the review", self.s.run("check").stdout)
+
+    def test_имя_файла_со_скобкой_это_имя_а_не_образец(self):
+        """`app/[id]/page.tsx` — обычный маршрут Next.js, а для git-pathspec `[id]` —
+        класс символов. Имя, отданное как образец, совпадает и с СОСЕДОМ: несуществующий
+        `app/[i]/page.tsx` матчится на живой `app/i/page.tsx`, и «узда есть» становится
+        правдой без всякой узды — ровно тот дефект, ради которого проверка и написана.
+
+        Обе стороны: имя, которое есть, принимается; имя, которого нет, отвергается, как
+        бы удачно его скобки ни совпадали с соседним файлом.
+        """
+        route = "app/[id]/page.tsx"
+        self.s.write(route, "было\n")
+        self.s.write("app/i/page.tsx", "сосед\n")
+        self.s.blocks(paths=["app"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": route, "claim": "дефект на маршруте", "scenario": "x делает y"},
+            ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("import", "H1")
+
+        # имя, которое есть, — принимается и там, и там
+        for flag in ("--rule", "--fixed-in"):
+            with self.subTest(поле=flag, имя="живое"):
+                got = self.s.run("set-finding", "H1-001", "open", flag, route)
+                self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
+
+        # а имени, которого нет, не помогает совпадение по классу символов
+        for flag in ("--rule", "--fixed-in"):
+            with self.subTest(поле=flag, имя="которого нет"):
+                got = self.s.run("set-finding", "H1-001", "open", flag, "app/[i]/page.tsx")
+                self.assertNotEqual(got.returncode, 0, got.stdout + got.stderr)
+                self.assertIn("app/[i]/page.tsx", got.stdout + got.stderr)
+
+        # и файл под скобками живёт в отпечатке блока: его правка роняет проверку
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit("отчёты")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", "verified")
+        self.s.write(route, "переписали целиком\n")
+        self.s.commit("правка после просмотра")
+        self.s.run("coverage")
+        self.assertIn("changed after the review", refused(self.s.run("check")))
 
     def test_двоичный_файл_не_считается_строками_в_пороге(self):
         """Порог читаемости мерил картинку как две тысячи строк."""
@@ -4519,6 +4639,55 @@ class SourceRuleTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.SOURCE = TOOL.read_text(encoding="utf-8")
 
+    # Команды и ключи git, чей вывод НЕСЁТ ПУТИ. Любой из них без `-z` — это путь,
+    # экранированный по-C (`"src/\320\274…"`), и поле, отделённое двоеточием, которое в
+    # пути законно.
+    ASKS_FOR_NAMES = ("ls-files", "--name-only", "--name-status", "--others", "grep")
+
+    @classmethod
+    def _nul_offenders(cls, source: str) -> list[tuple[int, list]]:
+        """Вызовы git, которые просят пути и не просят `-z`.
+
+        Аргументы собираются ЗА ВЫЗОВ, а не по одному литералу: список склеивают из
+        частей (`[...] + [...]`), копят в переменной (`cmd = [...]; cmd += [...]`) и
+        передают по имени. Пока правило смотрело на один литерал, вынос общей приставки
+        `["git", "-C", str(ROOT)]` в отдельный список ослеплял его целиком — измерено:
+        `-z` в `untracked_files` снимался при зелёном прогоне.
+        """
+        tree = ast.parse(source)
+
+        def strings(node) -> list[str]:
+            if isinstance(node, (ast.List, ast.Tuple)):
+                return [e.value for e in node.elts
+                        if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                return strings(node.left) + strings(node.right)
+            return []
+
+        offenders = []
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            # всё, что за жизнь функции попадало в каждую переменную-список
+            kept: dict[str, list[str]] = {}
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                    kept.setdefault(node.targets[0].id, []).extend(strings(node.value))
+                elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                    kept.setdefault(node.target.id, []).extend(strings(node.value))
+            for node in ast.walk(fn):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "subprocess" and node.args):
+                    continue
+                argv = node.args[0]
+                items = kept.get(argv.id, []) if isinstance(argv, ast.Name) else strings(argv)
+                if "git" not in items or not any(a in items for a in cls.ASKS_FOR_NAMES):
+                    continue
+                if "-z" not in items:
+                    offenders.append((node.lineno, items))
+        return offenders
+
     def test_список_путей_у_git_всегда_запрашивается_NUL_разделённым(self):
         """УЗДА КЛАССА «вывод git разобран как обычный текст».
 
@@ -4526,18 +4695,30 @@ class SourceRuleTest(unittest.TestCase):
         экранированным (`"src/\\320\\274…"`) и не совпадает ни с чем, а переименование
         печатается одним новым именем. Правило держит и те вызовы, которых ещё нет.
         """
-        asks_for_names = ("ls-files", "--name-only", "--name-status", "--others")
-        offenders = []
-        for node in ast.walk(ast.parse(self.SOURCE)):
-            if not isinstance(node, ast.List):
-                continue
-            items = [e.value for e in node.elts
-                     if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-            if "git" not in items or not any(a in items for a in asks_for_names):
-                continue
-            if "-z" not in items:
-                offenders.append((node.lineno, items))
-        self.assertEqual(offenders, [], "вызов git со списком путей без -z")
+        self.assertEqual(self._nul_offenders(self.SOURCE), [],
+                         "вызов git со списком путей без -z")
+
+    # Как argv собирают на самом деле: одним литералом, склейкой и накоплением в
+    # переменной. Все три измерены — правило, читавшее один литерал, видело только первую.
+    NUL_SHAPES = {
+        "одним литералом":
+            'def f():\n    subprocess.run(["git", "-C", R, "ls-files", "--others", "--", *s])\n',
+        "склейкой":
+            'def f():\n    subprocess.run(["git", "-C", R] + ["ls-files", "--others", "--", *s])\n',
+        "накоплением в переменной":
+            'def f():\n    cmd = ["git", "-C", R]\n    cmd += ["grep", "-n", "--full-name"]\n'
+            '    subprocess.run(cmd)\n',
+    }
+
+    def test_узда_видит_вызов_собранный_по_частям(self):
+        """Обе стороны: любая сборка argv без `-z` обязана ронять прогон, а с `-z` —
+        проходить, как бы её ни написали."""
+        for how, src in self.NUL_SHAPES.items():
+            with self.subTest(сборка=how):
+                self.assertNotEqual(self._nul_offenders(src), [],
+                                    "узда не увидела вызов, собранный по частям")
+                self.assertEqual(self._nul_offenders(src.replace('"-C"', '"-z", "-C"')), [],
+                                 "узда придирается к вызову, который `-z` просит")
 
     # Распознавание цитаты живёт здесь; всё остальное спрашивает у них.
     QUOTE_TRACKERS = ("quoted_lines", "_quoted_pass", "unquoted")
@@ -4679,29 +4860,105 @@ def report_sections(md):
                           and n.lineno not in placed]
         self.assertEqual(offenders, [], "свой разбор записей git log — зовите log_records()")
 
+    @staticmethod
+    def _bare_numbers(source: str) -> list[str]:
+        """Пороги без источника: имена присваиваний, в которых есть число, а над ними нет
+        ни слова о том, откуда оно взялось.
+
+        Число ищется В ЛЮБОМ выражении, а не только в готовой константе: `6 * 1000` —
+        естественная запись выведенного предела, а `A_MAX, B_MAX = 12, 34` — обычная
+        запись пары, заведённой разом. Пока правило смотрело только на
+        `ИМЯ = <константа>`, обе формы проходили мимо него — измерено.
+        """
+        lines = source.splitlines()
+        bare = []
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            names = [e.id for t in targets
+                     for e in (t.elts if isinstance(t, ast.Tuple) else [t])
+                     if isinstance(e, ast.Name)]
+            if not names or not all(n.isupper() for n in names):
+                continue
+            if node.value is None or not any(
+                    isinstance(n, ast.Constant) and isinstance(n.value, (int, float))
+                    and not isinstance(n.value, bool) for n in ast.walk(node.value)):
+                continue
+            # комментарий может стоять над группой констант, а не над каждой
+            i = node.lineno - 2
+            while i >= 0 and re.match(r"^[A-Z_][A-Z_0-9, ]*\s*[:=]", lines[i]):
+                i -= 1
+            if i < 0 or not lines[i].lstrip().startswith("#"):
+                bare += names
+        return bare
+
+    # Спрашивающие git по pathspec. Образец приходит из blocks.json и зовётся `spec` или
+    # `pattern`; всё прочее — ИМЯ файла, и имя обязано идти под `:(literal)`.
+    PATHSPEC_CALLS = ("git_files", "index_rows", "listed", "untracked_files")
+    PATTERN_NAMES = ("spec", "specs", "pattern", "patterns", "pathspec", "pathspecs")
+
+    @classmethod
+    def _name_as_pattern(cls, source: str) -> list[tuple[int, str]]:
+        """Где ИМЯ файла отдают git как образец.
+
+        `[id]` — класс символов: несуществующий `app/[i]/page.tsx` совпадает с живым
+        соседом `app/i/page.tsx`, и «файл есть» становится правдой без файла. Три места
+        спрашивали так (`file_sha`, узда, `--fixed-in`) — класс закрывается правилом.
+        """
+        offenders = []
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in cls.PATHSPEC_CALLS and node.args
+                    and isinstance(node.args[0], ast.List)):
+                continue
+            for el in node.args[0].elts:
+                text = ast.unparse(el)
+                if ":(literal)" in text or any(p in text for p in cls.PATTERN_NAMES):
+                    continue
+                offenders.append((node.lineno, text))
+        return offenders
+
+    def test_имя_файла_не_уходит_к_git_образцом(self):
+        """УЗДА КЛАССА «имя отдано как pathspec»."""
+        self.assertEqual(self._name_as_pattern(self.SOURCE), [],
+                         "имя файла отдано git образцом: зовите named_file() "
+                         "или ставьте префикс `:(literal)`")
+
+    def test_узда_видит_имя_отданное_образцом(self):
+        """Обе стороны: имя без `:(literal)` роняет прогон, образец из blocks.json — нет."""
+        self.assertNotEqual(self._name_as_pattern("git_files([path])\n"), [])
+        self.assertNotEqual(self._name_as_pattern('index_rows([f"{rel}"])\n'), [])
+        self.assertEqual(self._name_as_pattern('git_files([f":(literal){rel}"])\n'), [])
+        self.assertEqual(self._name_as_pattern("git_files([spec])\n"), [])
+        self.assertEqual(
+            self._name_as_pattern('git_files([e["pattern"] for e in exclusions])\n'), [])
+
     def test_каждое_число_в_коде_названо_и_объяснено(self):
         """УЗДА КЛАССА «порог без источника».
 
         Каждая константа-число обязана нести над собой комментарий о том, откуда она
         взялась: замер или ссылка. Правило ловит следующую добавленную так же, как эти.
         """
-        lines = self.SOURCE.splitlines()
-        bare = []
-        for node in ast.parse(self.SOURCE).body:
-            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
-                continue
-            if not isinstance(node.value.value, (int, float)) or isinstance(node.value.value, bool):
-                continue
-            name = node.targets[0].id if isinstance(node.targets[0], ast.Name) else ""
-            if not name.isupper():
-                continue
-            # комментарий может стоять над группой констант, а не над каждой
-            i = node.lineno - 2
-            while i >= 0 and re.match(r"^[A-Z_]+\s*=", lines[i]):
-                i -= 1
-            if i < 0 or not lines[i].lstrip().startswith("#"):
-                bare.append(name)
-        self.assertEqual(bare, [], "число без источника: припишите замер или ссылку")
+        self.assertEqual(self._bare_numbers(self.SOURCE), [],
+                         "число без источника: припишите замер или ссылку")
+
+    def test_узда_видит_порог_записанный_не_константой(self):
+        """Обе стороны правила на исходниках, которых в инструменте нет: выражение и пара
+        обязаны требовать источник так же, как готовое число, а объяснённое — проходить."""
+        for why, src in (("выражение", "FOO_LIMIT = 6 * 7\n"),
+                         ("пара", "BAR_MAX, BAZ_MAX = 12, 34\n"),
+                         ("объявление с типом", "QUX: int = 5\n")):
+            with self.subTest(форма=why):
+                self.assertNotEqual(self._bare_numbers(src), [],
+                                    "порог без источника прошёл мимо узды")
+                self.assertEqual(self._bare_numbers("# замер: столько-то\n" + src), [],
+                                 "узда не признаёт объяснённый порог")
+        self.assertEqual(self._bare_numbers('NAMES = ("critical", "high")\n'), [],
+                         "источник спрашивают у чисел, а не у словарей")
 
 
 

@@ -361,6 +361,16 @@ def all_files() -> set[str]:
     return listed(None)
 
 
+def named_file(rel: str) -> bool:
+    """Is this NAME a tracked file?
+
+    A name is not a pattern: `:(literal)` keeps a `[handle]` in the path a directory and
+    not a character class. Next.js routes — `app/[id]/page.tsx` — are the kit's stated
+    target, and without this a guard or a `--fixed-in` path that really exists is refused.
+    """
+    return bool(git_files([f":(literal){rel}"]))
+
+
 def file_sha(rel: str) -> str | None:
     """Fingerprint of a file's contents — the same one git computes, without extra dependencies.
 
@@ -1433,15 +1443,18 @@ def review_refs() -> list[tuple[str, int, str, str]]:
     ids = sorted({f.get("id") for f in findings() if f.get("id")})
     if not ids:
         return []
-    cmd = ["git", "-C", str(ROOT), "grep", "-n", "-I", "-w", "-F", "--full-name"]
+    # `-z`: git grep quotes a non-ASCII path (`"src/\320\274…"`) and separates fields with
+    # `:`, which a path may legitimately contain. With -z the record is
+    # path NUL line NUL text — raw, and unambiguous.
+    cmd = ["git", "-C", str(ROOT), "grep", "-z", "-n", "-I", "-w", "-F", "--full-name"]
     for fid in ids:
         cmd += ["-e", fid]
     cmd += ["--", ".", ":(exclude)docs/review/**"]
     out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
     hits = []
     for ln in out.splitlines():
-        path, _, rest = ln.partition(":")
-        num, _, text = rest.partition(":")
+        path, _, rest = ln.partition("\0")
+        num, _, text = rest.partition("\0")
         for fid in ids:
             if re.search(rf"(?<![\w-]){re.escape(fid)}(?![\w-])", text):
                 hits.append((path, int(num) if num.isdigit() else 0, fid, text.strip()))
@@ -2156,7 +2169,7 @@ def set_one_finding(args, rows: list[dict], fid: str) -> None:
     # check "the commit touches the finding's file" stops telling a fix made elsewhere from
     # a mark that belongs to another finding.
     for path in args.fixed_in or []:
-        if not git_files([path]):
+        if not named_file(path):
             die(f"--fixed-in {path}: no such file in the repository")
 
     # A rejection is a verdict, and it lives in two fields: the status says what is done
@@ -2440,7 +2453,7 @@ def rule_problem(rule: str) -> str | None:
     path = re.sub(r":\d+$", "", path).strip().rstrip("/")
     if not path:
         return "the guard is empty"
-    if not git_files([path]):
+    if not named_file(path):
         return (f"guard `{rule}`: no such file in the repository — a typo in the path or "
                 f"the guard was deleted; give the path to the test, the linter rule or the CI gate")
     return None
