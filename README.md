@@ -289,7 +289,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-435 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+438 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -467,7 +467,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 435 scenarios
+tests/                            tests of the tool and the skill format: 438 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO

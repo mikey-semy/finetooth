@@ -121,6 +121,10 @@ you see may have been fixed yesterday: a stale tree shows what is fixed as broke
 This mistake has already been made: a finding "hole in the neighboring service" was
 confirmed by execution on a copy a month behind — in `origin/master` there was no hole.
 
+**Except on a snapshot of the past:** when the block is reviewed at a fixed commit on purpose
+(a snapshot of the past, an archive, an experiment), do not compare with `origin` — that is
+the future, and it may already hold the fix.
+
 ## Coverage limits
 **Mandatory section, even if it is short.** What you deliberately did NOT read and why: a
 layer you did not reach; a check that could not be done without a live system; an

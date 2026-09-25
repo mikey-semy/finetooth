@@ -1255,6 +1255,24 @@ class ReviewToolTest(unittest.TestCase):
         self.assertIn("one script file", (refs / "verify.md").read_text(encoding="utf-8"))
         self.assertIn("одним файлом", (refs / "verify.ru.md").read_text(encoding="utf-8"))
 
+    def test_правило_свежести_не_сверяет_снимок_прошлого_с_origin(self):
+        """Правило свежести верно для живого ревью и неверно для ревью снимка прошлого: в
+        опыте с машиной времени охотник и проверяющий по нему прочли `origin/master` —
+        будущее, то есть саму починку, — и прогоны пришлось выбросить (see #27). Оговорка
+        стоит в шаблонах обеих ролей на обоих языках."""
+        refs = SKILL / "references"
+        said = {"": ("reviewed at a fixed commit on purpose", "do not compare with `origin`"),
+                ".ru": ("намеренно проверяется на закреплённом коммите",
+                        "с `origin` не сверяйся")}
+        for role in ("hunter", "verify"):
+            for lang, rules in said.items():
+                name = f"{role}{lang}.md"
+                # шаблон свёрстан по ширине: перенос строки внутри фразы — не пропуск
+                text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8"))
+                for rule in rules:
+                    with self.subTest(шаблон=name, правило=rule):
+                        self.assertIn(rule, text, f"{name}: оговорка о снимке прошлого снята")
+
     def test_шаблон_исполнителя_держит_правила_выпуска_и_расхода(self):
         """Оба правила выведены из первого прогона починки набора: он поднял версию сам
         (откатили — выпуск решает сопровождающий) и потратил бо́льшую часть 329 ходов на
@@ -4112,6 +4130,14 @@ class WriteBoundaryTest(unittest.TestCase):
         self.assertIn("finetooth-runs", runner)
         self.assertIn("finetooth-runs", promise)
         self.assertIn("claude -p", promise)
+        # Списки ролей — одобрение, а не ограничение (see #27): обещание, которое звало бы
+        # их песочницей, лгало бы. Оно называет и то, что ограничивает, — тем же именем,
+        # что скрипт.
+        flat = re.sub(r"\s+", " ", promise)
+        self.assertIn("pre-approvals, not limits", flat)
+        for said in ("--disallowedTools", "ROLE_DENY", "Read(//home/x/**)"):
+            self.assertIn(said, flat, f"SECURITY.md не называет {said}")
+            self.assertIn(said, runner, f"run-role.sh не называет {said}")
 
 
 class HandWrittenInputTest(unittest.TestCase):
@@ -4812,14 +4838,17 @@ class SpendTest(unittest.TestCase):
         self.assertIn("11 assistant messages", out.stdout)
 
     def _run_role(self, exit_code: int, truncated: bool = False, log_fails: bool = False,
-                  with_result: bool = True) -> tuple[subprocess.CompletedProcess, str]:
+                  with_result: bool = True,
+                  **extra_env: str) -> tuple[subprocess.CompletedProcess, str]:
         """run-role.sh с заглушкой вместо `claude`: настоящий клиент здесь не нужен,
         нужен его код возврата и поток, который он оставляет.
 
         Поток — тот же, что у целого прогона (`stream_text`): заглушка, которая мягче
         настоящего клиента, красит зелёным то, что в жизни красное. `truncated` — убитый
         прогон обрывает последнюю строку на середине; `with_result=False` — поток без
-        события `result` вовсе; `log_fails` — отказывает шаг отчёта.
+        события `result` вовсе; `log_fails` — отказывает шаг отчёта; `extra_env` —
+        переменные окружения скрипта. Заглушка записывает свои аргументы в `stub/args`,
+        каждый с NUL на конце (`_claude_args`).
         """
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -4836,6 +4865,7 @@ class SpendTest(unittest.TestCase):
         (stub_dir / "stream.jsonl").write_text(text, encoding="utf-8")
         stub = stub_dir / "claude"
         stub.write_text("#!/usr/bin/env bash\n"
+                        f"printf '%s\\0' \"$@\" > \"{stub_dir}/args\"\n"
                         f'cat "{stub_dir}/stream.jsonl"\n'
                         f"exit {exit_code}\n", encoding="utf-8")
         stub.chmod(0o755)
@@ -4850,7 +4880,7 @@ class SpendTest(unittest.TestCase):
             wrap.chmod(0o755)
             review = str(wrap)
         env = child_env(PATH=f"{stub_dir}:{os.environ['PATH']}",
-                        REVIEW=review, TMPDIR=str(self.s.root / "runs"))
+                        REVIEW=review, TMPDIR=str(self.s.root / "runs"), **extra_env)
         (self.s.root / "runs").mkdir()
         # Через `shell_gate`: отказы этого скрипта — предмет мутационной узды ворот на
         # оболочке, а она подменяет скрипт копией через окружение.
@@ -4859,6 +4889,35 @@ class SpendTest(unittest.TestCase):
             cwd=self.s.root, capture_output=True, text=True, env=env)
         journal = (self.s.root / "docs/review/journal.md")
         return out, journal.read_text(encoding="utf-8") if journal.exists() else ""
+
+    def _claude_args(self) -> list[str]:
+        """Аргументы, с которыми `run-role.sh` позвал заглушку `claude`."""
+        raw = (self.s.root / "stub" / "args").read_text(encoding="utf-8")
+        return raw.split("\0")[:-1]
+
+    def test_role_deny_передаётся_клиенту_как_disallowedTools(self):
+        """Списки ролей — `--allowedTools`, заранее одобренные инструменты поверх
+        разрешений оператора, а не ограничение: замер — прогон со списком без Bash всё
+        равно звал Bash (see #27). Ограничение — `--disallowedTools`, и `ROLE_DENY`
+        доходит до клиента ровно этим флагом и ровно своим значением, одним аргументом."""
+        deny = "Bash(git *),Read(//home/me/other-repo/**)"
+        out, _ = self._run_role(exit_code=0, ROLE_DENY=deny)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        args = self._claude_args()
+        self.assertEqual(args.count("--disallowedTools"), 1, args)
+        self.assertEqual(args[args.index("--disallowedTools") + 1], deny, args)
+        # Запрет — не замена одобренного списка: `--allowedTools` роли остаётся.
+        self.assertIn("--allowedTools", args)
+
+    def test_без_role_deny_запрета_нет(self):
+        """Обратная сторона: без переменной поведение прежнее — флага нет вовсе, а не
+        `--disallowedTools ""`, который клиент прочёл бы по-своему."""
+        out, _ = self._run_role(exit_code=0)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        args = self._claude_args()
+        self.assertTrue(args, "заглушка не записала аргументы")
+        self.assertNotIn("--disallowedTools", args)
+        self.assertIn("--allowedTools", args)
 
     def test_обрезанный_поток_не_роняет_запуск_роли(self):
         """Убитый прогон оставляет последнюю строку недописанной. Ответ агента читался
