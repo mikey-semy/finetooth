@@ -1033,6 +1033,17 @@ class ReviewToolTest(unittest.TestCase):
         self.assertLess(out.index("H1 "), out.index("H2 "))
         self.assertIn("the declared order already matches", out)
 
+    def test_риск_вне_словаря_это_отказ_а_не_трейсбек(self):
+        """`risk` пишут руками в blocks.json. Слово мимо словаря доходило до
+        `SEVERITIES.index` и выходило к человеку как ValueError."""
+        self._churn_history(risk_first="катастрофа")
+        out = self.s.run("order")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("risk", out.stderr)
+        self.assertIn("blocks.json", out.stderr)
+        self.assertIn("critical", out.stderr, "отказ обязан назвать словарь")
+
     # ------------------------------------------------------------- итог ревью
 
     def _reviewed_with_findings(self) -> None:
@@ -2366,6 +2377,40 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual([r["status"] for r in self._rows()], ["deferred", "deferred"])
 
+    def test_set_finding_на_нескольких_номерах_всё_или_ничего(self):
+        """Инвариант: перевод нескольких находок — целиком или никак.
+
+        Отказ на втором номере — обычное дело: опечатка в номере, `fixed` без коммита. Если
+        первую к этому моменту уже записали, команда сказала «нет», а реестр говорит «да»,
+        и расхождение видно только при чтении файла руками.
+        """
+        self._two_open()
+        for why, argv in (
+                ("номера нет в реестре", ("H1-001", "H1-999", "deferred", "--reason", "x")),
+                ("отказ на проверке поля", ("H1-001", "H1-002", "fixed"))):
+            with self.subTest(отказ=why):
+                before = self._rows()
+                out = self.s.run("set-finding", *argv)
+                self.assertNotEqual(out.returncode, 0, out.stdout + out.stderr)
+                self.assertEqual(self._rows(), before,
+                                 "часть находок уже переведена, а команда отказала")
+        # а та же команда без чужого номера переводит обе
+        out = self.s.run("set-finding", "H1-001", "H1-002", "deferred", "--reason", "ждёт H2")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertEqual([r["status"] for r in self._rows()], ["deferred", "deferred"])
+
+    def _two_open(self) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": f"дефект {i}", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n" for i in (1, 2)))
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+
 
 class LanguageTest(unittest.TestCase):
     """Язык ревью: английский по умолчанию, русский по полю `lang`; разбор отчётов
@@ -2407,21 +2452,45 @@ class LanguageTest(unittest.TestCase):
         Подстановки сверяются заодно: перевод с другим именем поля падает тем же
         образом, только уже в `format`.
         """
-        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
-        table = next(ast.literal_eval(n.value) for n in tree.body
-                     if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "MSG")
+        table = self._msg_tables(TOOL.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(table), ["en", "ru"], "языков стало больше — правило сверяет все")
+        self.assertEqual(self._msg_mismatch(table), [])
+
+    @staticmethod
+    def _msg_tables(source: str) -> dict:
+        """Таблицы сообщений инструмента, прочитанные из его исходника."""
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "MSG":
+                return ast.literal_eval(node.value)
+        raise AssertionError("в исходнике нет таблицы MSG — правило смотрит не туда")
+
+    @staticmethod
+    def _msg_mismatch(table: dict) -> list[str]:
+        """Ключи, которые есть не на всех языках, и ключи с разными подстановками."""
         langs = sorted(table)
-        self.assertEqual(langs, ["en", "ru"], "языков стало больше — правило сверяет все")
         first, *rest = langs
+        out = []
         for lang in rest:
-            self.assertEqual(sorted(set(table[first]) - set(table[lang])), [],
-                             f"строки есть в {first} и нет в {lang}")
-            self.assertEqual(sorted(set(table[lang]) - set(table[first])), [],
-                             f"строки есть в {lang} и нет в {first}")
+            out += [f"`{k}`: есть в {first}, нет в {lang}"
+                    for k in sorted(set(table[first]) - set(table[lang]))]
+            out += [f"`{k}`: есть в {lang}, нет в {first}"
+                    for k in sorted(set(table[lang]) - set(table[first]))]
         for key in table[first]:
-            fields = {lang: set(re.findall(r"\{(\w+)", table[lang][key])) for lang in langs}
-            self.assertEqual(len(set(map(frozenset, fields.values()))), 1,
-                             f"подстановки строки `{key}` расходятся по языкам: {fields}")
+            fields = {lang: frozenset(re.findall(r"\{(\w+)", table[lang].get(key, "")))
+                      for lang in langs if key in table[lang]}
+            if len(set(fields.values())) > 1:
+                out.append(f"`{key}`: подстановки расходятся по языкам: {dict(fields)}")
+        return out
+
+    def test_узда_видит_расхождение_таблиц_на_выдуманном_исходнике(self):
+        """Обе стороны правила на таблицах, которых в инструменте нет: сверенные проходят,
+        потерянный перевод и переименованная подстановка — нет."""
+        same = 'MSG = {"en": {"a": "{n} files"}, "ru": {"a": "{n} файлов"}}\n'
+        self.assertEqual(self._msg_mismatch(self._msg_tables(same)), [])
+        gone = 'MSG = {"en": {"a": "{n} files"}, "ru": {}}\n'
+        self.assertNotEqual(self._msg_mismatch(self._msg_tables(gone)), [])
+        renamed = 'MSG = {"en": {"a": "{n} files"}, "ru": {"a": "{count} файлов"}}\n'
+        self.assertNotEqual(self._msg_mismatch(self._msg_tables(renamed)), [])
 
     def test_у_каждого_шаблона_и_образца_есть_второй_язык(self):
         """Та же узда для файлов: шаблон роли или образец, переведённый наполовину,
@@ -3298,9 +3367,26 @@ class HandWrittenInputTest(unittest.TestCase):
         self.assertNotIn("{{FILES}}", out)
         self.assertNotIn("{{BLOCK_ID}}", out)
 
+    # Аргументы, при которых команда ДОХОДИТ ДО СВОЕГО ТЕЛА. Одного набора на всех не
+    # бывает: `review set-status H1 s.md` — это `argparse`, отказавший до начала команды,
+    # и правило ниже проверяло бы его отказ, а не поведение команды. Измерено: при общем
+    # наборе `H1 s.md` до тела доходили три команды из двадцати трёх.
+    ARGV = {
+        "init": (), "version": (), "setup": (), "status": (), "next": (),
+        "coverage": (), "prompt": ("H1",), "set-status": ("H1", "running"),
+        "import": ("H1",), "set-finding": ("H1-001", "open"), "hypotheses": ("H1",),
+        "restamp": ("H1",), "backfill": (), "inventory": (), "sizes": (),
+        "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
+        "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
+    }
+    # Отказ argparse — это не поведение команды: он печатается до её начала.
+    ARGPARSE_REFUSED = ("unrecognized arguments", "the following arguments are required",
+                        "invalid choice")
+
     def test_ни_одна_команда_не_роняет_трейсбек_на_битом_определении(self):
         """Узда класса: список подкоманд берётся у самого инструмента, так что новая
-        команда попадает под правило сама, без правки теста."""
+        команда попадает под правило сама — но вместе с аргументами, иначе она проверяет
+        не команду, а отказ разбора."""
         self._stand()
         self._add_block(id="H2", title="Платежи", paths=["src/one.ts"])
         helped = self.s.run("--help").stdout
@@ -3308,10 +3394,19 @@ class HandWrittenInputTest(unittest.TestCase):
         self.assertTrue(names, helped)
         commands = names.group(1).split(",")
         self.assertIn("check", commands)
+        self.assertEqual(sorted(set(self.ARGV) - set(commands)), [],
+                         "в таблице есть команда, которой у инструмента больше нет")
         for cmd in commands:
-            out = self.s.run(cmd, "H1", "s.md")
             with self.subTest(cmd=cmd):
+                self.assertIn(cmd, self.ARGV,
+                              "новая команда: впишите сюда аргументы, при которых она "
+                              "доходит до своего тела, — иначе правило проверяет отказ "
+                              "argparse, а не её саму")
+                out = self.s.run(cmd, *self.ARGV[cmd])
                 self.assertNotIn("Traceback", out.stderr, f"{cmd}: {out.stderr[-400:]}")
+                for said in self.ARGPARSE_REFUSED:
+                    self.assertNotIn(said, out.stderr,
+                                     f"{cmd}: команда не начиналась — поправьте ARGV")
 
 
 class IdempotenceTest(unittest.TestCase):
@@ -3384,6 +3479,87 @@ class IdempotenceTest(unittest.TestCase):
         self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8"),
                          before)
         self.assertIn("nothing to stamp", out.stdout)
+
+    def test_restamp_на_пропавшем_файле_отказ_а_не_отпечаток_пустоты(self):
+        """Файл под находкой исчез — «пересняли отпечаток» было бы неправдой: находку в
+        таком случае двигают (`set-finding`), и отказ обязан это сказать."""
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps(
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/one.ts", "claim": "дефект", "scenario": "с"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("import", "H1")
+        self.s.git("rm", "-q", "src/one.ts", check=True)
+        self.s.commit("файл унесли")
+        before = (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8")
+        out = self.s.run("restamp", "H1-001")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("set-finding", out.stderr, "отказ обязан говорить, что делать")
+        self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8"),
+                         before, "реестр остался прежним")
+
+    def test_next_называет_следующий_незакрытый_блок(self):
+        """`next` — то, чем следующая сессия узнаёт, с чего начать; своего теста у него
+        не было вовсе."""
+        out = self.s.run("next")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "H1")
+        self.s.run("set-status", "H1", "closed")
+        out = self.s.run("next")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "", "закрытых блоков `next` не называет")
+
+    def test_повторный_backfill_на_проставленном_состоянии_ничего_не_пишет(self):
+        """`backfill` перечислен в инвариантe об идемпотентности рядом с `init` и
+        `restamp`, а теста у него не было: каждый повторный прогон переписывал бы
+        state.json и дописывал строку в дневник, и ворота CI обычного вида —
+        «перегенерируй и потребуй чистое дерево» — краснели бы на верном состоянии."""
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps(
+            {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+             "file": "src/one.ts", "claim": "дефект", "scenario": "с"}, ensure_ascii=False) + "\n")
+        self.s.commit()
+        self.s.run("import", "H1")
+        self.s.run("set-status", "H1", "verified")
+        # состояние, оставленное версией набора без отпечатков
+        st_path = self.s.root / "docs/review/state.json"
+        st = json.loads(st_path.read_text(encoding="utf-8"))
+        st["blocks"]["H1"].pop("reviewed_sha")
+        st_path.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
+        first = self.s.run("backfill")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn("H1", first.stdout, "проставить было что")
+        before = self._state_text()
+        journal = (self.s.root / "docs/review/journal.md").read_text(encoding="utf-8")
+        time.sleep(1.1)                      # чтобы отличие было видно, если оно есть
+        again = self.s.run("backfill")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("nothing to stamp", again.stdout)
+        self.assertEqual(self._state_text(), before, "повторный прогон переписал состояние")
+        self.assertEqual((self.s.root / "docs/review/journal.md").read_text(encoding="utf-8"),
+                         journal, "повторный прогон дописал строку в дневник")
+
+    def test_импорт_держит_те_же_потолки_что_и_проверка(self):
+        """`import` пропускал заголовок длиннее потолка, а `check` его потом отвергал: строка
+        оказывалась в реестре, и каждые следующие ворота краснели на записи, которую
+        инструментом уже не поправить. Обе стороны: длинный отвергается, обычный проходит."""
+        src = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        row = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+               "file": "src/one.ts", "claim": "и" * 300, "scenario": "с"}
+        src.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.s.commit()
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("claim is 300 characters", out.stdout + out.stderr)
+        reg = self.s.root / "docs/review/findings.jsonl"
+        self.assertNotIn("и" * 300, reg.read_text(encoding="utf-8") if reg.exists() else "",
+                         "отвергнутая строка не должна попасть в реестр")
+
+        row["claim"] = "и" * 200
+        src.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        out = self.s.run("import", "H1")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertEqual(self.s.run("check").returncode, 0, "и проверка его принимает")
 
     def test_импорт_не_выдаёт_занятый_номер(self):
         """Находка, вставленная ВЫШЕ пронумерованных строк, получала уже занятый номер:
@@ -3557,6 +3733,35 @@ class ThresholdTest(unittest.TestCase):
         self.assertIn("95th percentile of this repository", out)
 
 
+STREAM_REPLY = "блок пройден"
+STREAM_TURNS = 42
+STREAM_COST = 3.41
+
+
+def stream_text(with_result: bool = True, subtype: str = "success") -> str:
+    """Поток `claude -p --output-format stream-json --verbose` целого прогона.
+
+    ОДНО место на весь набор: и заглушки `axes.py`, и заглушка самого `claude` для
+    `run-role.sh` собираются отсюда. Пока заглушка клиента не отдавала события `result`,
+    все шесть тестов `run-role.sh` шли по ветке «события нет», и тест, названный
+    «успешный прогон записан обычной строкой», принимал за неё строку
+    `NO RESULT EVENT … spend: ? min, ? turns … cost estimate unknown`: вида, который
+    оператор читает как «блок пройден», не производил ни один тест.
+    """
+    ev = lambda o: json.dumps(o, ensure_ascii=False)
+    usage = {"input_tokens": 1, "cache_creation_input_tokens": 100,
+             "cache_read_input_tokens": 900, "output_tokens": 5}
+    lines = [ev({"type": "assistant", "message": {
+        "id": "m1", "model": "test", "usage": usage,
+        "content": [{"type": "tool_use", "id": "t1", "name": "Read",
+                     "input": {"file_path": "/x/a.ts"}}]}})]
+    if with_result:
+        lines.append(ev({"type": "result", "subtype": subtype, "num_turns": STREAM_TURNS,
+                         "duration_ms": 600000, "total_cost_usd": STREAM_COST,
+                         "usage": {"output_tokens": 21000}, "result": STREAM_REPLY}))
+    return "\n".join(lines) + "\n"
+
+
 class SpendTest(unittest.TestCase):
     """Замер расхода — то, из чего выведены потолки ходов. Обрезанный прогон не имеет
     права выглядеть в дневнике как обычный завершённый."""
@@ -3567,18 +3772,7 @@ class SpendTest(unittest.TestCase):
 
     def _stream(self, with_result: bool = True, truncated: bool = False,
                 subtype: str = "success") -> Path:
-        ev = lambda o: json.dumps(o, ensure_ascii=False)
-        usage = {"input_tokens": 1, "cache_creation_input_tokens": 100,
-                 "cache_read_input_tokens": 900, "output_tokens": 5}
-        lines = [ev({"type": "assistant", "message": {
-            "id": "m1", "model": "test", "usage": usage,
-            "content": [{"type": "tool_use", "id": "t1", "name": "Read",
-                         "input": {"file_path": "/x/a.ts"}}]}})]
-        if with_result:
-            lines.append(ev({"type": "result", "subtype": subtype, "num_turns": 42,
-                             "duration_ms": 600000, "total_cost_usd": 3.41,
-                             "usage": {"output_tokens": 21000}, "result": "готово"}))
-        text = "\n".join(lines) + "\n"
+        text = stream_text(with_result=with_result, subtype=subtype)
         if truncated:
             text = text[:-20]
         p = self.s.root / "stream.jsonl"
@@ -3685,11 +3879,16 @@ class SpendTest(unittest.TestCase):
         self.assertIn("PARTIAL RESULT", out.stdout)
         self.assertIn("11 assistant messages", out.stdout)
 
-    def _run_role(self, exit_code: int, truncated: bool = False,
-                  log_fails: bool = False) -> tuple[subprocess.CompletedProcess, str]:
+    def _run_role(self, exit_code: int, truncated: bool = False, log_fails: bool = False,
+                  with_result: bool = True) -> tuple[subprocess.CompletedProcess, str]:
         """run-role.sh с заглушкой вместо `claude`: настоящий клиент здесь не нужен,
-        нужен его код возврата и поток, который он оставляет. `truncated` — убитый прогон
-        обрывает последнюю строку потока на середине; `log_fails` — отказывает шаг отчёта."""
+        нужен его код возврата и поток, который он оставляет.
+
+        Поток — тот же, что у целого прогона (`stream_text`): заглушка, которая мягче
+        настоящего клиента, красит зелёным то, что в жизни красное. `truncated` — убитый
+        прогон обрывает последнюю строку на середине; `with_result=False` — поток без
+        события `result` вовсе; `log_fails` — отказывает шаг отчёта.
+        """
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
@@ -3697,14 +3896,16 @@ class SpendTest(unittest.TestCase):
         self.s.run("init")
         stub_dir = self.s.root / "stub"
         stub_dir.mkdir()
+        # Поток лежит рядом с заглушкой файлом: так в нём переживают без потерь и
+        # кавычки, и кириллица ответа агента.
+        text = stream_text(with_result=with_result)
+        if truncated:
+            text = text[:-20]
+        (stub_dir / "stream.jsonl").write_text(text, encoding="utf-8")
         stub = stub_dir / "claude"
-        stub.write_text(
-            "#!/usr/bin/env bash\n"
-            'printf \'%s\\n\' \'{"type":"assistant","message":{"id":"m1","model":"test",'
-            '"usage":{"input_tokens":1,"cache_creation_input_tokens":0,'
-            '"cache_read_input_tokens":0,"output_tokens":1},"content":[]}}\'\n'
-            + ('printf \'%s\' \'{"type":"assis\'\n' if truncated else "")
-            + f"exit {exit_code}\n", encoding="utf-8")
+        stub.write_text("#!/usr/bin/env bash\n"
+                        f'cat "{stub_dir}/stream.jsonl"\n'
+                        f"exit {exit_code}\n", encoding="utf-8")
         stub.chmod(0o755)
         review = f"{sys.executable} {TOOL}"
         if log_fails:
@@ -3745,21 +3946,24 @@ class SpendTest(unittest.TestCase):
         out, journal = self._run_role(exit_code=0, log_fails=True)
         self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
         self.assertIn("journal write failed", out.stderr)
-        self.assertIn("no agent reply in the stream", out.stdout)
+        self.assertIn(STREAM_REPLY, out.stdout, "ответ агента печатается и при потерянной записи")
 
     def test_ответ_агента_печатается_из_целого_потока(self):
-        """Прямая сторона: на целом потоке ответ агента по-прежнему виден оператору."""
+        """Прямая сторона: на целом потоке ответ агента доходит до оператора — через сам
+        `run-role.sh`, а не через `axes.py` на файле, написанном руками."""
         out, _ = self._run_role(exit_code=0)
-        self.assertIn("no agent reply in the stream", out.stdout, out.stdout)
-        p = self.s.root / "reply.jsonl"
-        p.write_text(json.dumps({"type": "result", "subtype": "success", "num_turns": 1,
-                                 "duration_ms": 1, "total_cost_usd": 0.1,
-                                 "usage": {"output_tokens": 1}, "result": "блок пройден"},
-                                ensure_ascii=False) + "\n", encoding="utf-8")
-        got = self._axes(p, "--reply")
-        self.assertEqual(got.returncode, 0, got.stderr)
-        self.assertIn("--- agent reply ---", got.stdout)
-        self.assertIn("блок пройден", got.stdout)
+        self.assertIn("--- agent reply ---", out.stdout, out.stdout)
+        self.assertIn(STREAM_REPLY, out.stdout, out.stdout)
+        self.assertNotIn("no agent reply in the stream", out.stdout)
+
+    def test_поток_без_события_result_виден_в_дневнике_как_несостоявшийся_замер(self):
+        """Обратная сторона: клиент, ушедший без события `result`, обязан оставить в
+        дневнике слова о том, что замера нет, — даже когда код возврата нулевой."""
+        out, journal = self._run_role(exit_code=0, with_result=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("NO RESULT EVENT", journal)
+        self.assertIn("? turns", journal)
+        self.assertIn("no agent reply in the stream", out.stdout)
 
     def test_упавший_прогон_записан_в_дневник_как_упавший(self):
         """Дневник — единственная память следующей сессии; обрезанный прогон был записан
@@ -3786,10 +3990,18 @@ class SpendTest(unittest.TestCase):
         self.assertEqual(left, [], "нулевой файл промпта остался в TMPDIR")
 
     def test_успешный_прогон_записан_обычной_строкой(self):
+        """Строка целого прогона — та, которую оператор читает как «блок пройден»: с
+        ходами, временем и ценой. Пока заглушка клиента не отдавала события `result`, под
+        этим именем проверялась строка `NO RESULT EVENT … ? turns … cost unknown`."""
         out, journal = self._run_role(exit_code=0)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("hunter — ", journal)
         self.assertNotIn("RUN FAILED", journal)
+        self.assertNotIn("NO RESULT EVENT", journal)
+        self.assertNotIn("RUN CUT OFF", journal)
+        self.assertIn(f"{STREAM_TURNS} turns", journal)
+        self.assertIn(f"cost estimate ${STREAM_COST:.2f}", journal)
+        self.assertNotIn("? turns", journal)
 
 
 class GuardGrepTest(unittest.TestCase):
@@ -3802,11 +4014,28 @@ class GuardGrepTest(unittest.TestCase):
         self.pkg = self.dir / "internal" / "billing"
         self.pkg.mkdir(parents=True)
 
-    def _run(self, *paths: str) -> subprocess.CompletedProcess:
+    def _run(self, *paths: str, extra: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["bash", str(SKILL / "assets" / "guard-grep.sh"), "--pattern", r"\.Publish\(",
-             "--marker", "outbox-allowed:", "--", *paths],
+             "--marker", "outbox-allowed:", *extra, "--", *paths],
             capture_output=True, text=True, env=child_env())
+
+    def test_исключение_снимает_попадание_а_остальные_оставляет(self):
+        """`--exclude` — второй способ не быть нарушением: вызов, который И ТАК идёт
+        через разрешённую обёртку, нарушением не считается. Обе стороны: исключённый
+        вызов не назван, все прочие названы — иначе ключ, потерявший своё значение, тихо
+        делает ворота зелёными на всём подряд."""
+        (self.pkg / "a.go").write_text(
+            "package billing\noutbox.Publish(1)\nbroker.Publish(2)\n", encoding="utf-8")
+        strict = self._run(str(self.pkg))
+        self.assertEqual(strict.returncode, 1, strict.stdout)
+        self.assertIn("a.go:2", strict.stdout, "без исключения назван и обёрнутый вызов")
+        self.assertIn("a.go:3", strict.stdout)
+
+        out = self._run(str(self.pkg), extra=("--exclude", r"outbox\.Publish\("))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertNotIn("a.go:2", out.stdout, "исключённый вызов назван нарушением")
+        self.assertIn("a.go:3", out.stdout, "исключение освободило чужой вызов")
 
     def test_один_маркер_освобождает_один_вызов(self):
         """Ровно тот дефект, ради замены которого скрипт и написан: `grep -B` склеивал
@@ -4500,20 +4729,35 @@ class GateMutationTest(unittest.TestCase):
         line = self.lines[gate.lineno - 1].replace(gate.lst, other, 1)
         return "\n".join(self.lines[:gate.lineno - 1] + [line] + self.lines[gate.lineno:])
 
+    @staticmethod
+    def _run_on_copy(source: str | None, *names: str) -> subprocess.CompletedProcess:
+        """Прогоняет названные тесты на КОПИИ СКИЛЛА, где инструмент заменён на `source`.
+
+        Копируется скилл целиком, а не один файл: инструмент берёт у себя под боком
+        `references/` и `assets/`, и на копии одного файла краснели бы тесты, которым
+        нужны шаблоны, — «тест покраснел» значило бы тогда «копия неполная», а не
+        «ворота держит тест». Узда, зелёная по неверной причине, — ровно тот дефект,
+        который этот блок и ищет.
+        """
+        with tempfile.TemporaryDirectory(prefix="finetooth-mutant-") as d:
+            skill = Path(d, SKILL.name)
+            shutil.copytree(SKILL, skill, ignore=shutil.ignore_patterns("__pycache__"))
+            tool = skill / "scripts" / "review.py"
+            if source is not None:
+                tool.write_text(source, encoding="utf-8")
+            argv = [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests")]
+            for name in names:
+                argv += ["-k", name]
+            return subprocess.run(argv, cwd=KIT, capture_output=True, text=True,
+                                  env=child_env(FINETOOTH_TOOL=str(tool)))
+
     def _goes_red(self, gate: Gate, mutant: str) -> str:
         """Прогоняет названный рядом с воротами тест на мутанте. Возвращает пустую строку,
         если тест покраснел (так и надо), и жалобу, если прогон остался зелёным."""
         name = self.registered.get(gate.key)
         if name is None:
             return f"ворота не записаны в реестр: {gate.key}"
-        with tempfile.TemporaryDirectory(prefix="finetooth-mutant-") as d:
-            tool = Path(d, "review.py")
-            tool.write_text(mutant, encoding="utf-8")
-            out = subprocess.run(
-                [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests"),
-                 "-k", name],
-                cwd=KIT, capture_output=True, text=True,
-                env=child_env(FINETOOTH_TOOL=str(tool)))
+        out = self._run_on_copy(mutant, name)
         if "Ran 1 test" not in out.stderr:
             return (f"по имени `{name}` запустился не один тест, а "
                     f"{out.stderr.strip().splitlines()[-3:]}")
@@ -4522,6 +4766,20 @@ class GateMutationTest(unittest.TestCase):
         return (f"тест `{name}` зелёный на снятых воротах — он их не держит; "
                 f"напишите тест, который краснеет, или укажите в реестре тот, который "
                 f"краснеет")
+
+    def test_на_целой_копии_все_названные_тесты_зелены(self):
+        """Обратная сторона мутационной узды: сама копия ничего не ломает.
+
+        Без этого «тест покраснел» доказывает не то, что он держит ворота, а только то,
+        что он покраснел: копия, где инструмент лежит без своих `references/`, роняет
+        каждый тест, которому нужен шаблон, — и узда считает это убийством мутанта.
+        """
+        names = sorted({name for _, name in GateRegistryTest.GATES})
+        out = self._run_on_copy(None, *names)
+        self.assertEqual(out.returncode, 0,
+                         "на копии без мутаций названные тесты обязаны быть зелёными:\n"
+                         + out.stderr[-2000:])
+        self.assertIn(f"Ran {len(names)} test", out.stderr, out.stderr[-500:])
 
     def _all(self, mutate) -> None:
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
@@ -4838,16 +5096,13 @@ def report_sections(md):
                 self.assertEqual(self._quote_offenders(src)[1], [],
                                  "узда требует трекер там, где разметки нет")
 
-    def test_записи_коммитов_разбираются_одним_местом(self):
-        """УЗДА КЛАССА «поток `git log -z` разобран своими руками».
+    @classmethod
+    def _log_mark_offenders(cls, source: str) -> list[tuple[str, int]]:
+        """Кто читает маркер записей `git log` сам, мимо `log_records`.
 
-        Ловушка не видна с места вызова: git завершает строку `--format` своим переводом
-        строки, и `-z` оставляет его приклеенным к ПЕРВОМУ пути коммита. Два разборщика
-        знали об этом порознь, и тот, что не знал, считал файл под двумя именами.
-        Разбор живёт в `log_records`, и сверять токен с маркером больше негде.
+        Маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно.
         """
-        tree = ast.parse(self.SOURCE)
-        # маркер разрешено СТАВИТЬ в `--format=`, но не читать обратно
+        tree = ast.parse(source)
         placed = {n.lineno for n in ast.walk(tree)
                   if isinstance(n, ast.JoinedStr) and "--format=" in "".join(
                       v.value for v in n.values if isinstance(v, ast.Constant))}
@@ -4858,7 +5113,33 @@ def report_sections(md):
             offenders += [(fn.name, n.lineno) for n in ast.walk(fn)
                           if isinstance(n, ast.Name) and n.id == "LOG_MARK"
                           and n.lineno not in placed]
-        self.assertEqual(offenders, [], "свой разбор записей git log — зовите log_records()")
+        return offenders
+
+    def test_записи_коммитов_разбираются_одним_местом(self):
+        """УЗДА КЛАССА «поток `git log -z` разобран своими руками».
+
+        Ловушка не видна с места вызова: git завершает строку `--format` своим переводом
+        строки, и `-z` оставляет его приклеенным к ПЕРВОМУ пути коммита. Два разборщика
+        знали об этом порознь, и тот, что не знал, считал файл под двумя именами.
+        Разбор живёт в `log_records`, и сверять токен с маркером больше негде.
+        """
+        self.assertEqual(self._log_mark_offenders(self.SOURCE), [],
+                         "свой разбор записей git log — зовите log_records()")
+
+    def test_узда_видит_свой_разбор_записей_которого_ещё_нет(self):
+        """Обе стороны на исходниках, которых в инструменте нет: свой разбор ловится,
+        а постановка маркера в `--format=` — нет."""
+        own = ("def churn(out):\n"
+               "    for rec in out.split(LOG_MARK):\n"
+               "        yield rec\n")
+        self.assertNotEqual(self._log_mark_offenders(own), [],
+                            "узда не увидела своего разбора")
+        placing = ("def log_records(cmd):\n"
+                   "    return run(cmd)\n\n"
+                   "def churn(paths):\n"
+                   '    return log_records(["git", "log", f"--format={LOG_MARK}%H"])\n')
+        self.assertEqual(self._log_mark_offenders(placing), [],
+                         "узда придирается к постановке маркера")
 
     @staticmethod
     def _bare_numbers(source: str) -> list[str]:
@@ -4895,6 +5176,78 @@ def report_sections(md):
             if i < 0 or not lines[i].lstrip().startswith("#"):
                 bare += names
         return bare
+
+    # УЗДА КЛАССА «узда, написанная под одну форму записи».
+    #
+    # Правило по исходнику видит ровно то, что уже написано, и три узды подряд пропустили
+    # правдоподобную форму, которой в инструменте нет: git-вызов, собранный из частей;
+    # порог, записанный выражением; ворота, написанные списком. Поэтому правило обязано
+    # (1) жить в отдельной функции, а не прямо в тесте — иначе его нечем покормить, — и
+    # (2) быть прогнанным на ВЫДУМАННОМ исходнике: только так видно, что оно замечает
+    # форму, которой ещё никто не писал.
+    SOURCE_MARKS = ("SOURCE", "TOOL.read_text", "__file__")
+
+    @classmethod
+    def _rules_without_samples(cls, source: str) -> tuple[list[str], list[str]]:
+        """(правила, написанные прямо в тесте; правила, прогнанные только на исходнике)."""
+        tree = ast.parse(source)
+        reads_tool = {fn.name for fn in ast.walk(tree)
+                      if isinstance(fn, ast.FunctionDef) and "TOOL.read_text" in ast.unparse(fn)}
+        inline, over_source, over_invented = [], set(), set()
+        for fn in ast.walk(tree):
+            if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")):
+                continue
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in ("parse", "walk") and node.args
+                        and any(m in ast.unparse(node.args[0]) for m in cls.SOURCE_MARKS)):
+                    inline.append(fn.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                    else getattr(node.func, "id", ""))
+            if not name.startswith("_"):
+                continue
+            args = " ".join(ast.unparse(a) for a in node.args)
+            if any(m in args for m in cls.SOURCE_MARKS) or (not node.args and name in reads_tool):
+                over_source.add(name)
+            elif node.args:
+                over_invented.add(name)
+        return sorted(set(inline)), sorted(over_source - over_invented)
+
+    def test_у_каждого_правила_по_исходнику_есть_выдуманный_образец(self):
+        """УЗДА КЛАССА «узда, написанная под одну форму записи»."""
+        inline, lonely = self._rules_without_samples(Path(__file__).read_text(encoding="utf-8"))
+        self.assertEqual(
+            inline, [],
+            "правило по исходнику написано прямо в тесте: вынесите его в функцию, иначе "
+            "его нечем покормить, кроме уже написанного кода")
+        self.assertEqual(
+            lonely, [],
+            "правило прогнано только на исходнике инструмента: добавьте тест, который "
+            "кормит его ВЫДУМАННЫМ исходником — обе стороны, нарушение и невиновный")
+
+    # Обе стороны самой узды, на модулях, которых в наборе нет.
+    RULE_SHAPES = {
+        "правило прямо в тесте": (
+            "class R:\n    def test_x(self):\n"
+            "        for n in ast.walk(ast.parse(self.SOURCE)):\n            pass\n", 0),
+        "правило без выдуманного образца": (
+            "class R:\n    def test_x(self):\n"
+            "        self.assertEqual(_new_rule(self.SOURCE), [])\n", 1),
+    }
+
+    def test_узда_видит_правило_которое_никто_не_кормил(self):
+        for why, (src, half) in self.RULE_SHAPES.items():
+            with self.subTest(правило=why):
+                self.assertNotEqual(self._rules_without_samples(src)[half], [],
+                                    "узда не увидела правило по виду")
+        good = (self.RULE_SHAPES["правило без выдуманного образца"][0]
+                + '    def test_y(self):\n'
+                  '        self.assertNotEqual(_new_rule("def f(): pass"), [])\n')
+        self.assertEqual(self._rules_without_samples(good), ([], []),
+                         "узда придирается к правилу, у которого образец есть")
 
     # Спрашивающие git по pathspec. Образец приходит из blocks.json и зовётся `spec` или
     # `pattern`; всё прочее — ИМЯ файла, и имя обязано идти под `:(literal)`.
