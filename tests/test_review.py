@@ -2167,6 +2167,30 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertIn("**backend**", out.stdout)
         self.assertNotIn("{{", out.stdout.split("````diff")[0], "все подстановки заполнены")
 
+    def test_ревьюер_правок_знает_объём_диффа_и_про_scope(self):
+        """Бюджет стоит в самом задании, а не в голове ведущей сессии.
+
+        Дифф первого круга блока об инструменте был 193 КБ; правило говорило «читай
+        целиком» без условия, объём не назывался нигде, а `--scope` не упоминался ни в
+        одном из двух шаблонов. Агент читает сколько влезло и отчитывается за целое.
+        """
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        base = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.s.write("src/one.ts", "a\n" + "изменено\n" * 300)
+        self.s.commit("правка")
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "fixreview", "--diff", f"{base}...HEAD")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        head = out.stdout.split("````diff")[0]
+        self.assertRegex(head, r"Дифф ниже: \d+ КБ, \d+ строк")
+        self.assertIn("--scope", head, "выход из положения назван там же, где объём")
+        hunter = self.s.run("prompt", "H1", "--role", "hunter").stdout
+        self.assertNotIn("Дифф ниже", hunter, "замер диффа не протекает в другие роли")
+        self.assertNotIn("{{", hunter, "и не оставляет незаполненной подстановки")
+
     def test_закрытие_с_починками_требует_ревью_правок(self):
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
@@ -4743,6 +4767,19 @@ class BilingualAssetTest(unittest.TestCase):
                     self.assertIn("{{CLI}}", text,
                                   f"{path.name} не берёт команду проекта ниоткуда")
 
+    def test_таблица_сообщений_одинакова_на_обоих_языках(self):
+        """`T()` падает KeyError во время работы, а не при импорте: строка, заведённая на
+        одном языке, роняет прогон роли у того, кто ведёт ревью на другом."""
+        tree = ast.parse(TOOL.read_text(encoding="utf-8"))
+        msg = next(n.value for n in ast.walk(tree)
+                   if isinstance(n, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == "MSG" for t in n.targets))
+        keys = {lang.value: {k.value for k in table.keys}
+                for lang, table in zip(msg.keys, msg.values)}
+        self.assertEqual(sorted(keys), ["en", "ru"])
+        self.assertEqual(sorted(keys["en"] - keys["ru"]), [], "ключ есть только в en")
+        self.assertEqual(sorted(keys["ru"] - keys["en"]), [], "ключ есть только в ru")
+
     def test_образцы_целей_сборки_команду_называть_обязаны(self):
         """Обратная сторона правила: снипеты целей и есть эти команды."""
         self.assertRegex((SKILL / "assets" / "makefile-snippet.mk").read_text(encoding="utf-8"),
@@ -4877,6 +4914,56 @@ class DocumentedSurfaceTest(unittest.TestCase):
                        "--round", "2").stdout
         self.assertIn("H1-demo.fix-2.md", review.split("````diff")[0],
                       "ревьюер правок круга 2 читает отчёт исполнителя того же круга")
+
+
+class CliContractTest(unittest.TestCase):
+    """Значение поля `cli` подставляется в КАЖДУЮ подсказку вместе с флагами.
+
+    `SKILL.md` предлагал в качестве примера `make review`, а make читает `--role` и
+    `--reason` своими опциями и останавливается: подсказка `make review prompt H1 --role
+    verify` не работает, и обобщённой цели `review` в образце целей нет — а `npm run
+    review --` работает и в образце определён.
+    """
+
+    def test_документация_не_предлагает_make_как_значение_cli(self):
+        for name, path in (("SKILL.md", SKILL / "SKILL.md"), ("review.py", TOOL)):
+            with self.subTest(file=name):
+                self.assertNotRegex(
+                    path.read_text(encoding="utf-8"), r"`make review`",
+                    f"{name} предлагает как `cli` команду, которая не донесёт флаг")
+        self.assertIn("cli", (SKILL / "assets" / "makefile-snippet.mk").read_text(encoding="utf-8"),
+                      "образец целей обязан сказать, почему make не годится в `cli`")
+
+    def test_предложенная_форма_cli_определена_образцом_и_доносит_флаги(self):
+        """Обратная сторона: то, что документация называет, обязано существовать."""
+        scripts = json.loads((SKILL / "assets" / "package-json-snippet.json")
+                             .read_text(encoding="utf-8"))["scripts"]
+        self.assertIn("review", scripts, "обобщённая цель обязана быть в образце")
+        self.assertIn("npm run review --", (SKILL / "SKILL.md").read_text(encoding="utf-8"))
+        s = Stand()
+        self.addCleanup(s.cleanup)
+        s.write("src/one.ts", "a\n")
+        s.blocks(paths=["src/one.ts"])
+        bj = s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["cli"] = "npm run review --"
+        bj.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        s.write("lib/orphan.ts", "b\n")
+        s.commit()
+        s.run("init")
+        out = s.run("coverage")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("npm run review -- status", out.stdout,
+                      "подсказка собирается из `cli` целиком, вместе с подкомандой")
+        s.run("coverage")
+        s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "rejected",
+            "file": "src/one.ts", "claim": "дефекта нет"}, ensure_ascii=False) + "\n")
+        s.run("import", "H1")
+        s.run("findings")
+        self.assertIn("npm run review -- set-finding H1-001 rejected --reason",
+                      s.run("check").stdout,
+                      "отказ обязан донести до пользователя и флаг, а не только подкоманду")
 
 
 class DeferredIsAnAcceptedRiskTest(unittest.TestCase):

@@ -27,8 +27,14 @@ python3 <path-to-skill>/scripts/review.py version   # which version of the kit t
 ```
 
 Below it is called `review`. If `docs/review/blocks.json` has a `cli` field, the project calls
-the tool its own way (`npm run review --`, `make review`) — use that. Every refusal from the
-tool names the command that fixes it: read the refusal, do not guess.
+the tool its own way — use that. Every hint and every refusal is assembled from it
+(`<cli> coverage`, `<cli> restamp H1`), so the value has to be a command that takes the
+subcommand and its flags after it: `npm run review --`, a shell wrapper of the project's
+own. `make` is not one of them — it reads `--role` as its own option — so a project on
+`make` leaves `cli` unset and gets hints with the real path to the tool
+([assets/makefile-snippet.mk](assets/makefile-snippet.mk) has the targets for the everyday
+commands). Every refusal from the tool names the command that fixes it: read the refusal,
+do not guess.
 
 ## Getting started
 

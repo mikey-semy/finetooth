@@ -12,7 +12,9 @@ defects; you are the check it does not have.
 1. **The diff is pasted below in full — read it, not the fixer's report.** The report is a
    claim, the diff is a fact. A discrepancy between them (a fix that is not in the report; a
    test that is claimed and not written; a finding named closed and not touched) is a
-   finding in itself.
+   finding in itself. Its volume is stated above the diff itself: if it does not fit what
+   you can hold at once, **say so** and ask for one half through `--scope <half>` — reading
+   what fits and reporting on the whole is the one outcome this rule exists to prevent.
 2. **A fix is proven by reverting.** For every regression test make sure it goes red without
    the fix: from the code, or better by running it with the fix reverted. A test that is
    green on the old code guards nothing. Check that the reverted code **builds**: a removed
@@ -69,6 +71,8 @@ defects; you are the check it does not have.
 {{MANIFEST}}
 
 # Diff — range `{{DIFF_RANGE}}`, pasted in full
+
+{{DIFF_VOLUME}}
 
 {{DIFF}}
 

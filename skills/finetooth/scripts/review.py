@@ -67,7 +67,10 @@ def default_cli() -> str:
     written in by the installer, and a copy installed by hand advised a command that did
     not exist. Now the path is known on its own: inside the project — relative, in the
     home directory — via `~`, otherwise absolute. A project that calls the tool its own
-    way (`npm run review --`, `make review`) writes that in the `cli` field of `blocks.json`.
+    way writes that in the `cli` field of `blocks.json` — and it has to be a command that
+    takes the subcommand and its flags after it (`npm run review --`, a shell wrapper).
+    `make` is not one: it reads `--role` as its own option, so a project on `make` keeps
+    the targets for the everyday commands and leaves `cli` unset.
     """
     here = Path(__file__).resolve()
     for base, prefix in ((ROOT, ""), (Path.home(), "~/")):
@@ -191,6 +194,7 @@ MSG = {
   "files_measured": "Block files ({n}) — the block's area; proof is the manifest's artifacts",
   "files_read": "Block files ({n}) — read all",
   "scope_line": " Your half of the diff: **{scope}** — read the rest for context, file findings for your half.",
+  "diff_vol": "The diff below: {kb} KB, {lines} lines. Order of magnitude: ~{k}k tokens just to read it, before any reasoning or tool calls. If that does not fit what you can hold at once, do not read half of it and report on the whole: say so in the report and take one half through `--scope <half>` — the lead runs a second reviewer on the other, and the two reports get names of their own.",
   "no_open_findings": "(no open findings for this block — ask the lead session why the fixer was started)",
   "rec_none": "(nothing is recorded against this block yet)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(recorded {date})_",
@@ -242,6 +246,7 @@ MSG = {
   "files_measured": "Файлы блока ({n} шт.) — область блока; доказательство — артефакты манифеста",
   "files_read": "Файлы блока ({n} шт.) — прочитать все",
   "scope_line": " Твоя половина диффа: **{scope}** — остальное читай для контекста, находки оформляй по своей половине.",
+  "diff_vol": "Дифф ниже: {kb} КБ, {lines} строк. Порядок величины: ~{k}k токенов только на чтение, до рассуждений и вызовов инструментов. Если это не помещается в то, что ты держишь за раз, — не читай половину, отчитываясь за целое: скажи об этом в отчёте и возьми одну половину через `--scope <половина>`; ведущая сессия запустит второго ревьюера на другую, и у отчётов будут свои имена.",
   "no_open_findings": "(открытых находок по блоку нет — уточни у ведущей сессии, зачем запущен фиксер)",
   "rec_none": "(за блоком пока ничего не записано)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(записана {date})_",
@@ -1756,6 +1761,21 @@ def diff_text(rng: str) -> str:
     return f"{stat.stdout}\n````diff\n{full.stdout}\n````"
 
 
+def diff_volume(diff: str) -> str:
+    """How much the fix reviewer is asked to read — the measure the hunter already gets.
+
+    The budget belongs in the assignment, not in the lead session's head. The fix reviewer
+    was handed a diff of any size with the rule "read it in full" and no condition: the
+    first round of the kit's own tool block was 193 KB, and nothing in the prompt said so
+    or named the way out. `--scope` is the way out, and it has to stand where the volume
+    does. The token estimate is the same rough one as for the file list: about four
+    characters per token is common knowledge and more honest here than an exact count,
+    because every model has its own tokenizer.
+    """
+    return T("diff_vol", kb=max(1, len(diff.encode("utf-8")) // 1024),
+             lines=diff.count("\n"), k=max(1, len(diff) // 4000))
+
+
 PLACEHOLDER = re.compile(r"\{\{[A-Z_]+\}\}")
 
 
@@ -1792,6 +1812,9 @@ def cmd_prompt(args) -> int:
     files = sorted(git_files(b.get("paths", [])) - excluded)
     refs = sorted(git_files(b.get("ref_paths", [])) - excluded - set(files))
     report = report_path(b, args.role, args.round, args.scope)
+    # Taken once: the volume line and the diff itself talk about the same text, and a
+    # second `git diff` of a 193 KB range would only risk them disagreeing.
+    diff = diff_text(args.diff) if args.role == "fixreview" else ""
 
     body = template.read_text(encoding="utf-8")
     subs = {
@@ -1813,6 +1836,7 @@ def cmd_prompt(args) -> int:
         "{{SCOPE_LINE}}": T("scope_line", scope=args.scope) if args.scope else "",
         "{{FIX_REPORT}}": report_path(b, "fix", args.round),
         "{{DIFF_RANGE}}": args.diff or "",
+        "{{DIFF_VOLUME}}": diff_volume(diff) if diff else "",
         "{{VOLUME}}": volume_note(files),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
@@ -1838,8 +1862,8 @@ def cmd_prompt(args) -> int:
     body = PLACEHOLDER.sub(lambda m: subs.get(m.group(0), m.group(0)), body)
     if left:
         die(f"template {template.name} has substitutions left without a value: {', '.join(left)}")
-    if args.role == "fixreview":
-        body = body.replace("{{DIFF}}", diff_text(args.diff))
+    if diff:
+        body = body.replace("{{DIFF}}", diff)
     print(body)
     return 0
 

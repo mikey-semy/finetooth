@@ -11,6 +11,14 @@
 # promised in the documentation existed. Hence the rule: commands written in an
 # instruction are run at the very first install, otherwise the instruction
 # describes an intention, not work.
+#
+# ⚠️ Do NOT put `make review` in the `cli` field of blocks.json. Every hint and
+# refusal the tool prints is assembled from that field — `<cli> coverage`,
+# `<cli> prompt H1 --role verify`, `<cli> set-finding H1-003 rejected --reason …`
+# — and `make` reads `--role` and `--reason` as its own options and stops. These
+# targets cover the everyday commands; for the rest, leave `cli` unset and the
+# tool prints the real path to itself. A project that wants one command for
+# everything writes a shell wrapper and names that.
 
 REVIEW := python3 .claude/skills/finetooth/scripts/review.py
 
