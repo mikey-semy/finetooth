@@ -7410,7 +7410,10 @@ class SetupLanguageTest(unittest.TestCase):
         return out.stdout
 
     def named_assets(self, text: str) -> list[str]:
-        return re.findall(r"/skills/finetooth/assets/([\w.\-]+)", text)
+        # Каталог образцов — тот, что рядом с ИСПЫТУЕМЫМ инструментом, а не путь с сегментом
+        # `skills`: скилл ставят куда угодно, а копия мутационной узды лежит в `<tmp>/finetooth`.
+        assets = re.escape(str(TOOL.resolve().parent.parent / "assets") + os.sep)
+        return re.findall(assets + r"([\w.\-]+)", text)
 
     def test_русское_ревью_получает_русские_образцы(self):
         out = self.setup("--lang", "ru", "--project", "Проект", "--cli", "npm run review --")
@@ -7434,6 +7437,23 @@ class SetupLanguageTest(unittest.TestCase):
             if ru.name.startswith("entry-point"):
                 continue
             self.assertIn(ru.name, named, f"{ru.name} не назван ничем в наборе")
+
+    @unittest.skipIf(os.environ.get("FINETOOTH_TOOL"), "прогон уже идёт на копии скилла")
+    def test_образцы_находятся_у_скилла_в_каталоге_с_любым_именем(self):
+        """Скилл живёт «где угодно» — и тесты образцов обязаны это выдерживать. Прежде они
+        искали в выводе сегмент `/skills/finetooth/`, и на копии в `<tmp>/finetooth` — ровно
+        там, куда кладёт скилл мутационная узда, — краснели оба, ничего не сломав."""
+        with tempfile.TemporaryDirectory(prefix="finetooth-elsewhere-") as d:
+            skill = Path(d, "tools", "review-kit")
+            shutil.copytree(SKILL, skill, ignore=shutil.ignore_patterns("__pycache__"))
+            out = subprocess.run(
+                [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests"),
+                 "-k", "test_русское_ревью_получает_русские_образцы",
+                 "-k", "test_английское_ревью_получает_английские_образцы"],
+                cwd=KIT, capture_output=True, text=True,
+                env=child_env(FINETOOTH_TOOL=str(skill / "scripts" / "review.py")))
+        self.assertIn("Ran 2 tests", out.stderr, out.stderr[-500:])
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
 
     def test_английское_ревью_получает_английские_образцы(self):
         """Вторая сторона: русские копии не должны протечь в английский список дел."""
