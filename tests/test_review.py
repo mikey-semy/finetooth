@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import collections
 import datetime as dt
+import hashlib
 import json
 import re
 import os
@@ -2947,6 +2948,89 @@ class GitTruthTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("src/one.ts", out.stdout)
         self.assertNotIn("src/generated/x.ts", out.stdout)
+
+
+class WriteBoundaryTest(unittest.TestCase):
+    """УЗДА КЛАССА «инструмент пишет не там, где обещано».
+
+    SECURITY.md называет запись вне разрешённых мест уязвимостью, и это обещание дано
+    вслух — значит, его держит прогон, а не вычитка. Снимок дерева до и после: всё, что
+    появилось или изменилось вне `docs/review/`, обязано быть в списке ниже, а список
+    равен тому, что написано в SECURITY.md. Новая команда попадает под правило сама —
+    список подкоманд берётся у самого инструмента.
+    """
+
+    # Единственное разрешённое исключение: итог задуман пережить снос каталога ревью,
+    # поэтому пишется вне него — по умолчанию сюда, а по `--out` туда, куда скажут.
+    ALLOWED_OUTSIDE = {"docs/review-summary.md"}
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        self.s.write(".gitignore", "__pycache__/\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+
+    def _snapshot(self) -> dict[str, str]:
+        """Всё дерево проекта, кроме `.git` и самого каталога ревью."""
+        out = {}
+        for p in sorted(self.s.root.rglob("*")):
+            rel = p.relative_to(self.s.root).as_posix()
+            if rel.startswith((".git/", "docs/review/")) or rel in (".git", "docs/review"):
+                continue
+            if p.is_file():
+                out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+        return out
+
+    def test_ни_одна_команда_не_пишет_вне_каталога_ревью(self):
+        helped = self.s.run("--help").stdout
+        names = re.search(r"\{([a-z0-9,\-]{20,})\}", helped.replace("\n", ""))
+        self.assertTrue(names, helped)
+        commands = names.group(1).split(",")
+        self.assertIn("summary", commands)
+        before = self._snapshot()
+        for cmd in commands:
+            for args in ((), ("H1",)):
+                self.s.run(cmd, *args)
+        after = self._snapshot()
+        appeared = {rel for rel in after if rel not in before}
+        changed = {rel for rel in before if after.get(rel, before[rel]) != before[rel]}
+        self.assertEqual(appeared - self.ALLOWED_OUTSIDE, set(),
+                         "файлы появились вне docs/review/ — SECURITY.md этого не обещает")
+        self.assertEqual(changed, set(),
+                         "файлы изменены вне docs/review/ — SECURITY.md этого не обещает")
+
+    def test_итог_пишется_туда_куда_сказали_и_только_туда(self):
+        """Обратная сторона: разрешённое исключение обязано работать — и по умолчанию,
+        и по `--out`, в том числе за пределы репозитория."""
+        before = self._snapshot()
+        self.assertEqual(self.s.run("summary").returncode, 0)
+        self.assertTrue((self.s.root / "docs/review-summary.md").exists())
+        outside = Path(tempfile.mkdtemp(prefix="finetooth-out-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        target = outside / "итог.md"
+        out = self.s.run("summary", "--out", str(target))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(target.exists())
+        appeared = {rel for rel in self._snapshot() if rel not in before}
+        self.assertEqual(appeared, {"docs/review-summary.md"})
+
+    def test_обещание_безопасности_называет_то_же_исключение(self):
+        """Правило и текст обещания не должны разъезжаться: то, что тест разрешает
+        инструменту, обязано быть названо в SECURITY.md."""
+        promise = (KIT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("docs/review/", promise)
+        for rel in self.ALLOWED_OUTSIDE:
+            self.assertIn(rel, promise, f"SECURITY.md не называет {rel}")
+        # Скрипт-запускатель пишет во временный каталог и отправляет промпт по сети —
+        # обещание обязано говорить и об этом, иначе оно лжёт о наборе целиком.
+        runner = (SKILL / "assets" / "run-role.sh").read_text(encoding="utf-8")
+        self.assertIn("finetooth-runs", runner)
+        self.assertIn("finetooth-runs", promise)
+        self.assertIn("claude -p", promise)
 
 
 class HandWrittenInputTest(unittest.TestCase):
