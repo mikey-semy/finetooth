@@ -1423,6 +1423,44 @@ def cmd_summary(args) -> int:
     return 0
 
 
+# -------------------------------------------------------------------------- refs
+
+def review_refs() -> list[tuple[str, int, str, str]]:
+    """Places in the tracked tree, outside `docs/review/`, that name a finding of this
+    register by its id: (path, line, id, text). The ids die with the review directory; a
+    comment "see H1-012" then points nowhere. The kit author's review found about forty such
+    references by hand; the register knows the ids exactly, so here there is no guessing."""
+    ids = sorted({f.get("id") for f in findings() if f.get("id")})
+    if not ids:
+        return []
+    cmd = ["git", "-C", str(ROOT), "grep", "-n", "-I", "-w", "-F", "--full-name"]
+    for fid in ids:
+        cmd += ["-e", fid]
+    cmd += ["--", ".", ":(exclude)docs/review/**"]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    hits = []
+    for ln in out.splitlines():
+        path, _, rest = ln.partition(":")
+        num, _, text = rest.partition(":")
+        for fid in ids:
+            if re.search(rf"(?<![\w-]){re.escape(fid)}(?![\w-])", text):
+                hits.append((path, int(num) if num.isdigit() else 0, fid, text.strip()))
+    return hits
+
+
+def cmd_refs(args) -> int:
+    """References to the review's findings in the code — they must not outlive the review."""
+    hits = review_refs()
+    if not hits:
+        print("no finding of the register is named outside docs/review/")
+        return 0
+    for path, num, fid, text in hits:
+        print(f"{path}:{num}: {fid} — {text[:120]}")
+    print(f"\n{len(hits)} reference(s) to findings outside docs/review/ — the ids die with the "
+          f"review directory: say the reason in the code's own words, the id stays in the register")
+    return 1
+
+
 # ------------------------------------------------------------------------- prompt
 
 # A fence opens with three or more backticks OR three or more tildes and closes with at
@@ -3312,6 +3350,11 @@ def cmd_check(args) -> int:
                 f"(ceiling {limit}). Split the block, or the report will lie about coverage"
             )
 
+    refs = review_refs()
+    if refs:
+        sample = ", ".join(f"{p}:{n} ({fid})" for p, n, fid, _ in refs[:4])
+        warnings.append(f"{len(refs)} reference(s) to findings in the code: {sample} — the ids die "
+                        f"with docs/review/; `{CLI} refs` lists them")
     old = open_findings_age(findings())
     if old:
         oldest = max(age for _, age in old)
@@ -3553,6 +3596,7 @@ def main() -> int:
     c.add_argument("--write", action="store_true", help="also write docs/review/coupling.tsv")
     c = sub.add_parser("order", help="blocks in the order worth walking them: risk first, change frequency second")
     c.add_argument("--since", help="only commits since this date (git --since)")
+    sub.add_parser("refs", help="finding ids of the register named in the code outside docs/review/")
     c = sub.add_parser("summary", help="the one file that outlives docs/review/; --aged <file>: drift since its base commit")
     c.add_argument("--out", default=SUMMARY_DEFAULT, help=f"where to write (default {SUMMARY_DEFAULT}, outside docs/review/)")
     c.add_argument("--aged", metavar="FILE", help="read a summary and print how much each block changed since its base commit")
@@ -3577,7 +3621,7 @@ def main() -> int:
         "check": cmd_check, "log": cmd_log, "import": cmd_import,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
-        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order, "summary": cmd_summary,
+        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order, "refs": cmd_refs, "summary": cmd_summary,
         "setup": cmd_setup,
     }[args.cmd](args)
 

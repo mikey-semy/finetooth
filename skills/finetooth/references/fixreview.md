@@ -50,7 +50,15 @@ defects; you are the check it does not have.
     findings but what got better in the project and what did not break. No findings, or
     findings not about product behavior — say so and justify it. Found a defect
     **introduced by the previous round** — name it separately: that is the machine
-    starting to work for itself.
+    starting to work for itself. **Another round is needed only for a finding of medium or
+    higher** (wrong behaviour, a test that does not go red without the fix, a fix that missed
+    an address of the defect, a bloated fix); low findings are fixed by the fixer or the lead
+    without a new round. Say how many of your findings sit inside the code the previous round
+    changed: when the top finding is there two rounds in a row, in one class, the next move is
+    a human's, not another round.
+12. **Write the report as you go.** Put what you have established into `{{REPORT_PATH}}` as
+    soon as it is established and extend it; a run cut off at a limit keeps what is on disk
+    and loses what was only in your head.
 
 # Project invariants
 
