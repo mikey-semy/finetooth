@@ -9921,17 +9921,33 @@ class LoopSignalTest(unittest.TestCase):
     def _fix2(self) -> subprocess.CompletedProcess:
         return self.s.run("prompt", "H1", "--role", "fix", "--round", "2")
 
+    def test_отказ_сигнала_петли_говорит_на_языке_ревью(self):
+        """Отказ идёт через таблицу сообщений, как все остальные. Стенд русский, и остальные
+        тесты класса ждут «сигнал петли»; здесь — английское ревью: тот же отказ по-английски,
+        с той же находкой и той же командой решения."""
+        bj = self.s.root / "docs/review/blocks.json"
+        d = json.loads(bj.read_text(encoding="utf-8"))
+        d["lang"] = "en"
+        bj.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._review_found(self._finding(3))
+        fix = self._fix2()
+        self.assertEqual(fix.returncode, 2, fix.stdout[-300:])
+        self.assertIn("loop signal", fix.stderr)
+        self.assertNotIn("сигнал петли", fix.stderr)
+        self.assertIn("H1-001", fix.stderr)
+        self.assertIn('decide H1 "<decision>"', fix.stderr)
+
     def test_главная_находка_внутри_диффа_прошлого_круга_останавливает_круг(self):
         self._review_found(self._finding(3))
         fix = self._fix2()
         self.assertEqual(fix.returncode, 2, "второй круг собрался поверх петли: " + fix.stdout[-300:])
-        self.assertIn("loop signal", fix.stderr)
+        self.assertIn("сигнал петли", fix.stderr)
         self.assertIn("H1-001", fix.stderr, "отказ называет находку")
         self.assertIn('decide H1 "<decision>"', fix.stderr, "отказ называет команду решения")
         self.assertEqual(self.s.run("prompt", "H1", "--role", "fix").returncode, 0,
                          "первому кругу спросить не у кого — сигнал со второго")
         check = self.s.run("check")
-        self.assertIn("loop signal", warned(check),
+        self.assertIn("сигнал петли", warned(check),
                       "check обязан сказать о сигнале предупреждением, не роняя прогон: "
                       + check.stdout[-500:])
         self.assertIn("H1-001", warned(check))
@@ -9943,7 +9959,7 @@ class LoopSignalTest(unittest.TestCase):
         self.assertEqual(fix.returncode, 0, fix.stderr)
         check = self.s.run("check")
         self.assertEqual(check.returncode, 0, check.stdout)
-        self.assertNotIn("loop signal", check.stdout)
+        self.assertNotIn("сигнал петли", check.stdout)
 
     def test_сигнал_смотрит_на_главную_открытую_находку_от_medium(self):
         # low внутри диффа — не повод для круга, и сигнала нет.
@@ -9958,7 +9974,7 @@ class LoopSignalTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         fix = self._fix2()
         self.assertEqual(fix.returncode, 2, "главная открытая находка внутри диффа")
-        self.assertIn("loop signal", fix.stderr)
+        self.assertIn("сигнал петли", fix.stderr)
 
     def test_решение_человека_снимает_сигнал_и_доходит_до_заданий(self):
         self._review_found(self._finding(3))
@@ -9984,7 +10000,7 @@ class LoopSignalTest(unittest.TestCase):
                       review.stdout.split("````diff")[0], "и до ревьюера правок")
         check = self.s.run("check")
         self.assertEqual(check.returncode, 0, check.stdout)
-        self.assertNotIn("loop signal", check.stdout)
+        self.assertNotIn("сигнал петли", check.stdout)
         self.assertIn("Заменить стража", (self.s.root / "docs/review/journal.md")
                       .read_text(encoding="utf-8"), "решение видно и человеку в дневнике")
 
@@ -10010,7 +10026,7 @@ class LoopSignalTest(unittest.TestCase):
         self.assertEqual(fix.returncode, 0, fix.stderr)
         check = self.s.run("check")
         self.assertNotIn("Traceback", check.stderr + fix.stderr)
-        self.assertNotIn("loop signal", check.stdout)
+        self.assertNotIn("сигнал петли", check.stdout)
 
     def test_импорт_пишет_круг_и_дифф_закреплённый_номерами_коммитов(self):
         self._review_found(self._finding(3))
