@@ -4,6 +4,7 @@ file	blocks
 .github/ISSUE_TEMPLATE/proposal.yml	T4
 .github/ISSUE_TEMPLATE/trophy.yml	T4
 .github/PULL_REQUEST_TEMPLATE.md	T4
+.github/dco.sh	T4
 .github/workflows/stale.yml	T4
 .github/workflows/tests.yml	T4
 .gitignore	T4
