@@ -2384,6 +2384,16 @@ class SkillFormatTest(unittest.TestCase):
         """При установке уезжает только папка скилла — условия обязаны ехать с ней."""
         self.assertEqual((SKILL / "LICENSE").read_bytes(), (KIT / "LICENSE").read_bytes())
 
+    def test_поле_лицензии_это_её_обозначение_и_ничего_сверх(self):
+        """Шапку скилла читает тот, кто решает, можно ли его ставить. Пока в поле стояла
+        проза («MIT на правки; основа передана без лицензии»), она пережила смену самой
+        лицензии и утверждала обратное тому, что написано в LICENSE. Обозначение берётся
+        из LICENSE, так что поле не разъедется с ним и в следующий раз."""
+        first = (KIT / "LICENSE").read_text(encoding="utf-8").splitlines()[0].strip()
+        spdx = re.fullmatch(r"([A-Za-z0-9.+-]+) License", first)
+        self.assertTrue(spdx, f"первая строка LICENSE не называет лицензию: {first!r}")
+        self.assertEqual(self.frontmatter()["license"], spdx.group(1))
+
 
 class SetupTest(unittest.TestCase):
     """`setup` заводит ревью в проекте; инструмент при этом остаётся в скилле."""
