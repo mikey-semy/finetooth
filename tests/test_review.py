@@ -3193,6 +3193,21 @@ class GitTruthTest(unittest.TestCase):
         self.s = Stand()
         self.addCleanup(self.s.cleanup)
 
+    def test_без_git_инструмент_отказывает_а_не_роняет_трейсбек(self):
+        """Читать репозиторий инструмент умеет только через git, и сказать об этом обязан
+        один раз и внятно: прежде отсутствие git приходило трейсбеком `FileNotFoundError`
+        из той команды, которую пользователь набрал первой.
+
+        Обратная сторона — весь остальной прогон: с обычным PATH инструмент работает."""
+        empty = Path(tempfile.mkdtemp(prefix="finetooth-nopath-"))
+        self.addCleanup(shutil.rmtree, empty, True)
+        out = subprocess.run([sys.executable, str(TOOL), "status"], cwd=self.s.root,
+                             capture_output=True, text=True, env=child_env(PATH=str(empty)))
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("git does not run", out.stderr)
+        self.assertIn("install it", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+
     def test_главная_ветка_проекта_ничего_не_решает(self):
         """Обратная сторона пришпиленного конфига git: стенд больше не берёт имя ветки у
         разработчика — и обязан работать на любом. `main` — умолчание большинства живых
