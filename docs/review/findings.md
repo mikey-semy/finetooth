@@ -3,7 +3,7 @@
 > This file is GENERATED from `findings.jsonl` by `python3 skills/finetooth/scripts/review.py findings`.
 > Do not edit by hand — edit the jsonl and regenerate.
 
-Open: **7** of 131 records.
+Open: **15** of 140 records.
 
 ## high (0 open / 5)
 
@@ -15,7 +15,7 @@ Open: **7** of 131 records.
 | T1-059 | T1 | fixed | `skills/finetooth/scripts/review.py:2674` | [R7-001, round 7] a finding write-up that opens a line with a hypothesis id is counted as a second verdict, and `check` goes red on an honest report |
 | T1-060 | T1 | fixed | `skills/finetooth/scripts/review.py:2721` | [R7-002, round 7] the verifier's override is dropped when its basis is on the next line, and `check` reports the hunter's "checked" on a hypothesis the verifier called unproven |
 
-## medium (2 open / 43)
+## medium (3 open / 45)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -62,8 +62,10 @@ Open: **7** of 131 records.
 | T4-020 | T4 | fixed | `docs/review/findings.jsonl:107` | The register's rule for T4-009, T4-010, T4-017 (and T4-004) names a guard covering one instance of the class, so the class is recorded closed yet reopens with the guard green (fix review round 1, R1-002) |
 | T4-021 | T4 | fixed | `tests/test_review.py:5233` | test_каждые_объявленные_ворота_гоняет_ci matches each CONTRIBUTING command by two anchors anywhere in the workflow text, so CI can stop running the unittest suite with the guard green (fix review round 1, R1-003) |
 | T4-026 | T4 | fixed | `.github/dco.sh:31` | dco.sh feeds git rev-list through process substitution, so an unresolvable range examines no commits and the script prints 'all commits are signed off' with exit 0 (fix review round 1, R1-008) |
+| T4-027 | T4 | deferred | `docs/review/findings.jsonl:7` | The round rewrote the rule field of 16 earlier findings; 10 now name a guard green on the finding's own defect, 3 replacing a correct value (fix review round 2, R2-001) |
+| T4-028 | T4 | open | `tests/test_review.py:3309` | BODY_ARGV gives set-finding an id absent from the stand, so it refuses before writing and the write-boundary sweep never reaches its register write (fix review round 2, R2-002) |
 
-## low (5 open / 83)
+## low (12 open / 90)
 
 | id | block | status | location | what is wrong |
 |---|---|---|---|---|
@@ -150,4 +152,11 @@ Open: **7** of 131 records.
 | T4-023 | T4 | fixed | `tests/test_review.py:3323` | WriteBoundaryTest calls each subcommand with () and ('H1',), so set-status, set-finding and log never get past argparse and are outside the write-boundary guard (fix review round 1, R1-005) |
 | T4-024 | T4 | fixed | `README.md:281` | All five places stating the scenario count said 270 while the merged suite ran 296, and the guard was loosened to a nine-tenths band in the same range (fix review round 1, R1-006) |
 | T4-025 | T4 | fixed | `docs/review/reports/T4-repo-contract.fix.md:16` | The T4 fix report names the guard test_число_сценариев_в_документах_равно_настоящему, which does not exist on HEAD after 2f29968 renamed it, and quotes 270 tests against the range's 296 (fix review round 1, R1-007) |
+| T4-029 | T4 | open | `tests/test_review.py:5496` | _runs_command counts a wider step as running the gate, so '\|\| true', '-k' narrowing or a one-commit dco range neutralise the CI gate with the guard green (fix review round 2, R2-003) |
+| T4-030 | T4 | open | `tests/test_review.py:5545` | _glued_to_list_item recognises only '-*+' bullets as list openers, missing numbered items and a one-space-indented continuation (fix review round 2, R2-004) |
+| T4-031 | T4 | open | `CHANGELOG.md:102` | CHANGELOG (both languages) says the T4 fix review had six findings, all closed; the register closes eight (T4-019…T4-026), and T4-020/T4-025 appear in no entry (fix review round 2, R2-005) |
+| T4-032 | T4 | open | `docs/review/reports/T4-repo-contract.fix-2.md:445` | The round-2 fix report claims twenty-three new tests; the suite goes from 325 at d33527c to 341 at HEAD, sixteen (fix review round 2, R2-006) |
+| T4-033 | T4 | open | `docs/review/findings.jsonl:121` | T2-020 is the same glued-paragraph defect this round fixed as T4-022, yet stays open and review check is red on it (fix review round 2, R2-007) |
+| T4-034 | T4 | open | `tests/test_review.py:5102` | ShellGateMutationTest.GATES is a hand-written two-script dict, not read from git ls-files; a new shell gate falls outside the rule with nothing failing (fix review round 2, R2-008) |
+| T4-035 | T4 | open | `tests/test_review.py:5268` | _sweeps_without_body_check is satisfied by the text argparse_refused anywhere in the function and sees a sweep only when .run's first argument is a bare Name (fix review round 2, R2-009) |
 
