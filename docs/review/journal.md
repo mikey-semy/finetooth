@@ -42,3 +42,5 @@
 - **2026-09-25T12:39:21Z** · `T3` — fix — spend: 69 min, 151 turns, 150 tool calls, input 34.1M tokens (99% from cache, 287k written), output 170k, re-reads 0, cost estimate $24.04, model claude-opus-5
 - **2026-09-25T13:25:22Z** · `T3` — fixreview — spend: 45 min, 113 turns, 112 tool calls, input 18.6M tokens (98% from cache, 307k written), output 79k, re-reads 0, cost estimate $14.22, model claude-opus-5
 - **2026-09-25T14:42:01Z** · `T3` — круг починки 3: одна точка входа для git и один контейнер отказов; T3-020/021/023/024 закрыты
+- **2026-09-25T14:43:20Z** · `T3` — fix — spend: 66 min, 247 turns, 246 tool calls, input 67.0M tokens (99% from cache, 410k written), output 167k, re-reads 1, cost estimate $41.58, model claude-opus-5
+- **2026-09-25T15:15:49Z** · `T3` — fixreview — spend: 31 min, 211 turns, 210 tool calls, input 48.9M tokens (99% from cache, 398k written), output 101k, re-reads 0, cost estimate $30.84, model claude-opus-5
