@@ -10,11 +10,26 @@
 # role needed (hunter 55 turns, verifier 165) — a run that needs more is a run to look at.
 #
 # Environment: REVIEW (how the project calls the tool; default: this skill's review.py),
-# ROLE_MAX_TURNS (override the cap), CLAUDE_MODEL (override the model).
+# ROLE_MAX_TURNS (override the cap), CLAUDE_MODEL (override the model), ROLE_DENY (tools the
+# run must NOT use, passed to `claude -p` as `--disallowedTools`; unset — nothing is denied).
+#
+# ROLE_DENY is the only limit here. The per-role tool lists below are `--allowedTools`, and
+# that flag PRE-APPROVES tools on top of the operator's own permission settings — it does not
+# restrict: a measured run given `Read,Grep,Glob,Write` still called Bash (see #27). For a run
+# that must not reach something — the repository's history, a neighbouring repository — deny
+# it, or run the agent in a sandbox:
+#
+#   ROLE_DENY="Bash(git *),Read(//home/me/other-repo/**)" assets/run-role.sh H1 hunter
+#
+# An absolute path in a rule needs `//`: measured, `Read(/home/x/**)` matched nothing and the
+# read went through, while `Read(//home/x/**)` refused Read, Grep and `cat` alike.
 set -euo pipefail
 BLOCK="${1:?block id}"; ROLE="${2:?role}"; shift 2
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVIEW="${REVIEW:-python3 $HERE/../scripts/review.py}"
+# Pre-approvals, not limits: whatever the operator's settings allow is allowed on top of
+# these lists, so "the verifier has no network" is not something a list can promise. What a
+# run must not do goes into ROLE_DENY (see the header).
 case "$ROLE" in
   # The hunter executes too: a block with `proof: measured` is proven by runs, and three
   # blocks of the kit's own review (T1–T3) had their hunter refused `python3` and fall back to
@@ -40,6 +55,7 @@ echo "prompt: $PROMPT ($(wc -c < "$PROMPT") bytes); cap: $CAP turns; stream: $ST
 set +e
 claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
   --max-turns "$CAP" ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"} --allowedTools "$TOOLS" \
+  ${ROLE_DENY:+--disallowedTools "$ROLE_DENY"} \
   < "$PROMPT" > "$STREAM" 2> "$STREAM.err"
 RC=$?
 # Everything below is reporting. Every step runs even if an earlier one failed — the reply

@@ -21,6 +21,14 @@ read the prompt before handing it to an agent.
   prompt to the model over the network** by piping it into `claude -p`. The prompt carries
   the block's files. If that is not acceptable in your environment, do not run the script —
   `review.py prompt` prints the same prompt and sends nothing.
+- **The tool lists in `run-role.sh` are pre-approvals, not limits.** Each role gets a list
+  through `--allowedTools`, and that flag approves tools in advance *on top of* what the
+  operator's own permission settings already allow; it takes nothing away. Measured: a run
+  given `Read,Grep,Glob,Write` still called Bash. A role whose list has no `npm` or no network
+  tool is not thereby unable to use them. A limit is `--disallowedTools` — the script passes
+  the optional `ROLE_DENY` variable as that flag — or a sandbox around the agent. An absolute
+  path in a deny rule needs `//`: measured, `Read(/home/x/**)` matched nothing and the read
+  went through, while `Read(//home/x/**)` refused Read, Grep and `cat` alike.
 - **`scripts/axes.py` reads a stream file** and writes nothing.
 
 ## How to report a vulnerability

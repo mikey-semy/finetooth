@@ -58,7 +58,7 @@ same holds for **everything the state check reads in the report** — your verdi
 finding and your statement about coverage included: a report whose substance is all quoted
 is read as an empty one, and the block does not pass.
 
-**First check that the tree is fresh.** `git log HEAD..origin/master --oneline`; for a neighboring repository — `git fetch` and reading through `git show origin/master:<file>`. Execution does not save you if you execute yesterday's code: that is exactly how a defect long gone from `origin/master` was once confirmed.
+**First check that the tree is fresh.** `git log HEAD..origin/master --oneline`; for a neighboring repository — `git fetch` and reading through `git show origin/master:<file>`. Execution does not save you if you execute yesterday's code: that is exactly how a defect long gone from `origin/master` was once confirmed. **Except on a snapshot of the past:** when the block is reviewed at a fixed commit on purpose (a snapshot of the past, an archive, an experiment), do not compare with `origin` — that is the future, and it may already hold the fix.
 
 **Check by execution, not by reading.** This is not a stylistic wish: a verifier that
 rereads someone else's conclusion is statistically useless — on real warnings such a check
