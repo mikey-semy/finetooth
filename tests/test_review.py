@@ -5137,6 +5137,56 @@ class DcoGateTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertIn("signed off", out.stdout)
 
+    # Адреса, в которых есть метасимволы регулярного выражения. Это не редкий случай:
+    # `12345678+login@users.noreply.github.com` GitHub выдаёт каждому, кто закрыл свою
+    # почту, и коммитит под ним из веб-интерфейса; точка в локальной части — обычная
+    # форма корпоративного адреса.
+    METACHARACTER_ADDRESSES = ("12345678+octocat@users.noreply.github.com",
+                               "first.last@company.com", "dev+finetooth@example.com")
+
+    def test_подпись_с_адреса_с_метасимволами_проходит(self):
+        """Сторона, которая важнее: честную работу ворота не заворачивают.
+
+        Адрес автора уходил в образец `grep -E` как есть, и `+` становился квантором:
+        подписанный коммит получал отказ, а названная в отказе починка
+        (`git rebase --signoff`) заново писала ту же самую строку — выхода из отказа не
+        было вовсе.
+        """
+        for i, addr in enumerate(self.METACHARACTER_ADDRESSES):
+            who = f"Кто-То {i} <{addr}>"
+            self.commit(f"meta{i}", signoff=who, author=who)
+        out = self.check(f"HEAD~{len(self.METACHARACTER_ADDRESSES)}..HEAD")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("signed off", out.stdout)
+
+    def test_подпись_на_похожий_адрес_не_засчитывается(self):
+        """Та же поломка в другую сторону: точка в образце — это любой знак, и подпись
+        `aXb@example.com` удостоверяла коммит автора `a.b@example.com`. Адрес сверяется
+        строкой, а не образцом."""
+        self.commit("lookalike", signoff="Борис Другой <aXb@example.com>",
+                    author="Анна Автор <a.b@example.com>")
+        out = self.check("HEAD~1..HEAD")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+
+    def test_нерешаемый_диапазон_роняет_ворота_и_называет_починку(self):
+        """`git rev-list` читался через подстановку процесса и свой код возврата не
+        сообщал никому: на диапазоне, которого git не понимает — клон без `origin/dev`,
+        удалённый под другим именем, — список коммитов выходил пустым, и ворота печатали
+        «all commits are signed off» с нулём, не посмотрев ни одного коммита. Ровно тот
+        диапазон, который CONTRIBUTING велит гонять у себя."""
+        self.commit("unsigned")
+        out = self.check("origin/dev..HEAD")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertNotIn("signed off", out.stdout)
+        self.assertIn("git fetch", out.stderr, "отказ обязан называть, что делать")
+
+    def test_диапазон_без_коммитов_ворота_не_роняет(self):
+        """Обратная сторона: диапазон, который git понимает, но в котором коммитов нет,
+        — не нарушение. Проверка списка не должна превратить пустую ветку в отказ."""
+        out = self.check("HEAD..HEAD")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("signed off", out.stdout)
+
     def test_коммит_слияния_подписи_не_требует(self):
         """Слияние не несёт ничьего авторства кода, и `git merge` не подписывает его."""
         self.git("checkout", "-q", "-b", "side")
