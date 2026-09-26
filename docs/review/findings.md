@@ -37,7 +37,7 @@ Open: **0** of 168 records.
 | T1-037 | T1 | fixed | `skills/finetooth/scripts/review.py:1487` | [R3-001, fix review round 3] the nested-fence fix silently truncates a manifest again, and `check` goes green on it |
 | T1-042 | T1 | fixed | `skills/finetooth/scripts/review.py:1476` | [R4-002, fix review round 4] an unclosed fence inside a list item swallows the rest of the manifest, and `check` goes green on one hypothesis of four |
 | T1-047 | T1 | fixed | `CHANGELOG.md:14` | [R5-002, round 5] the changelog entry restates the review's totals and gets them wrong, in both languages |
-| T1-048 | T1 | deferred | `skills/finetooth/scripts/review.py:3475` | [R5-003, round 5] the block's own acceptance criterion cannot be written without making `check` red, and this round closed the gate by re-marking the report instead of filing it |
+| T1-048 | T1 | deferred | `skills/finetooth/scripts/review.py:3550` | [R5-003, round 5] the block's own acceptance criterion cannot be written without making `check` red, and this round closed the gate by re-marking the report instead of filing it |
 | T1-052 | T1 | fixed | `skills/finetooth/scripts/review.py:2648` | [R6-001, round 6] the exception for the old answer form strips every backtick in the line, and a quoted verdict word becomes the line's verdict again |
 | T1-053 | T1 | fixed | `skills/finetooth/scripts/review.py:2638` | [R6-002, round 6] the hypotheses-section filter silently drops the verifier's overriding verdict, and the tool prints the hunter's word instead |
 | T1-054 | T1 | fixed | `skills/finetooth/references/hunter.md:89` | [R6-003, round 6] `check` refuses a report that writes its verdicts the way the hunter template still promises, and the template now contradicts itself in both languages |
@@ -45,7 +45,7 @@ Open: **0** of 168 records.
 | T1-061 | T1 | fixed | `skills/finetooth/scripts/review.py:2700` | [R7-003, round 7] the hunter template's own indented-proof form yields no verdict at all, and the refusal names a requirement the report already meets |
 | T1-062 | T1 | fixed | `skills/finetooth/scripts/review.py:2713` | [R7-004, round 7] the partial qualifier is searched over the whole clause whenever there is no colon, so an honest "checked" is recorded as "not checked" |
 | T1-063 | T1 | fixed | `skills/finetooth/scripts/review.py:2662` | [R7-005, round 7] the round's central rule — no basis, no verdict — does not reach the table or the free form, so it is bypassed by writing the same answer as a table |
-| T1-064 | T1 | deferred | `skills/finetooth/scripts/review.py:4322` | [R7-006, round 7] the file-map gate reads the report raw, so the block's file list can be satisfied entirely out of a quotation |
+| T1-064 | T1 | deferred | `skills/finetooth/scripts/review.py:4395` | [R7-006, round 7] the file-map gate reads the report raw, so the block's file list can be satisfied entirely out of a quotation |
 | T1-065 | T1 | fixed | `skills/finetooth/scripts/review.py:3229` | [R7-007, round 7] the R6-004 fix is untested: reverting the gate's `"quoted"` mode leaves the whole suite green |
 | T2-001 | T2 | fixed | `skills/finetooth/references/verify.md:123` | The verifier template tells the agent to put a rejection reason in `claim`, but check accepts it only when the claim starts with a rejection word or a reject_reason field is present — neither is mentioned |
 | T2-002 | T2 | fixed | `skills/finetooth/references/hunter.md:155` | The draft-findings JSON schema in every role template omits `root` and `dup_of`, so the three-instance guard gate and the duplicate gate can never be satisfied by an agent following the template |
@@ -53,9 +53,9 @@ Open: **0** of 168 records.
 | T2-017 | T2 | fixed | `skills/finetooth/scripts/review.py:1906` | {{DIFF}} is replaced over the assembled body, so the manifest's own mentions of it get the diff too: the prompt carries it three times while {{DIFF_VOLUME}} states one (fix review round 1, R1-002) |
 | T2-023 | T2 | fixed | `skills/finetooth/scripts/review.py:182` | vol_over now tells the hunter to name the unread rest in the coverage section, but check reads only the coverage-limits section (fix review round 2, R2-001) |
 | T2-024 | T2 | fixed | `docs/review/findings.jsonl:1` | set-finding --rule rewrote the guard of every finding sharing the root: T3-002/012/014 and open T4-021 now name TemplateContractTest, which is green on their defect (fix review round 2, R2-002) |
-| T2-026 | T2 | deferred | `tests/test_review.py:9338` | NamedExitTest attributes a text to a role only via its {{PLACEHOLDER}}; review.py refusals and SKILL.md sending one role into another's section stay green (fix review round 3, R3-001) |
+| T2-026 | T2 | deferred | `tests/test_review.py:9337` | NamedExitTest attributes a text to a role only via its {{PLACEHOLDER}}; review.py refusals and SKILL.md sending one role into another's section stay green (fix review round 3, R3-001) |
 | T2-027 | T2 | fixed | `skills/finetooth/scripts/review.py:183` | vol_over_verify's clause 'saying outright that the coverage is incomplete' is what satisfies COVERAGE_VERDICT, and nothing holds it (fix review round 3, R3-002) |
-| T2-028 | T2 | deferred | `tests/test_review.py:9345` | NamedExitTest reads every section named in role X's template as X's own, so a correct sentence about another role's report section turns the suite red (fix review round 3, R3-003) |
+| T2-028 | T2 | deferred | `tests/test_review.py:9344` | NamedExitTest reads every section named in role X's template as X's own, so a correct sentence about another role's report section turns the suite red (fix review round 3, R3-003) |
 | T3-001 | T3 | fixed | `tests/test_review.py:3951` | Five cmd_check gates moved from problems to warnings leave all 248 tests green: check exits 0 on the state it refused, because GATES keys a gate by its message and those gate tests never assert the exit code |
 | T3-002 | T3 | fixed | `tests/test_review.py:3925` | _check_gates matches only `problems.append(x)` on a Name, so a gate written with `+=` or `extend` yields no key, needs no GATES entry and no test, and the registry stays green |
 | T3-003 | T3 | fixed | `tests/test_review.py:4034` | GateRegistryTest checks only that the test named beside a gate exists; nothing ties the two, so a gate registered against any existing test name satisfies the guard with zero coverage |
@@ -78,7 +78,7 @@ Open: **0** of 168 records.
 | T4-027 | T4 | fixed | `docs/review/findings.jsonl:7` | The round rewrote the rule field of 16 earlier findings; 10 now name a guard green on the finding's own defect, 3 replacing a correct value (fix review round 2, R2-001) |
 | T4-028 | T4 | fixed | `tests/test_review.py:3309` | BODY_ARGV gives set-finding an id absent from the stand, so it refuses before writing and the write-boundary sweep never reaches its register write (fix review round 2, R2-002) |
 | T4-036 | T4 | deferred | `tests/test_review.py:4059` | The write-boundary sweep drives import, set-finding and restamp from a hand-written REGISTER_WRITERS; backfill and init also write the register and are not reached (fix review round 3, R3-001) |
-| T4-037 | T4 | deferred | `tests/test_review.py:6454` | _runs_command judges one run line at a time, so continue-on-error: true, if: false, set +e or exit 0 on a later line keep the step counted as running a gate it cannot fail (fix review round 3, R3-002) |
+| T4-037 | T4 | deferred | `tests/test_review.py:6453` | _runs_command judges one run line at a time, so continue-on-error: true, if: false, set +e or exit 0 on a later line keep the step counted as running a gate it cannot fail (fix review round 3, R3-002) |
 
 ## low (0 open / 103)
 
@@ -104,7 +104,7 @@ Open: **0** of 168 records.
 | T1-034 | T1 | fixed | `tests/test_review.py:3826` | [R2-003, fix review round 2] The new quotation guard cannot see a parser that does not exist yet |
 | T1-035 | T1 | fixed | `skills/finetooth/scripts/review.py:2692` | [R2-004, fix review round 2] `a/` and `b/` are accepted as prefixes, so a real `a/` directory closes the gate for a file nobody read |
 | T1-036 | T1 | fixed | `skills/finetooth/assets/run-role.sh:58` | [R2-005, fix review round 2] `run-role.sh` dies on the truncated stream `axes.py` was taught to survive |
-| T1-038 | T1 | deferred | `skills/finetooth/scripts/review.py:3721` | [R3-002, fix review round 3] the other address of T1-035: a diff header closes the gate for a real `a/…` file nobody read |
+| T1-038 | T1 | deferred | `skills/finetooth/scripts/review.py:3796` | [R3-002, fix review round 3] the other address of T1-035: a diff header closes the gate for a real `a/…` file nobody read |
 | T1-039 | T1 | rejected | `tests/test_review.py:4050` | [R3-003, fix review round 3] the rewritten quotation guard does not see the two gates it is recorded against |
 | T1-040 | T1 | fixed | `skills/finetooth/assets/run-role.sh:47` | [R3-004, fix review round 3] the EXIT trap turns a lost journal line into a successful run |
 | T1-043 | T1 | fixed | `docs/review/journal.md:16` | [R4-003, fix review round 4] the round left no fix report and no journal entry, so its incidental changes are recorded nowhere |
@@ -116,7 +116,7 @@ Open: **0** of 168 records.
 | T1-056 | T1 | fixed | `docs/review/findings.jsonl:47` | [R6-005, round 6] the three register rows this round wrote carry a `fixed_in` naming a file that holds none of their fixes — including the row that records this defect |
 | T1-057 | T1 | fixed | `docs/review/findings.jsonl:38` | [R6-006, round 6] the round left `check` red on its own bookkeeping |
 | T1-058 | T1 | fixed | `skills/finetooth/scripts/review.py:1451` | [R6-007, round 6] a second code-span parser lives outside the one quotation tracker, and the class guard cannot see span parsers |
-| T1-066 | T1 | deferred | `tests/test_review.py:7245` | [R7-008, round 7] T1-058 is recorded `fixed` while the half of it about the class guard is untouched — a third span parser is still invisible |
+| T1-066 | T1 | deferred | `tests/test_review.py:7244` | [R7-008, round 7] T1-058 is recorded `fixed` while the half of it about the class guard is untouched — a third span parser is still invisible |
 | T1-067 | T1 | fixed | `CHANGELOG.md:19` | [R7-009, round 7] the changelog and the fix report say the new table holds 29 lines; it holds 28 |
 | T1-068 | T1 | fixed | `skills/finetooth/scripts/review.py:3231` | [R7-010, round 7] a coverage-limits section swallowed by an unclosed fence is reported as a missing section, and the message does not name the cause |
 | T2-003 | T2 | fixed | `skills/finetooth/SKILL.md:92` | SKILL.md documents `--round` only for the fix reviewer, so a second fix round overwrites round 1's fix report and the round-2 fixreview prompt points at a file nobody was told to write |
@@ -138,7 +138,7 @@ Open: **0** of 168 records.
 | T2-021 | T2 | fixed | `skills/finetooth/scripts/review.py:3086` | Two of the four places T2-011 fixed — the deferral refusal's tail in check and SKILL.md's completion sentence — are held by no test, and the register records no rule for T2-011 (fix review round 1, R1-006) |
 | T2-022 | T2 | fixed | `skills/finetooth/references/verify.md:92` | The verifier's template gets the same whole-block 'read all' file list as the hunter but no {{VOLUME}} reading budget (fix review round 1, R1-007) |
 | T2-025 | T2 | fixed | `tests/test_review.py:5480` | The new glued-paragraph markdown rule refuses correct CommonMark (a heading, table or HTML block after a list item ends the list) and has no invented sample (fix review round 2, R2-003) |
-| T2-029 | T2 | deferred | `tests/test_review.py:6500` | ENDS_LIST exempts any line starting with '<[A-Za-z/!?]', incl. CommonMark type-7 tags and inline HTML that do not end a list, so the T2-020 glue goes unnoticed (fix review round 3, R3-004) |
+| T2-029 | T2 | deferred | `tests/test_review.py:6499` | ENDS_LIST exempts any line starting with '<[A-Za-z/!?]', incl. CommonMark type-7 tags and inline HTML that do not end a list, so the T2-020 glue goes unnoticed (fix review round 3, R3-004) |
 | T3-005 | T3 | fixed | `tests/test_review.py:3059` | The no-traceback class guard passes one fixed argv to every subcommand; argparse rejects it for 20 of the 23, so their bodies never run and the guard proves nothing about them |
 | T3-006 | T3 | fixed | `tests/test_review.py:2250` | Nothing compares the key sets of MSG['en'] and MSG['ru'], so deleting a translation leaves the suite green while T() raises KeyError at run time on the path that needs it |
 | T3-007 | T3 | fixed | `tests/test_review.py:3600` | Mechanisms outside cmd_check that no test reaches: import's claim cap, block_risk's refusal, review_lang's fallback and cmd_next — each removable with the whole suite green |
@@ -153,8 +153,8 @@ Open: **0** of 168 records.
 | T3-018 | T3 | fixed | `tests/test_review.py:39` | The module-level locale refusal is written in Russian and fires exactly where Russian cannot print: stderr falls back to backslashreplace (fix review round 1, R1-003) |
 | T3-019 | T3 | fixed | `tests/test_review.py:5690` | A new class guard (every source rule in its own function, fed an invented sample) is missing from the fix report and both changelogs, which say three guards (fix review round 1, R1-004) |
 | T3-024 | T3 | fixed | `tests/test_review.py:5922` | The meta-guard recognises a real source by three literal marker strings, so a rule fed the tool as (SKILL / 'scripts' / 'review.py').read_text() needs no mutation table (fix review round 2, R2-005) |
-| T3-027 | T3 | deferred | `tests/test_review.py:7121` | The spawn rule recognises subprocess only as an import name: sp = subprocess, P = subprocess.run and getattr(subprocess, 'run') are silent (fix review round 3, R3-003) |
-| T3-028 | T3 | deferred | `tests/test_review.py:7381` | The history rule recognises git log only as a literal first argument: git(_LOG, ...) and git(*args) with 'log' inside are silent (fix review round 3, R3-004) |
+| T3-027 | T3 | deferred | `tests/test_review.py:7120` | The spawn rule recognises subprocess only as an import name: sp = subprocess, P = subprocess.run and getattr(subprocess, 'run') are silent (fix review round 3, R3-003) |
+| T3-028 | T3 | deferred | `tests/test_review.py:7380` | The history rule recognises git log only as a literal first argument: git(_LOG, ...) and git(*args) with 'log' inside are silent (fix review round 3, R3-004) |
 | T3-029 | T3 | deferred | `tests/test_review.py:5404` | The gate registry counts any attribute call named warn, so the stdlib warnings.warn in the tool reads as a 64th gate or errors the guard class out (fix review round 3, R3-005) |
 | T3-030 | T3 | fixed | `tests/test_review.py:7412` | named_assets required the skill under a directory literally named skills, so both asset tests fail on a copy in <tmp>/finetooth, the shape the mutation harness uses (fix review round 3, R3-006) |
 | T4-002 | T4 | fixed | `CHANGELOG.md:40` | NOTICE.md's unqualified promise that road-tested projects are not named is contradicted by CHANGELOG.md:40, which names the owner's own project and one of its paths |
@@ -183,8 +183,8 @@ Open: **0** of 168 records.
 | T4-033 | T4 | fixed | `docs/review/findings.jsonl:121` | T2-020 is the same glued-paragraph defect this round fixed as T4-022, yet stays open and review check is red on it (fix review round 2, R2-007) |
 | T4-034 | T4 | fixed | `tests/test_review.py:5102` | ShellGateMutationTest.GATES is a hand-written two-script dict, not read from git ls-files; a new shell gate falls outside the rule with nothing failing (fix review round 2, R2-008) |
 | T4-035 | T4 | fixed | `tests/test_review.py:5268` | _sweeps_without_body_check is satisfied by the text argparse_refused anywhere in the function and sees a sweep only when .run's first argument is a bare Name (fix review round 2, R2-009) |
-| T4-038 | T4 | deferred | `tests/test_review.py:6492` | OWN_BLOCK takes any line opening with [ as its own block, so a paragraph opening with a link is missed; LIST_OPENER needs spaces, so a tab after the marker is not a list item (fix review round 3, R3-003) |
-| T4-039 | T4 | deferred | `tests/test_review.py:6163` | The command-sweep rule passes a dead argparse_refused plus an assertion on it, and does not see a sweep over BODY_ARGV or a helper as a sweep at all (fix review round 3, R3-004) |
+| T4-038 | T4 | deferred | `tests/test_review.py:6491` | OWN_BLOCK takes any line opening with [ as its own block, so a paragraph opening with a link is missed; LIST_OPENER needs spaces, so a tab after the marker is not a list item (fix review round 3, R3-003) |
+| T4-039 | T4 | deferred | `tests/test_review.py:6162` | The command-sweep rule passes a dead argparse_refused plus an assertion on it, and does not see a sweep over BODY_ARGV or a helper as a sweep at all (fix review round 3, R3-004) |
 | T4-040 | T4 | fixed | `docs/review/journal.md:44` | The journal line of fix round 3 is labelled fixreview round 3 while it records 8 findings closed and cites the fix-3 report (fix review round 3, R3-005) |
 | T4-041 | T4 | fixed | `CHANGELOG.md:113` | Both CHANGELOGs say the second T4 fix review had eight findings, all closed; the register holds nine, T4-027 deferred to #28 (fix review round 3, R3-006) |
 
