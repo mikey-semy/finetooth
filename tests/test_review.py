@@ -5517,7 +5517,6 @@ class GateRegistryTest(unittest.TestCase):
         ("finding/no-code-fingerprint",         "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
         ("finding/code-changed",                "test_изменившийся_код_под_открытой_находкой_роняет_проверку"),
         ("finding/region-changed",              "test_правка_внутри_окна_роняет_проверку_за_его_краем_нет"),
-        ("finding/line-moved",                  "test_правка_выше_находки_сдвигает_строку_но_не_роняет_проверку"),
         ("finding/line-not-a-number",           "test_номер_строки_строкой_а_не_числом"),
         ("finding/line-past-end",               "test_несуществующая_строка_в_находке_роняет_проверку"),
         ("finding/rejected-without-reason",     "test_отвергнутая_находка_без_причины_роняет_проверку"),
@@ -10684,7 +10683,7 @@ class RegionFingerprintTest(unittest.TestCase):
         return "".join(l + "\n" for l in lines)
 
     def _stand(self, *, line: int | None = AT, status: str = "deferred",
-               lines: list[str] | None = None) -> list[str]:
+               lines: list[str] | None = None, **extra) -> list[str]:
         """Стенд с зелёным `check` и одной находкой на `src/one.ts`; блок в работе, чтобы
         правки файла не роняли отпечаток блока — здесь проверяется отпечаток находки."""
         body = lines or [f"строка {i}" for i in range(1, self.LINES + 1)]
@@ -10692,7 +10691,7 @@ class RegionFingerprintTest(unittest.TestCase):
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         row = {"block": "H1", "severity": "medium", "confidence": "confirmed", "status": "open",
-               "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий"}
+               "file": "src/one.ts", "claim": "дефект", "scenario": "сценарий", **extra}
         if line is not None:
             row["line"] = line
         self.s.write("docs/review/reports/H1-findings.jsonl",
@@ -10727,15 +10726,15 @@ class RegionFingerprintTest(unittest.TestCase):
         self.assertNotIn("code_sha", row, "у записи один отпечаток, не два")
 
     def test_правка_выше_находки_сдвигает_строку_но_не_роняет_проверку(self):
-        """Главный случай #37: правка в другом месте того же файла, строки уехали."""
+        """Главный случай #37: правка в другом месте того же файла, строки уехали.
+
+        О сдвиге `check` молчит: показ сам берёт текущую строку (тест ниже), а
+        предупреждение на каждый сдвиг приходило на каждый PR активного файла — шум."""
         body = self._stand()
         self._edit(["новая 1", "новая 2", "новая 3"] + body[:5] + ["правка"] + body[6:])
         out = self.s.run("check")
         self.assertEqual(out.returncode, 0, out.stdout)
-        self.assertNotIn("changed since", out.stdout)
-        self.assertIn("now sits at src/one.ts:23, not 20", out.stdout,
-                      "сдвиг строки обязан быть сказан: на неё смотрят findings.md и SARIF")
-        self.assertIn("restamp H1-001", out.stdout, "предупреждение обязано говорить, что делать")
+        self.assertEqual(out.stdout.count("H1-001"), 0, out.stdout)
 
         moved = self.s.run("restamp", "H1-001")
         self.assertEqual(moved.returncode, 0, moved.stderr)
@@ -10746,13 +10745,74 @@ class RegionFingerprintTest(unittest.TestCase):
         self.s.commit("перештамповка")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 0, out.stdout)
-        self.assertNotIn("now sits at", out.stdout)
 
         # Повторный ввоз не возвращает строку из черновика блока: отпечаток и строка —
         # один якорь, и черновик охотника помнит строку, какой она была до сдвига.
         self.assertEqual(self.s.run("import", "H1", "--force").returncode, 0)
         self.assertEqual(self._row()["line"], 23)
-        self.assertNotIn("now sits at", self.s.run("check").stdout)
+
+    def _shown(self) -> dict[str, str]:
+        """Где находку показывает каждый показ: findings.md, SARIF, итог, промпты, `roots`."""
+        self.assertEqual(self.s.run("findings").returncode, 0)
+        md = (self.s.root / "docs/review/findings.md").read_text(encoding="utf-8")
+        sarif = json.loads(self.s.run("sarif").stdout)
+        res = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        summary = self.s.run("summary")
+        self.assertEqual(summary.returncode, 0, summary.stderr)
+        written = self.s.root / "docs/review-summary.md"
+        summary_text = written.read_text(encoding="utf-8")
+        written.unlink()                    # ничей файл, не мешать `check` дальше
+        hunter = self.s.run("prompt", "H1")
+        fix = self.s.run("prompt", "H1", "--role", "fix")
+        self.assertEqual(fix.returncode, 0, fix.stderr)
+        roots = self.s.run("roots")
+        return {"findings.md": re.search(r"`src/one\.ts:(\d+)`", md).group(1),
+                "sarif": str(res["startLine"]),
+                "summary": re.search(r"src/one\.ts:(\d+)", summary_text).group(1),
+                "hunter": re.search(r"src/one\.ts:(\d+)", hunter.stdout).group(1),
+                "fix": re.search(r"src/one\.ts:(\d+)", fix.stdout).group(1),
+                "roots": re.search(r"src/one\.ts:(\d+)", roots.stdout).group(1)}
+
+    def test_показ_берёт_строку_где_код_сейчас_реестр_не_тронут(self):
+        """findings.md, SARIF, итог, промпты и `roots` показывают строку, на которой окно
+        находки стоит в текущем файле, а не записанную. Реестр при этом не переписан:
+        показ — не правка, записывает строку только `restamp`."""
+        body = self._stand(status="open", root="корень для roots")
+        self.assertEqual(set(self._shown().values()), {str(self.AT)})
+        md_before = (self.s.root / "docs/review/findings.md").read_text(encoding="utf-8")
+        register = (self.s.root / "docs/review/findings.jsonl").read_bytes()
+
+        self._edit(["новая 1", "новая 2", "новая 3"] + body)
+        # findings.md, отрисованный до сдвига, не устарел: строка в нём была верной, и
+        # сдвиг выше находки не должен краснить `check` вместо прежнего предупреждения.
+        self.assertEqual((self.s.root / "docs/review/findings.md").read_text(encoding="utf-8"),
+                         md_before)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+        self.assertEqual(self._shown(), dict.fromkeys(
+            ("findings.md", "sarif", "summary", "hunter", "fix", "roots"), str(self.AT + 3)))
+        self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_bytes(), register,
+                         "показ переписал реестр")
+        self.assertEqual(self._row()["line"], self.AT)
+        self.s.commit("findings.md с текущей строкой")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+        # Строка в findings.md сверяется как число, остальное — как было: правка руками ловится.
+        md = self.s.root / "docs/review/findings.md"
+        md.write_text(md.read_text(encoding="utf-8").replace(
+            f"src/one.ts:{self.AT + 3}`", "src/one.ts:строка`"), encoding="utf-8")
+        self.assertIn("findings.md diverged", refused(self.s.run("check")))
+
+    def test_окно_не_нашлось_показ_держит_записанную_строку(self):
+        body = self._stand(status="open", root="корень для roots")
+        body[self.AT - 1] = "дефект переписан"
+        self._edit(["новая 1", "новая 2", "новая 3"] + body)
+        self.assertIn("finding H1-001: the code around src/one.ts:20 changed",
+                      refused(self.s.run("check")))
+        self.assertEqual(set(self._shown().values()), {str(self.AT)},
+                         "окна нет — показывать нечего, кроме записанной строки")
 
     def test_правка_внутри_окна_роняет_проверку_за_его_краем_нет(self):
         body = self._stand()
@@ -10792,8 +10852,26 @@ class RegionFingerprintTest(unittest.TestCase):
         self._edit(["вставка"] + body)
         out = self.s.run("check")
         self.assertEqual(out.returncode, 0, out.stdout)
-        self.assertIn(f"now sits at src/one.ts:{at + 1}, not {at}", out.stdout,
+        self.s.run("findings")
+        md = (self.s.root / "docs/review/findings.md").read_text(encoding="utf-8")
+        self.assertIn(f"`src/one.ts:{at + 1}`", md,
                       "находка — во втором повторе, а не в первом попавшемся")
+
+    def test_запись_с_окном_без_строки_не_роняет_сверку_findings_md(self):
+        """Маска строки в сверке findings.md ставится только туда, где показ пишет строку.
+        Окно без строки и без находки в файле показывается без строки, и если бы сверка всё
+        равно ждала там число, `check` к одному настоящему отказу добавил бы ложный."""
+        body = self._stand()
+        f_path = self.s.root / "docs/review/findings.jsonl"
+        row = self._row()
+        row.pop("line")
+        f_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        body[self.AT - 1] = "дефект переписан"
+        self._edit(body)
+        self.s.run("findings")
+        out = self.s.run("check")
+        self.assertIn("changed since it was stamped", refused(out))
+        self.assertNotIn("findings.md diverged", out.stdout)
 
     def test_окно_у_краёв_файла_обрезается_и_находится(self):
         body = self._stand(line=1)
@@ -10876,7 +10954,6 @@ class RegionFingerprintTest(unittest.TestCase):
         self.s.commit("перештамповка")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 0, out.stdout)
-        self.assertNotIn("now sits at", out.stdout)
 
     def test_файл_из_индекса_не_выложенный_на_диск_находится(self):
         self._stand()

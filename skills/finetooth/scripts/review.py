@@ -24,6 +24,7 @@ import re
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
@@ -648,6 +649,47 @@ def locate_region(f: dict, lines: list[bytes]) -> int | None:
     hits = [s + above + 1 for s in range(0, len(lines) - count + 1)
             if region_hash(lines, s, count) == f.get("region_sha")]
     return min(hits, key=lambda at: (abs(at - was), at)) if hits else None
+
+
+def line_follows_code(f: dict) -> bool:
+    """Whether the line this finding is SHOWN at is looked up in the current file rather than
+    read from the register: any finding with a region fingerprint and a line, whatever its
+    status. A closed one is looked up too — a rejected finding's code is usually still there,
+    and a fixed one's window is usually gone, which leaves the recorded line; a whole-file
+    fingerprint has no window to look for, and a line that is not a line number (a gate of
+    its own refuses it) is shown as written."""
+    line = f.get("line")
+    return (bool(f.get("region_sha")) and isinstance(line, int) and not isinstance(line, bool)
+            and line >= 1)
+
+
+def shown_lines() -> Callable[[dict], object]:
+    """The line every display of a finding uses: findings.md, the SARIF export, the summary,
+    the prompts, `roots`.
+
+    For a finding whose line follows its code, the window is looked for in the current file
+    (`locate_region`) and, found, the line it sits on NOW is shown; not found, the recorded
+    line, and `check` refuses the finding if it is live (`finding/region-changed`). The
+    register is not rewritten: this is what is shown, not what is recorded, and `restamp`
+    stays the one command that records a line. Before, the displays read the register's line
+    and `check` warned on every shift (`finding/line-moved`) so a human would restamp — in an
+    actively edited file that warning came on every PR, and it was there only to correct a
+    display.
+
+    Returns a function, so the lines of a file are read once however many findings sit in it.
+    """
+    cache: dict[str, list[bytes] | None] = {}
+
+    def line_of(f: dict):
+        line = f.get("line")
+        if not line_follows_code(f):
+            return line
+        rel = f.get("file", "")
+        if rel not in cache:
+            cache[rel] = text_lines(rel)
+        lines = cache[rel]
+        return (locate_region(f, lines) if lines is not None else None) or line
+    return line_of
 
 
 def code_fingerprint(rel: str, line) -> dict:
@@ -1640,8 +1682,11 @@ def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
                    f"{(s.get('finished') or '')[:10]} | {n_files} | `{s.get('reviewed_sha') or '—'}` | "
                    f"{acceptance_of(b)} |")
     out.append("")
+    line_of = shown_lines()
+
     def finding_line(f: dict, reason_key: str | None) -> str:
-        where = f"`{f.get('file')}:{f.get('line')}`" if f.get("line") else f"`{f.get('file')}`"
+        at = line_of(f)
+        where = f"`{f.get('file')}:{at}`" if at else f"`{f.get('file')}`"
         line = f"- **{f.get('id')}** ({f.get('severity')}) {where} — {f.get('claim', '').strip()}"
         if reason_key and f.get(reason_key):
             line += f"  \n  *{f[reason_key].strip()}*"
@@ -1843,6 +1888,7 @@ def render_sarif(defn: dict, rows: list[dict]) -> dict:
         })
     results = []
     review_id = defn.get("review_id", "")
+    line_of = shown_lines()
     for f in live:
         fid = f.get("id", "?")
         report = sarif_report(idx.get(f.get("block", "")))
@@ -1882,7 +1928,11 @@ def render_sarif(defn: dict, rows: list[dict]) -> dict:
             uri = quote(f["file"].removeprefix("./"), safe="/")
             # GitHub lists `region.startLine` as required. A finding without a line is about
             # the whole file, and line 1 is what the action itself hashes for such a result.
-            line = f.get("line") if isinstance(f.get("line"), int) and f["line"] >= 1 else 1
+            # The line is where the finding's code sits NOW (`shown_lines`): an alert
+            # pointing at a line the code has left annotates the wrong line of the PR. The
+            # alert keeps its identity across the move — that is `partialFingerprints`.
+            at = line_of(f)
+            line = at if isinstance(at, int) and not isinstance(at, bool) and at >= 1 else 1
             result["locations"] = [{"physicalLocation": {
                 "artifactLocation": {"uri": uri},
                 "region": {"startLine": line}}}]
@@ -2433,8 +2483,10 @@ def render_recorded_for(block_id: str) -> str:
     if not rows:
         return T("rec_none")
     out = []
+    line_of = shown_lines()
     for f in sorted(rows, key=lambda f: f.get("id", "")):
-        where = f.get("file", "") + (f":{f['line']}" if f.get("line") else "")
+        at = line_of(f)
+        where = f.get("file", "") + (f":{at}" if at else "")
         out.append(T("rec_row", id=f.get("id", "?"), severity=f.get("severity", "?"),
                      status=f.get("status", "?"), where=where, claim=f.get("claim", ""),
                      date=(f.get("imported_at") or "")[:10]))
@@ -2448,10 +2500,11 @@ def render_findings_for(block_id: str) -> str:
     order = {s: i for i, s in enumerate(SEVERITIES)}
     rows.sort(key=lambda f: (order.get(f.get("severity"), 9), f.get("id", "")))
     out = []
+    line_of = shown_lines()
     for f in rows:
         where = f.get("file", "")
-        if f.get("line"):
-            where += f":{f['line']}"
+        if at := line_of(f):
+            where += f":{at}"
         out.append(
             f"### {f['id']} · {f.get('severity')} · {T('f_conf')} {f.get('confidence')}\n"
             f"{T('f_where')} `{where}`\n\n"
@@ -2994,15 +3047,20 @@ def set_one_finding(args, rows: list[dict], fid: str) -> None:
 # ------------------------------------------------------------------------ findings
 
 
-def render_findings_md(rows: list[dict]) -> str:
+def render_findings_md(rows: list[dict], line_of: Callable[[dict], object] | None = None) -> str:
     """Render findings.md from the finding rows.
 
-    Deliberately a PURE function of `findings.jsonl`: no wall clock, no counts
-    of anything not in the rows. A generation stamp would make every run of
-    `review.py findings` a diff, so the file would arrive in review commits as
-    noise and `review-check` could not tell a stale render from a fresh one by
-    comparing content. When the file changed is a question git already answers.
+    Deliberately a function of `findings.jsonl` and nothing else but one thing: no wall
+    clock, no counts of anything not in the rows. A generation stamp would make every run
+    of `review.py findings` a diff, so the file would arrive in review commits as noise and
+    `review-check` could not tell a stale render from a fresh one by comparing content.
+    When the file changed is a question git already answers.
+
+    The one thing is the line of a finding with a region fingerprint, which is where its code
+    sits NOW (`shown_lines`), not the line the register recorded. `line_of` replaces that lookup —
+    `check` passes one that leaves a mark, see `findings_md_matches`.
     """
+    line_of = line_of or shown_lines()
     order = {s: i for i, s in enumerate(SEVERITIES)}
     rows = sorted(rows, key=lambda f: (order.get(f.get("severity"), 9), f.get("id", "")))
 
@@ -3026,8 +3084,8 @@ def render_findings_md(rows: list[dict]) -> str:
         out.append("|---|---|---|---|---|")
         for f in chunk:
             where = f.get("file", "")
-            if f.get("line"):
-                where += f":{f['line']}"
+            if at := line_of(f):
+                where += f":{at}"
             claim = (f.get("claim", "") or "").replace("|", "\\|").replace("\n", " ")
             out.append(
                 f"| {f.get('id','')} | {f.get('block','')} | {f.get('status','')} | "
@@ -3035,6 +3093,22 @@ def render_findings_md(rows: list[dict]) -> str:
             )
         out.append("")
     return "\n".join(out) + "\n"
+
+
+def findings_md_matches(text: str, rows: list[dict]) -> bool:
+    """Whether findings.md on disk is the render of this register.
+
+    Everything is compared except the line of a finding whose line follows its code: that
+    line was right when the file was rendered and moves with every edit above the finding.
+    Comparing it would bring back, as a refusal, the very noise showing the current line
+    removed — a PR adding a line above a finding would turn `check` red until someone ran
+    `findings` again. What is compared there instead is that it IS a line number.
+    """
+    # The mark is random per call, so no text a finding carries can be taken for it.
+    mark = f"\0{os.urandom(8).hex()}\0"
+    expected = render_findings_md(rows, lambda f: mark if line_follows_code(f) else f.get("line"))
+    pattern = r"[1-9][0-9]*".join(re.escape(part) for part in expected.split(mark))
+    return re.fullmatch(pattern, text) is not None
 
 
 def cmd_findings(args) -> int:
@@ -3264,6 +3338,7 @@ def cmd_roots(args) -> int:
     """Roots: how many instances each has and which guard each instance is recorded under."""
     rows = findings()
     groups = roots_of(rows, args.block)
+    line_of = shown_lines()
     if not groups:
         print("no roots recorded — the `root` field of the findings is not filled in")
         return 0
@@ -3288,8 +3363,8 @@ def cmd_roots(args) -> int:
                 print(f"       {guard or 'no guard'} — {', '.join(ids)}")
         for f in items:
             where = f.get("file", "")
-            if f.get("line"):
-                where += f":{f['line']}"
+            if at := line_of(f):
+                where += f":{at}"
             print(f"       {f.get('id','?'):<10} {f.get('status','?'):<9} {where}")
     return 0
 
@@ -4027,16 +4102,14 @@ def cmd_check(args) -> int:
                     f"{fid} fixed --commit <sha>`), or the description is stale, or the defect is "
                     f"still there (`{CLI} restamp {fid}`, with `--line <N>` if it now sits elsewhere)"
                 )
-            elif at != f.get("line"):
-                # A warning, not a refusal: the code under the finding is exactly what was
-                # stamped, only lines above it came or went. `check` writes nothing, and the
-                # register's line is what findings.md and the SARIF export point at — so the
-                # shift is said, and one command records it.
-                gates.warn(
-                    "finding/line-moved",
-                    f"finding {fid}: its code is unchanged but now sits at {f.get('file')}:{at}, "
-                    f"not {f.get('line')} — `{CLI} restamp {fid}` records the new line"
-                )
+            # Found on another line — nothing to say. Every display shows the line the window
+            # sits on now (`shown_lines`), so a shift above the finding is not a stale record;
+            # the warning that used to name it (`finding/line-moved`) came on every PR that
+            # touched an actively edited file and asked for a `restamp` that changed nothing
+            # but a display. The recorded line is still read in one place — to pick the
+            # nearest copy when the window repeats in its file — and no cited window repeated
+            # from K=2 on in the measurement behind REGION_K, so a drifting record costs
+            # nothing measured; a "large shift" threshold would be a number from the head.
         elif f.get("status") in ("open", "deferred") and f.get("code_sha"):
             fresh = file_sha(f.get("file", ""))
             if fresh and fresh != f["code_sha"]:
@@ -4107,7 +4180,7 @@ def cmd_check(args) -> int:
     #    was written, in whatever order, so mtimes say nothing about which of the
     #    two is the newer truth.
     if FINDINGS_MD.exists():
-        if FINDINGS_MD.read_text(encoding="utf-8") != render_findings_md(rows):
+        if not findings_md_matches(FINDINGS_MD.read_text(encoding="utf-8"), rows):
             gates.refuse("findings-md/stale",
                          f"findings.md diverged from findings.jsonl — run `{CLI} findings`")
 
