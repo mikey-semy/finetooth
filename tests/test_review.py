@@ -4952,14 +4952,16 @@ class SpendTest(unittest.TestCase):
                             f'exec {review} "$@"\n', encoding="utf-8")
             wrap.chmod(0o755)
             review = str(wrap)
-        env = child_env(PATH=f"{stub_dir}:{os.environ['PATH']}",
-                        REVIEW=review, TMPDIR=str(self.s.root / "runs"), **extra_env)
+        # What the run adds to the shared environment; the environment itself is built at the
+        # spawn site with child_env(), where the suite's guard over spawns can see it.
+        env_extra = dict(PATH=f"{stub_dir}:{os.environ['PATH']}",
+                         REVIEW=review, TMPDIR=str(self.s.root / "runs"), **extra_env)
         (self.s.root / "runs").mkdir()
         # Через `shell_gate`: отказы этого скрипта — предмет мутационной узды ворот на
         # оболочке, а она подменяет скрипт копией через окружение.
         extra = ["--diff", "HEAD~1..HEAD"] if role == "fixreview" else []
         return (["bash", str(shell_gate("skills/finetooth/assets/run-role.sh")), "H1", role,
-                 *extra], env)
+                 *extra], env_extra)
 
     def _journal(self) -> str:
         journal = self.s.root / "docs/review/journal.md"
@@ -4969,11 +4971,12 @@ class SpendTest(unittest.TestCase):
                   with_result: bool = True, role: str = "hunter", before=None,
                   **extra_env: str) -> tuple[subprocess.CompletedProcess, str]:
         """Прогон `_role_cmd` до конца; `before` — что сделать со стендом перед запуском."""
-        cmd, env = self._role_cmd(exit_code, truncated, log_fails, with_result, role,
-                                  **extra_env)
+        cmd, env_extra = self._role_cmd(exit_code, truncated, log_fails, with_result, role,
+                                        **extra_env)
         if before:
             before()
-        out = subprocess.run(cmd, cwd=self.s.root, capture_output=True, text=True, env=env)
+        out = subprocess.run(cmd, cwd=self.s.root, capture_output=True, text=True,
+                             env=child_env(**env_extra))
         return out, self._journal()
 
     def _claude_args(self) -> list[str]:
@@ -5135,8 +5138,8 @@ class SpendTest(unittest.TestCase):
         """Убитая обёртка оставляла `claude -p` работать, и проверяющий дописал отчёт после
         остановки (see #44). Остановка скрипта передаётся агенту, а строка журнала всё
         равно пишется — как у упавшего прогона."""
-        cmd, env = self._role_cmd(exit_code=0, STUB_SLEEP="1")
-        proc = subprocess.Popen(cmd, cwd=self.s.root, env=env, text=True,
+        cmd, env_extra = self._role_cmd(exit_code=0, STUB_SLEEP="1")
+        proc = subprocess.Popen(cmd, cwd=self.s.root, env=child_env(**env_extra), text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         pid_file = self.s.root / "stub" / "self.pid"
         agent = None
