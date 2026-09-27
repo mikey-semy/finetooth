@@ -5697,6 +5697,7 @@ class GateRegistryTest(unittest.TestCase):
         ("manifest/too-short",                  "test_куцый_манифест_роняет_проверку"),
         ("report/verify-missing",               "test_пройденный_блок_без_отчёта_проверяющего"),
         ("report/verify-weak",                  "test_пустой_отчёт_проверяющего_не_проводит_блок"),
+        ("findings/draft-not-imported",         "test_неимпортированная_строка_в_черновике_пройденного_блока_роняет_check"),
         ("report/declared-missing",             "test_объявленный_отчёт_которого_нет_на_диске"),
         ("report/hunter-missing",               "test_статус_дальше_running_без_отчёта_охотника"),
         ("state/running-without-timestamp",     "test_running_без_отметки_времени"),
@@ -8980,6 +8981,129 @@ class RecordedFindingsImportTest(unittest.TestCase):
         out = self.s.run("import", "H1", "--append")
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertIn("V2-001", out.stdout + out.stderr)
+
+class DraftNotImportedTest(unittest.TestCase):
+    """A block passed verification with its verifier's draft never imported: its findings
+    are in `docs/review/reports/<B>-findings.jsonl` and nowhere else, so `summary`,
+    `findings.md` and the fix gate do not see them, and `check` called the review
+    consistent. A field run lost three blocks that way — a key leaking into a frontend
+    bundle, and 42 checkout and payment findings, four of them critical (see #42).
+
+    "Not imported" is what `import --append` would add: a row whose id is not in the
+    register. Both sides are held: a row the register lacks refuses `set-status
+    verified/closed` and `check`; after `import` both pass; no draft or an empty one is a
+    block without findings."""
+
+    VERIFY = ("# отчёт проверяющего\n\n## Вердикты по находкам охотника\n"
+              "- дефект в one.ts — confirmed: воспроизведён вызовом.\n\n"
+              "## Состояние охвата блока\nОхват полный: файл прочитан, гипотеза прогнана.\n")
+
+    def setUp(self):
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "".join(f"строка {i}\n" for i in range(1, 21)))
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=self.VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.draft_path = Path(self.s.root, "docs/review/reports/H1-findings.jsonl")
+
+    def row(self, claim, **kw):
+        base = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "line": 5, "claim": claim, "scenario": "x does y"}
+        base.update(kw)
+        return base
+
+    def draft(self, *rows, extra: str = ""):
+        self.draft_path.write_text(
+            extra + "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+            encoding="utf-8")
+
+    def status(self):
+        st = json.loads(Path(self.s.root, "docs/review/state.json").read_text(encoding="utf-8"))
+        return st["blocks"]["H1"]["status"]
+
+    def verified_without_draft(self):
+        out = self.s.run("set-status", "H1", "verified")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_неимпортированный_черновик_не_пускает_в_verified_и_closed(self):
+        self.draft(self.row("первый дефект"), self.row("второй дефект", line=9))
+        for status in ("verified", "closed"):
+            with self.subTest(status=status):
+                out = self.s.run("set-status", "H1", status)
+                self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+                self.assertIn("неимпортированных строк: 2", out.stderr)
+                self.assertIn("import H1`", out.stderr)
+                self.assertIn("import H1 --append", out.stderr)
+                self.assertEqual(self.status(), "todo", "отказ не должен менять состояние")
+
+    def test_неимпортированная_строка_в_черновике_пройденного_блока_роняет_check(self):
+        self.verified_without_draft()
+        self.draft(self.row("дефект, дописанный после проверки"))
+        failed = refused(self.s.run("check"))
+        self.assertIn("неимпортированных строк: 1", failed)
+        self.assertIn("import H1 --append", failed)
+
+    def test_после_импорта_set_status_и_check_проходят(self):
+        self.draft(self.row("первый дефект"), self.row("второй дефект", line=9))
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        out = self.s.run("set-status", "H1", "verified")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.s.run("findings")
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        # добор после импорта: строка без номера — снова неимпортирована, и `--append` её вносит
+        self.draft_path.write_text(self.draft_path.read_text(encoding="utf-8")
+                                   + json.dumps(self.row("третий дефект", line=12),
+                                                ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertIn("неимпортированных строк: 1", refused(self.s.run("check")))
+        self.assertEqual(self.s.run("set-status", "H1", "closed").returncode, 2)
+        self.assertEqual(self.s.run("import", "H1", "--append").returncode, 0)
+        self.s.run("findings")
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        self.assertEqual(self.s.run("set-status", "H1", "closed").returncode, 0)
+
+    def test_повторный_append_не_вносит_записанное_дважды(self):
+        """Другая сторона того же правила: то, что ворота считают импортированным, `import
+        --append` пропускает. Правило одно — функция одна, и она держится с обеих сторон."""
+        self.draft(self.row("первый дефект"), self.row("второй дефект", line=9))
+        self.assertEqual(self.s.run("import", "H1", "--append").returncode, 0)
+        out = self.s.run("import", "H1", "--append")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("appended 0 findings", out.stdout)
+        reg = Path(self.s.root, "docs/review/findings.jsonl").read_text(encoding="utf-8")
+        self.assertEqual(len([l for l in reg.splitlines() if l.strip()]), 2)
+
+    def test_пустой_черновик_и_его_отсутствие_не_отказ(self):
+        self.assertFalse(self.draft_path.exists())
+        self.verified_without_draft()
+        self.draft(extra="\n# находок нет\n\n")
+        check = self.s.run("check")
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        self.assertEqual(self.s.run("set-status", "H1", "closed").returncode, 0)
+
+    def test_нечитаемый_черновик_называет_строку(self):
+        self.verified_without_draft()
+        self.draft(self.row("дефект", id="H1-001"), extra="{не json\n")
+        failed = refused(self.s.run("check"))
+        self.assertIn("H1-findings.jsonl line 1: not JSON", failed)
+        out = self.s.run("set-status", "H1", "closed")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+
+    def test_отказ_по_английски_в_английском_ревью(self):
+        self.s.blocks(paths=["src/one.ts"], lang="en")
+        self.draft(self.row("defect"))
+        out = self.s.run("set-status", "H1", "verified")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("holds 1 row(s) the register does not", out.stderr)
+
 
 class TemplateContractTest(unittest.TestCase):
     """УЗДА КЛАССА «ворота спрашивают то, о чём шаблон роли молчит».
