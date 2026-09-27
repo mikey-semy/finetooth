@@ -90,7 +90,10 @@ one of your own:
    the turn cap is twice what the first measured run of the role needed).
 3. **Verifier** — a different agent: `review prompt <ID> --role verify`. Checks every finding
    by execution, does its own pass over the most dangerous places, rewrites the findings file.
-   Rejected findings are not deleted — they stay with the reason. Then `review set-status <ID> verified`.
+   Rejected findings are not deleted — they stay with the reason. Then `review import <ID>`
+   (step 5) and `review set-status <ID> verified`: `verified` and `closed` are refused while the
+   draft holds rows the register does not, and `check` refuses the same for a block past
+   verification — unimported findings are invisible to the summary and the fix gate.
 4. **Acceptance.** Read both reports yourself and check them against the acceptance criterion.
    `review hypotheses <ID>` shows which of the block's hypotheses got a verdict and where.
    Coverage incomplete — the block goes back for another pass, not to closure.

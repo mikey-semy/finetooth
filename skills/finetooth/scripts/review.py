@@ -298,6 +298,8 @@ MSG = {
   "dec_none": "(no human decision is recorded for this block — work by the rules above)",
   "loop_stop": "loop signal: the top finding lies in the code the previous round wrote — the human decides. {id} ({sev}, {file}:{line}) of fix review round {prev} sits on a line fix round {prev} changed ({diff}); another round would repeat that pattern. Record the decision — a different mechanism, a revert of the class, or closing the block — with `{cli} decide {block} \"<decision>\"`: it goes into the next fix and fix review prompts. If the decision is to close the block: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, after fix review round {round}: {text}",
+  "draft_unimported": "{block}: the draft {draft} holds {n} row(s) the register does not — the findings the block's verification wrote are not in the review: `summary`, `findings.md`, `sarif` and the fix gate do not see them. Take them in: `{cli} import {block}` when the block has nothing recorded yet, `{cli} import {block} --append` on top of what is recorded; then `{cli} findings`.",
+  "draft_unreadable": "{block}: the draft {draft} cannot be read, so its findings are not in the register — {why}. Fix the line, then `{cli} import {block}` (or `--append` on top of what is recorded).",
   "f_where": "**Location:**", "f_claim": "**What is wrong:**", "f_scenario": "**Failure scenario:**", "f_invariant": "**Violated invariant:**", "f_conf": "confidence",
   "md_title": "# Review findings", "md_gen": "> This file is GENERATED from `findings.jsonl` by `{cli} findings`.", "md_noedit": "> Do not edit by hand — edit the jsonl and regenerate.",
   "md_open": "Open: **{live}** of {total} records.", "md_sev": "## {sev} ({open} open / {total})", "md_cols": "| id | block | status | location | what is wrong |",
@@ -369,6 +371,8 @@ MSG = {
   "dec_none": "(решений человека по блоку не записано — работай по правилам выше)",
   "loop_stop": "сигнал петли: главная находка лежит в коде, который написал прошлый круг, — решает человек. {id} ({sev}, {file}:{line}) из ревью правок круга {prev} стоит на строке, которую изменил круг починки {prev} ({diff}); ещё один круг повторит тот же узор. Запишите решение — другой механизм, откат класса или закрытие блока — командой `{cli} decide {block} \"<decision>\"`: оно попадёт в задания следующего круга починки и ревью правок. Если решено закрыть блок: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, после ревью правок круга {round}: {text}",
+  "draft_unimported": "{block}: в черновике {draft} есть строки, которых нет в реестре (неимпортированных строк: {n}) — находки, записанные проверкой блока, в ревью не попали: их не видят `summary`, `findings.md`, `sarif` и ворота починки. Внесите их: `{cli} import {block}`, если по блоку ещё ничего не записано, `{cli} import {block} --append` — поверх записанного; затем `{cli} findings`.",
+  "draft_unreadable": "{block}: черновик {draft} не читается, и его находок нет в реестре — {why}. Исправьте строку, затем `{cli} import {block}` (или `--append` поверх записанного).",
   "f_where": "**Место:**", "f_claim": "**Что не так:**", "f_scenario": "**Сценарий отказа:**", "f_invariant": "**Нарушенный инвариант:**", "f_conf": "уверенность",
   "md_title": "# Находки ревью", "md_gen": "> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `{cli} findings`.", "md_noedit": "> Не редактируй его руками — правь jsonl и перегенерируй.",
   "md_open": "Открыто: **{live}** из {total} записей.", "md_sev": "## {sev} ({open} открыто / {total})", "md_cols": "| id | блок | статус | место | что не так |",
@@ -2465,6 +2469,53 @@ def block_findings_path(b: dict) -> Path:
     return REVIEW / "reports" / f"{b['id']}-findings.jsonl"
 
 
+def read_draft(src: Path) -> list[tuple[int, object]]:
+    """The rows of a block's draft as `import` reads them, with their line numbers: blank
+    lines and `#` comments are not rows. A line that is not JSON raises ValueError — `import`
+    stops on it, the gate below names it."""
+    rows = []
+    for n, line in enumerate(src.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            rows.append((n, json.loads(line)))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{src.name} line {n}: not JSON — {exc}") from None
+    return rows
+
+
+def unimported_rows(rows: list, register: list[dict]) -> list:
+    """Draft rows the register does not hold — by the one rule `import` uses to call a row
+    already taken in: its id is in the register. `import` writes the ids it hands out back
+    into the draft, so after either import every row carries a recorded id; a row without
+    one, or with an id nobody recorded, is a finding the review does not know about."""
+    known = {e.get("id") for e in register if e.get("id")}
+    return [r for r in rows if not isinstance(r, dict) or r.get("id") not in known]
+
+
+def draft_not_imported(b: dict, register: list[dict]) -> str | None:
+    """Why the block's draft is not all in the register, or None when it is.
+
+    A field run: three blocks were set to `verified` with their verifiers' drafts never
+    imported — a key leaking into a frontend bundle and 42 checkout and payment findings,
+    four of them critical — and `check` called the review consistent while `summary` left
+    the blocks out (#42). No draft, or a draft with no rows, is a block without findings,
+    not a refusal."""
+    src = block_findings_path(b)
+    if not src.exists():
+        return None
+    draft = str(src.relative_to(ROOT))
+    try:
+        rows = [row for _, row in read_draft(src)]
+    except ValueError as exc:
+        return T("draft_unreadable", block=b["id"], draft=draft, why=exc, cli=CLI)
+    missing = unimported_rows(rows, register)
+    if not missing:
+        return None
+    return T("draft_unimported", block=b["id"], draft=draft, n=len(missing), cli=CLI)
+
+
 def next_finding_id(block_id: str) -> str:
     """The id `import --append` will give the block's first new finding: after the highest
     number the block has ever used — numbers have gaps, and a retired id stays retired."""
@@ -2546,14 +2597,11 @@ def cmd_import(args) -> int:
         found_in = {"role": "fixreview", "round": args.round, "diff": pinned}
 
     incoming = []
-    for n, line in enumerate(src.read_text(encoding="utf-8").splitlines(), 1):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            die(f"{src.name} line {n}: not JSON — {exc}")
+    try:
+        numbered = read_draft(src)
+    except ValueError as exc:
+        die(str(exc))
+    for n, row in numbered:
         # The limits `check` holds are held here too: a draft that `import` accepted and
         # `check` then refused made every later gate red on a row nobody could fix through
         # the tool (the kit's own review hit it three times).
@@ -2587,16 +2635,13 @@ def cmd_import(args) -> int:
             and (m := re.fullmatch(rf"{re.escape(args.block)}-(\d+)", f.get("id", "")))
         ]
         next_n = max(taken, default=0) + 1
-        known = {e.get("id") for e in existing}
         added = []
-        for f in incoming:
-            # After the previous import the block's file holds the already recorded findings
-            # with their numbers — the top-up appends new lines to it. What is recorded is
-            # skipped: the register knows more about it (status, fix), and the block's file
-            # does not override it.
-            fid = f.get("id")
-            if fid in known:
-                continue
+        # After the previous import the block's file holds the already recorded findings
+        # with their numbers — the top-up appends new lines to it. What is recorded is
+        # skipped: the register knows more about it (status, fix), and the block's file
+        # does not override it. "Recorded" is decided in one place, `unimported_rows`, which
+        # `set-status` and `check` ask too.
+        for f in unimported_rows(incoming, existing):
             f.setdefault("block", args.block)
             if f["block"] != args.block:
                 die(f"the top-up file holds a finding of another block {f['block']} — the import is stopped")
@@ -2918,6 +2963,11 @@ def cmd_set_status(args) -> int:
                 f"serious findings: fix them (`{CLI} set-finding <id> fixed --commit <sha>`), defer "
                 f"with a reason (`deferred --reason \"…\"`) or reject (`rejected --reason \"…\"`). "
                 f"To switch the gate off for this project: `\"fix_gate\": \"none\"` in blocks.json")
+    if args.status in ("verified", "closed"):
+        # A block passed with its draft outside the register passes with findings nobody
+        # will see: the summary, findings.md and the fix gate read the register only (#42).
+        if why := draft_not_imported(block_index(defn)[args.block], findings()):
+            die(why)
     s["status"] = args.status
     # The timestamp is set on EVERY entry into running, not only the first: a block
     # returned to work three weeks later would otherwise count as stuck at once, and the
@@ -3947,6 +3997,16 @@ def cmd_check(args) -> int:
                 )
             elif why := verify_report_problem(rep, any(f.get("block") == b["id"] for f in rows)):
                 gates.refuse("report/verify-weak", f"{b['id']}: {why}")
+
+    # A block past verification whose draft holds rows the register does not: its findings
+    # are missing from the summary, findings.md, SARIF and the fix gate, and nothing else here
+    # would say so (#42). `set-status` refuses the same on the way in; this catches a block
+    # that got there before the rule, or a draft written after it. Every status past
+    # verification, not only verified/closed, for the reason POST_VERIFY gives.
+    for b in defn["blocks"]:
+        if st["blocks"].get(b["id"], {}).get("status", "todo") in POST_VERIFY:
+            if why := draft_not_imported(b, rows):
+                gates.refuse("findings/draft-not-imported", why)
 
     # 3. declared reports exist
     for bid, s in st["blocks"].items():
