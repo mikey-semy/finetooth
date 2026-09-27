@@ -1389,10 +1389,37 @@ def log_records(*args: str) -> list[tuple[str, list[str]]]:
     return records
 
 
-def commit_file_sets(since: str | None = None) -> list[set[str]]:
-    """The set of files touched by every commit on the current history, UNDER TODAY'S NAMES
-    (first parent only: a merge lists everything the branch brought, and that is not a joint
-    change).
+def commit_file_sets(since: str | None = None) -> tuple[list[set[str]], int]:
+    """The set of files touched by every change that LANDED on the current line, UNDER
+    TODAY'S NAMES — and how many of those changes are merges.
+
+    The line is the first-parent history, and a merge on it is read as ONE change: the diff
+    against its first parent, i.e. everything the merged branch brought (see #43). That is
+    exactly the record a squash merge leaves, so a project gets the same numbers whether its
+    pull requests are squashed, rebased or merged — and it is the unit the thresholds of
+    `coupling` were measured on (the first project's history is squash commits). The reading
+    used to be `--first-parent --no-merges`: a merge dropped whole, and with it every change
+    of a project where all work lands by merge commits — a payment block showed 0 of its 24
+    commits and `order` ranked it last.
+
+    The format is named, `--diff-merges=first-parent` (git 2.31+), not left to `-m`: `-m`
+    takes it from the user's `log.diffMerges`, and with `combined` there a merge that only
+    one side touched came out with no files at all — measured, the history emptied again.
+
+    The other way to see merged work, `--no-merges` without `--first-parent` (every commit
+    of every branch), was measured and rejected. On eight repositories
+    with merged branches, 6 to 60% of the file pairs it lifts over `together ≥ 3` rest on
+    fewer than three landed changes — the WIP commits of one branch meeting the "three
+    separate joint changes" floor on their own; and the same fix-up commits multiply a
+    block's change count by however a team happens to split its work. The walk also stops
+    being one line, and the rename translation below assumes one: a rename seen at a commit
+    renames everything older ON THE SAME LINE.
+
+    Nothing to detect, no mode: on a history without merges on the first-parent line (linear,
+    squashed, rebased) the reading is the old one to the commit, and a merge counts as the
+    one change it is. The price is named: a long-lived branch merged rarely (a release
+    branch) lands as one wide change; the mass cutoff drops it when it is wider than the
+    repository's own outliers.
 
     Two things `--name-only` alone gets wrong, both measured on this repository's own
     history. A rename is printed as the new path only, so a file's churn is cut at every
@@ -1405,13 +1432,16 @@ def commit_file_sets(since: str | None = None) -> list[set[str]]:
     records let the old name be translated into the current one. The log is walked
     newest-first, so a rename `old → new` seen at a commit renames everything OLDER than it.
     """
-    args = ["--first-parent", "--no-merges", "--name-status", "-M"]
+    args = ["--first-parent", "--diff-merges=first-parent", "--name-status", "-M"]
     if since:
         args.append(f"--since={since}")
+    merge_run = git("rev-list", "--first-parent", "--merges", "HEAD")
+    merge_shas = set(merge_run.out.split()) if merge_run.code == 0 else set()
+    merges = 0
     sets: list[set[str]] = []
     # old path -> the name that path bears today
     alias: dict[str, str] = {}
-    for _sha, tokens in log_records(*args):
+    for sha, tokens in log_records(*args):
         current: set[str] = set()
         renames: list[tuple[str, str]] = []   # (old, new) of the commit being read
         i = 0
@@ -1433,9 +1463,20 @@ def commit_file_sets(since: str | None = None) -> list[set[str]]:
                 current.add(alias.get(p, p))
         if current:
             sets.append(current)
+            merges += sha in merge_shas
         for old, new in renames:
             alias[old] = alias.get(new, new)
-    return sets
+    return sets, merges
+
+
+def history_line(sets: list[set[str]], merges: int) -> str:
+    """Which history the counts rest on — printed, because "0 commits" on a block means one
+    thing on a linear history and another on a merge-commit one."""
+    if not merges:
+        return "history: the first-parent line, no merges on it — every commit is a change"
+    return (f"history: the first-parent line; {merges} of {len(sets)} changes are merges, each "
+            f"read as one change — the branch's diff against the first parent, as a squash "
+            f"merge would record it")
 
 
 def quantile(sorted_sizes: list[int], q: float) -> int:
@@ -1520,7 +1561,7 @@ def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: in
 def cmd_coupling(args) -> int:
     """Pairs of files that change together but belong to different blocks — the seams."""
     owned, _, _ = coverage_map()
-    sets = commit_file_sets(args.since)
+    sets, merges = commit_file_sets(args.since)
     if not sets:
         print("no commits in the history — nothing to couple")
         return 0
@@ -1530,6 +1571,7 @@ def cmd_coupling(args) -> int:
                                           args.min_share, hub_at)
     print(f"commits: {len(sets)}; mass commits skipped (> {cutoff} files, "
           f"{mass_basis(sets)}): {skipped}")
+    print(history_line(sets, merges))
     print(f"thresholds: together ≥ {args.min_together}, share ≥ {args.min_share:.0%}, "
           f"hub = coupled with ≥ {hub_at} blocks\n")
     if hubs:
@@ -1613,12 +1655,13 @@ def cmd_order(args) -> int:
     """Blocks in the order worth walking them: risk first, change frequency second."""
     defn, st = blocks(), state()
     owned, _, _ = coverage_map()
-    sets = commit_file_sets(args.since)
+    sets, merges = commit_file_sets(args.since)
     cutoff = mass_cutoff(sets) if sets else 0
     churn = block_churn(owned, sets, cutoff)
     window = f"since {args.since}" if args.since else "whole history"
     print(f"commits: {len(sets)} ({window}); mass commits skipped (> {cutoff} files): "
           f"{sum(1 for fs in sets if len({f for f in fs if f in owned}) > cutoff)}")
+    print(history_line(sets, merges))
     stated = sum(1 for b in defn["blocks"] if b.get("risk"))
     print(f"risk stated on {stated} of {len(defn['blocks'])} blocks"
           + ("" if stated else " — below, change frequency alone speaks; state `risk` on the blocks "

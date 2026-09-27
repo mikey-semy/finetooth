@@ -290,7 +290,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-459 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+463 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -468,7 +468,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 459 scenarios
+tests/                            tests of the tool and the skill format: 463 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
@@ -539,6 +539,17 @@ the top 10% of files by change frequency collected 34% of the later fixes, by si
 random 6% (Nagappan & Ball 2005; Moser et al. 2008). Frequency catches defects; the cost of
 failure catches irreversibility, so it stays the first key. The command reports; the order in
 `blocks.json` is the human's.
+
+**Which history both of them read.** `coupling` and `order` count changes that landed on the
+first-parent line, and a merge on it is one change — the merged branch's diff against the
+first parent, the record a squash merge would leave. So a project gets the same numbers
+whether it squashes, rebases or merges its pull requests, and a history made of merge
+commits alone is no longer read as empty (a block once showed 0 of its 24 commits). Both
+commands print which it was: no merges on the line, or how many of the changes are merges.
+Reading every commit of every branch instead was measured and rejected: on eight
+repositories with merged branches, 6–60% of the pairs it lifts over `together ≥ 3` rest on
+fewer than three landed changes — one branch's work-in-progress commits clearing the floor
+alone.
 
 **The fix gate.** The method finds faster than a project fixes (the first project: 77 findings
 on 5 blocks, 9 fixed), and a finding that never reaches a fix is debt — a month later the
