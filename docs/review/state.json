@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-27T21:17:20Z",
+  "updated_at": "2026-09-27T21:36:26Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -41,10 +41,10 @@
       "finished": "2026-09-25T18:55:38Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "0d235568d2d293cf",
+      "reviewed_sha": "b4bf5b473b73073f",
       "refs_sha": "22662bf7534341fb",
       "hypotheses_sha": "779f2bec72a0a16a",
-      "restamped_at": "2026-09-27T21:17:20Z"
+      "restamped_at": "2026-09-27T21:36:26Z"
     }
   }
 }
