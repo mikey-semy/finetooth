@@ -11,7 +11,8 @@
 #
 # Environment: REVIEW (how the project calls the tool; default: this skill's review.py),
 # ROLE_MAX_TURNS (override the cap), CLAUDE_MODEL (override the model), ROLE_DENY (tools the
-# run must NOT use, passed to `claude -p` as `--disallowedTools`; unset — nothing is denied).
+# run must NOT use, passed to `claude -p` as `--disallowedTools`; unset — nothing is denied),
+# ALLOW_DIRTY=1 (start a writing role on a dirty tree, see below).
 #
 # ROLE_DENY is the only limit here. The per-role tool lists below are `--allowedTools`, and
 # that flag PRE-APPROVES tools on top of the operator's own permission settings — it does not
@@ -23,6 +24,22 @@
 #
 # An absolute path in a rule needs `//`: measured, `Read(/home/x/**)` matched nothing and the
 # read went through, while `Read(//home/x/**)` refused Read, Grep and `cat` alike.
+#
+# A role that writes (fix, fixreview) does not start in a dirty tree: uncommitted changes
+# outside docs/review/ (where the roles' own reports and drafts live) are refused with exit 4.
+# In a field run 16 of 46 fixer runs ended on the turn cap with their edits uncommitted, and
+# the next run started on top of that work in progress. ALLOW_DIRTY=1 starts it anyway — the
+# operator's call, said out loud. Whatever the role, a tree left dirty after the run is named
+# in the output and in the journal line.
+#
+# Stopping a run: the PID of `claude -p` is written to `<stream>.pid` for as long as it runs
+# (the path is printed at the start), so
+#
+#   kill "$(cat /tmp/finetooth-runs/H1.fix.<stamp>.stream.jsonl.pid)"
+#
+# stops the agent itself. Stopping this script (Ctrl-C, `kill`) passes the stop on to it as
+# well — killing the wrapper alone once left `claude -p` running, and a verifier wrote its
+# report after the stop — and the spend of the cut run is still reported.
 set -euo pipefail
 BLOCK="${1:?block id}"; ROLE="${2:?role}"; shift 2
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +57,23 @@ case "$ROLE" in
   *) echo "unknown role: $ROLE" >&2; exit 2;;
 esac
 CAP="${ROLE_MAX_TURNS:-$CAP}"
+# The tree as git sees it, minus the review directory: the roles write their reports and
+# drafts there by design. Pathspecs from the top, so the answer does not depend on where in
+# the tree the script was started.
+dirty() { git status --porcelain -- ':/' ':(top,exclude)docs/review'; }
+DIRTY_BEFORE="$(dirty)"
+case "$ROLE" in
+  fix|fixreview)
+    if [ -n "$DIRTY_BEFORE" ]; then
+      if [ "${ALLOW_DIRTY:-}" != 1 ]; then
+        echo "refusing to start $ROLE: the working tree has uncommitted changes outside docs/review/:" >&2
+        printf '%s\n' "$DIRTY_BEFORE" >&2
+        echo "A $ROLE run edits and commits in this tree, and it would build on work nobody reviewed — often what a previous run left behind when it hit the turn cap. Commit it, stash it or remove it; to start on this tree anyway, run again with ALLOW_DIRTY=1." >&2
+        exit 4
+      fi
+      echo "ALLOW_DIRTY=1: starting $ROLE on a dirty tree" >&2
+    fi;;
+esac
 OUT="${TMPDIR:-/tmp}/finetooth-runs"; mkdir -p "$OUT"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 PROMPT="$OUT/$BLOCK.$ROLE.$STAMP.prompt.md"
@@ -52,12 +86,24 @@ if [ -n "${PROMPT_RC:-}" ]; then
   exit "$PROMPT_RC"
 fi
 echo "prompt: $PROMPT ($(wc -c < "$PROMPT") bytes); cap: $CAP turns; stream: $STREAM"
+echo "to stop the run: kill \"\$(cat $STREAM.pid)\""
 set +e
-claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
-  --max-turns "$CAP" ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"} --allowedTools "$TOOLS" \
-  ${ROLE_DENY:+--disallowedTools "$ROLE_DENY"} \
-  < "$PROMPT" > "$STREAM" 2> "$STREAM.err"
-RC=$?
+# The PID file is written by the process that then becomes `claude` (exec keeps the PID), so
+# it exists before the agent does anything — a file written after the start raced the run.
+( echo "$BASHPID" > "$STREAM.pid"
+  exec claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
+    --max-turns "$CAP" ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"} --allowedTools "$TOOLS" \
+    ${ROLE_DENY:+--disallowedTools "$ROLE_DENY"} ) \
+  < "$PROMPT" > "$STREAM" 2> "$STREAM.err" &
+PID=$!
+# A stop of this script is a stop of the run: passed on to the agent, and the report below
+# still runs on what the stream holds.
+trap 'kill -TERM "$PID" 2>/dev/null' TERM INT HUP
+wait "$PID"; RC=$?
+# A trapped signal interrupts `wait` before the agent has ended — wait for the agent itself.
+while kill -0 "$PID" 2>/dev/null; do wait "$PID"; RC=$?; done
+trap - TERM INT HUP
+rm -f "$STREAM.pid"
 # Everything below is reporting. Every step runs even if an earlier one failed — the reply
 # must reach the operator — and the exit code tells both endings apart: the run's own code
 # when `claude` failed, 3 when the run succeeded but a report was lost (no journal line: the
@@ -74,6 +120,17 @@ LINE="$(python3 "$HERE/../scripts/axes.py" "$STREAM" --journal)" || REPORT_RC=$?
 # ending (no result event, a non-success subtype) axes.py has already put there.
 if [ "$RC" -ne 0 ]; then
   LINE="RUN FAILED (claude exit $RC — the assignment was NOT completed) · $LINE"
+fi
+# What the run left behind. A run cut off mid-edit, a scratch file, a draft test: the next
+# role starts on it unless someone looks, and the journal is where the next session looks.
+DIRTY_AFTER="$(dirty)" || REPORT_RC=$?
+if [ -n "$DIRTY_AFTER" ]; then
+  COUNT="$(printf '%s\n' "$DIRTY_AFTER" | wc -l | tr -d ' ')"
+  SINCE=""
+  if [ -n "$DIRTY_BEFORE" ]; then SINCE=", dirty before the run too"; fi
+  echo "the working tree is dirty after the run — $COUNT path(s) outside docs/review/$SINCE:"
+  printf '%s\n' "$DIRTY_AFTER"
+  LINE="TREE LEFT DIRTY ($COUNT path(s) outside docs/review/$SINCE) · $LINE"
 fi
 $REVIEW log "$BLOCK" "$ROLE — $LINE" || { REPORT_RC=$?; echo "journal write failed — the spend line above is not recorded" >&2; }
 # ONE reader for the stream. A second one written here parsed every line with `json.loads`

@@ -79,6 +79,18 @@ task is to **close them correctly**, not quickly.
     tool found in the project's files:
 
     {{COMMIT_RULES}}
+14. **Commit each finding as it closes, not at the end.** A run can stop on the turn cap at
+    any moment, and whatever is not committed by then is left in the tree for the next run
+    to start on top of — in a field run, 16 of 46 fixer runs ended that way. Close a
+    finding, commit it, record it with `set-finding`, then take the next one.
+15. **Never run a gate or a test in the background.** Run it in the foreground and wait for
+    its result, however long the suite is: a run that finishes before a background job
+    reports never learns the outcome, and it is the outcome you report. Two fixers of a
+    field run lost theirs this way.
+16. **Leave nothing in the tree outside your fixes.** A probe, a draft test, a scratch
+    script, a copy of a file — delete it before you finish, or commit it when it is part of
+    the fix. At the end `git status` shows nothing but your report under `docs/review/`:
+    the next run refuses to start in a dirty tree.
 
 # Project invariants
 
@@ -95,6 +107,8 @@ it changes the mechanism, the findings are closed by the new mechanism, not patc
 one; if it moves part of the work out, do not do that part.
 
 # Findings to close
+
+{{BATCH}}
 
 {{FINDINGS}}
 
@@ -131,10 +145,11 @@ one will appear on its own.
 
 # What to deliver
 
-1. Fixes in the working tree, split into meaningful commits — in the style and language
-   accepted in the project (see the invariants and the `git log` history), signed and
-   attributed as rule 13 says.
-2. The file `{{REPORT_PATH}}`, written as you go:
+1. Fixes in the working tree, committed finding by finding as rule 14 says — in the style
+   and language accepted in the project (see the invariants and the `git log` history),
+   signed and attributed as rule 13 says.
+2. The file `{{REPORT_PATH}}`, written as you go (an earlier run of this round may have
+   started it — then add to it, do not overwrite):
    - a table: finding → verdict (closed / rejected) → commit;
    - for every finding: the probe that **reproduced it on the current code before the fix**;
      what was done; which test catches it; **does it go red on the reverted fix** (and does

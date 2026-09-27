@@ -16,6 +16,14 @@ stubs, the matrix of inputs, the mutations) as **one script file**, run it **onc
 output once. Independent commands go into one turn. A command whose result you will not use
 in the report is not run.
 
+**Never run the stand, a gate or a test in the background.** Run it in the foreground and
+wait for its result: a run that finishes before a background job reports never learns the
+outcome, and your verdicts rest on exactly that outcome. **Leave nothing in the tree.** The
+stand, a draft test, a probe — put them in a temporary directory outside the repository, or
+delete them before you finish: a verifier's draft test once stayed behind in `tests/`, and the
+next role started in a tree that was not the project's. At the end `git status` shows
+nothing but your files under `docs/review/`.
+
 ## 1. Check every hunter finding
 
 Hunter report: `{{HUNTER_REPORT}}`
