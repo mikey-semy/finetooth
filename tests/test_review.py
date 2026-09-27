@@ -2102,7 +2102,9 @@ class ReviewToolTest(unittest.TestCase):
 
     # ----------------------------------------------------------------- корни и узды
 
-    def _three_of_one_root(self) -> None:
+    def _three_of_one_root(self, status: str | None = None) -> None:
+        """Три экземпляра одного корня. Со `status` — стенд, на котором `check` иначе зелёный:
+        отчёты обеих ролей, карта покрытия и блок в названном статусе."""
         self.s.write("src/one.ts", "a\n")
         self.s.write("src/two.ts", "b\n")
         self.s.write("src/three.ts", "c\n")
@@ -2114,18 +2116,58 @@ class ReviewToolTest(unittest.TestCase):
                 for f in ("src/one.ts", "src/two.ts", "src/three.ts")]
         (self.s.root / "docs/review/reports/H1-findings.jsonl").write_text(
             "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+        if status:
+            self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                                  "## Ограничения охвата\nнет\n",
+                           verify=FULL_VERIFY.replace(
+                               "Находок нет.", "H1-001, H1-002, H1-003 — confirmed: копия "
+                               "предиката воспроизведена вызовом в каждом из трёх файлов."))
         self.s.commit()
         self.s.run("init")
         self.s.run("import", "H1")
         self.s.run("findings")
+        if status:
+            self.s.run("coverage")
+            self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
 
     def test_третий_повтор_корня_требует_узду(self):
-        """Класс, повторившийся трижды, закрывается правилом, а не списком правок."""
-        self._three_of_one_root()
+        """Класс, повторившийся трижды, закрывается правилом, а не списком правок — с того
+        момента, как его чинят: блок в `fixing` или уже закрыт."""
+        self._three_of_one_root("verified")
+        for status in ("fixing", "closed"):
+            with self.subTest(статус=status):
+                self.s.run("set-status", "H1", status)
+                out = self.s.run("check")
+                self.assertIn("and no guard", refused(out), out.stdout)
+                self.assertIn("рукописная копия предиката", out.stdout)
+                self.assertIn("--rule", out.stdout, "отказ обязан говорить, что делать")
+
+    def test_третий_повтор_на_стадии_проверки_предупреждает(self):
+        """Ворота 3 (RELEASING.md) требуют зелёного `check` после охотника и проверяющего, а
+        узду записывает только починка (`set-finding --rule` на существующий файл). Отказ
+        сразу после проверки делал ворота недостижимыми на блоке, где охотник трижды нашёл
+        один класс (прогон кандидата 0.8.0 на живом проекте). До починки класс называется
+        предупреждением — с тем, что понадобится, — и прогон зелёный."""
+        self._three_of_one_root("verified")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        said = warned(out)
+        self.assertIn("рукописная копия предиката", said, out.stdout)
+        self.assertIn("3 instances (H1-001, H1-002, H1-003)", said)
+        self.assertIn("--rule", said, "предупреждение обязано назвать, что понадобится")
+        self.assertNotIn("and no guard", out.stdout)
+
+    def test_починенный_экземпляр_корня_требует_узду_и_до_фазы_починки(self):
+        """Починка экземпляра без узды — это тот самый «список правок», и статус блока его не
+        оправдывает: блок ещё `verified`, а экземпляр уже `fixed` — отказ."""
+        self._three_of_one_root("verified")
+        self.s.write("src/one.ts", "починено\n")
+        self.s.commit("починка")
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(self.s.run("set-finding", "H1-001", "fixed", "--commit", sha).returncode, 0)
+        self.s.run("findings")
         out = self.s.run("check")
         self.assertIn("and no guard", refused(out), out.stdout)
-        self.assertIn("рукописная копия предиката", out.stdout)
-        self.assertIn("--rule", out.stdout, "отказ обязан говорить, что делать")
 
     def test_узда_на_все_названные_экземпляры_закрывает_корень(self):
         """Класс закрыт, когда узда записана на каждый его экземпляр — названный в команде."""
@@ -2206,6 +2248,75 @@ class ReviewToolTest(unittest.TestCase):
                                  f"{fid} не назван в команде, а его узду переписали")
                 self.assertEqual(rows[fid].get("updated_at"), self.OLD_STAMP)
                 self.assertEqual(rows[fid].get("status"), "open" if rule is None else "fixed")
+
+    def test_вердикт_проверяющего_переносится_на_записанные_находки(self):
+        """`--severity` и `--confidence` пишут вердикт проверяющего названным находкам.
+
+        Шаблон проверяющего отдавал вердикты по уже импортированным находкам таблицей для
+        `set-finding`, а тот менял только статус: в реестре оставалась severity охотника,
+        и ворота починки считали находки, которые проверяющий понизил (прогон кандидата
+        0.8.0 на живом проекте). Обе стороны: названные получают значения и новую отметку,
+        соседи по корню остаются как были.
+        """
+        self._root_across_blocks()
+        out = self.s.run("set-finding", "H1-001", "H2-001", "open",
+                         "--severity", "low", "--confidence", "plausible")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = {r["id"]: r for r in self._register()}
+        for fid in ("H1-001", "H2-001"):
+            with self.subTest(названа=fid):
+                self.assertEqual(rows[fid]["severity"], "low")
+                self.assertEqual(rows[fid]["confidence"], "plausible")
+                self.assertEqual(rows[fid]["status"], "open")
+                self.assertNotEqual(rows[fid].get("updated_at"), self.OLD_STAMP)
+        with self.subTest(сосед="H1-002"):
+            self.assertEqual(rows["H1-002"]["severity"], "medium")
+            self.assertEqual(rows["H1-002"]["confidence"], "confirmed")
+            self.assertEqual(rows["H1-002"].get("updated_at"), self.OLD_STAMP)
+        # одна severity без confidence — уверенность остаётся прежней
+        self.assertEqual(self.s.run("set-finding", "H1-002", "open", "--severity",
+                                    "high").returncode, 0)
+        rows = {r["id"]: r for r in self._register()}
+        self.assertEqual((rows["H1-002"]["severity"], rows["H1-002"]["confidence"]),
+                         ("high", "confirmed"))
+
+    def test_неизвестные_severity_и_confidence_отвергаются(self):
+        """Значения — те же перечни, что принимают `import` и `check`; отказ называет их, а
+        реестр не трогается. Отказ как вердикт — `rejected --reason`, а не одна уверенность:
+        иначе реестр сказал бы «открыта» и «отвергнута» разом."""
+        self._root_across_blocks()
+        before = (self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8")
+        for args, said in (
+                (("--severity", "urgent"), "critical, high, medium, low"),
+                (("--confidence", "sure"), "confirmed, plausible, rejected"),
+                (("--confidence", "rejected"), "rejected --reason"),
+        ):
+            with self.subTest(args=args):
+                out = self.s.run("set-finding", "H1-001", "open", *args)
+                self.assertNotEqual(out.returncode, 0, out.stdout)
+                self.assertIn(said, out.stderr)
+        out = self.s.run("set-finding", "H1-001", "rejected", "--reason", "недостижимо",
+                         "--confidence", "confirmed")
+        self.assertNotEqual(out.returncode, 0, out.stdout)
+        self.assertIn("rejected and confirmed at once", out.stderr)
+        self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8"),
+                         before, "отказ не должен трогать реестр")
+
+    def test_шаблон_проверяющего_даёт_точные_команды_для_записанных_находок(self):
+        """Вердикт по уже записанной находке уходит таблицей с командой, которую ведущий
+        выполняет как написана, — а не в итоговый файл: соседний раздел того же шаблона
+        прежде велел включить их туда, и проверяющий выбирал одно из двух."""
+        self._three_of_one_root()
+        for lang, final in (("ru", "в нём не бывает никогда"), ("en", "are never in it")):
+            with self.subTest(язык=lang):
+                self.s.blocks(paths=["src/one.ts", "src/two.ts", "src/three.ts"], lang=lang)
+                out = self.s.run("prompt", "H1", "--role", "verify")
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertIn("review.py set-finding H1-001 open --severity low "
+                              "--confidence confirmed", out.stdout)
+                self.assertNotIn("{{CLI}}", out.stdout)
+                self.assertIn(final, out.stdout)
+                self.assertIn("import H1 --append", out.stdout)
 
     def test_узда_снимается_только_с_названной_находки(self):
         """Узду, которая не краснеет на дефекте находки, можно снять (`--clear-rule`): иначе
@@ -2328,7 +2439,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("import", "H1")
         self.s.run("findings")
-        self.assertNotIn("and no guard", self.s.run("check").stdout)
+        self.assertNotIn("instances (", self.s.run("check").stdout,
+                         "ни отказа, ни предупреждения: два повтора ещё не класс")
 
     def test_отвергнутые_и_дубли_не_считаются_экземплярами_класса(self):
         """Три записи — ещё не три экземпляра: отвергнутое и дубли класс не образуют."""
@@ -2353,8 +2465,8 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("import", "H1")
         self.s.run("findings")
         out = self.s.run("check")
-        self.assertNotIn("and no guard", out.stdout,
-                         "живой экземпляр один — узда ещё не требуется")
+        self.assertNotIn("instances (", out.stdout,
+                         "живой экземпляр один — узда ещё не требуется и не предстоит")
 
     def test_команда_roots_показывает_состояние_классов(self):
         self._three_of_one_root()
@@ -5825,6 +5937,7 @@ class GateRegistryTest(unittest.TestCase):
         ("report/empty-coverage-limits",        "test_пустой_раздел_ограничений_роняет_проверку"),
         ("root/guard-unusable",                 "test_узда_обязана_существовать"),
         ("root/no-guard",                       "test_третий_повтор_корня_требует_узду"),
+        ("root/guard-due",                      "test_третий_повтор_на_стадии_проверки_предупреждает"),
         ("root/guard-partial",                  "test_корень_с_уздой_не_на_всех_экземплярах_предупреждает"),
         ("freshness/inert",                     "test_без_удалённого_репозитория_ворота_объявляют_себя_неработающими"),
         ("freshness/tree-behind",               "test_отставшее_от_сервера_дерево_роняет_проверку"),
@@ -9971,16 +10084,19 @@ class DraftByTheTemplateTest(unittest.TestCase):
         self.draft(*(self.row(i, root=klass) for i in range(3)))
         self._import()
         self.assertIn("3 × " + klass, self.s.run("roots").stdout)
+        self.assertIn("3 instances (", warned(self.s.run("check")),
+                      "до починки класс называется предупреждением")
+        self.s.run("set-status", "H1", "fixing")
         self.assertIn("and no guard", refused(self.s.run("check")),
-                      "три экземпляра одного корня обязаны потребовать узду — отказом, "
-                      "а не предупреждением")
+                      "в фазе починки три экземпляра одного корня обязаны потребовать узду — "
+                      "отказом, а не предупреждением")
 
     def test_без_поля_root_тот_же_черновик_ворота_не_зажигает(self):
         """Мера дефекта: ровно те же три находки без `root` не группируются никак."""
         self.draft(*(self.row(i) for i in range(3)))
         self._import()
         self.assertIn("no roots recorded", self.s.run("roots").stdout)
-        self.assertNotIn("and no guard", self.s.run("check").stdout)
+        self.assertNotIn("instances (", self.s.run("check").stdout)
 
     def test_отказ_написанный_по_образцу_не_роняет_проверку(self):
         self.draft(self.row(0, status="rejected", confidence="rejected",
