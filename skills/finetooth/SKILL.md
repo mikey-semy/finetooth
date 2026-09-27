@@ -75,7 +75,8 @@ one of your own:
 6. `review order` — the blocks in the order worth walking them: the cost of failure first
    (`risk` on the block: `critical|high|medium|low`; without it the declared order speaks),
    change frequency from `git log` second. A report, not a rewrite: reorder `blocks.json`
-   yourself if you agree.
+   yourself if you agree. Both commands count what landed on the first-parent line, a merge
+   as one change (its branch's diff), and print which history they read.
 
 ## Working through a block
 

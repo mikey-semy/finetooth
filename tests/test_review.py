@@ -1159,6 +1159,84 @@ class ReviewToolTest(unittest.TestCase):
         self.assertLess(out.index("H1 "), out.index("H2 "))
         self.assertIn("the declared order already matches", out)
 
+    def _merge_history(self, diff_merges: str | None = None) -> None:
+        """Вся работа приходит merge-коммитами веток (#43): на первой родительской линии —
+        стартовый коммит и пять слияний, ни одной прямой правки. Три ветки правят a.ts (H1)
+        и b.ts (H2) РАЗНЫМИ коммитами, ещё две — только b.ts, по два коммита каждая.
+
+        Числа стенда различают все три чтения: слияние как одна правка — 6 правок, H1 4,
+        H2 6, пара a↔b вместе 4 раза; прежнее «--first-parent --no-merges» — одна правка на
+        всю историю; «все коммиты всех веток» — 11 правок, H2 8, а пары нет вовсе: внутри
+        ветки a и b ни разу не менялись одним коммитом."""
+        if diff_merges:
+            self.s.git("config", "log.diffMerges", diff_merges, check=True)
+        self.s.write("src/a.ts", "0\n")
+        self.s.write("src/b.ts", "0\n")
+        self.s.blocks(paths=["src/a.ts"], extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+            "goal": "г", "paths": ["src/b.ts"], "ref_paths": []}])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+
+        def touch(f: str) -> None:
+            p = self.s.root / "src" / (f + ".ts")
+            p.write_text(p.read_text(encoding="utf-8") + "1\n", encoding="utf-8")
+            self.s.commit("t")
+
+        def branch(n: int, *files: str) -> None:
+            self.s.git("checkout", "-q", "-b", f"feature/{n}", check=True)
+            for f in files:
+                touch(f)
+            self.s.git("checkout", "-q", "master", check=True)
+            self.s.git("merge", "-q", "--no-ff", "-m", f"Merge feature/{n}", f"feature/{n}",
+                       check=True)
+        for n in range(3):
+            branch(n, "a", "b")
+        for n in range(3, 5):
+            branch(n, "b", "b")
+        self.s.run("init")
+
+    def test_order_видит_работу_влитую_merge_коммитами(self):
+        """#43: блок платежей показывал 0 коммитов из 24 — история читалась без слияний,
+        а вся работа проекта приходила ими. Слияние — одна правка: столько же, сколько
+        дал бы squash той же ветки, а не число её промежуточных коммитов."""
+        self._merge_history()
+        out = self.s.run("order").stdout
+        self.assertRegex(out, r"commits: 6 \(whole history\)", out)
+        self.assertRegex(out, r"H2\s+—\s+todo\s+6\s+1", out)
+        self.assertRegex(out, r"H1\s+—\s+todo\s+4\s+1", out)
+        self.assertLess(out.index("H2 "), out.index("H1 "))
+        self.assertIn("5 of 6 changes are merges, each read as one change", out,
+                      "вывод обязан назвать, как прочитана история")
+
+    def test_coupling_видит_совместную_правку_влитой_ветки(self):
+        """Ветка, которая правит a.ts и b.ts, — одна совместная правка, даже если внутри
+        неё файлы менялись разными коммитами: так её записал бы squash, и на этой единице
+        мерились пороги `coupling`."""
+        self._merge_history()
+        out = self.s.run("coupling").stdout
+        self.assertRegex(out, r"4×\s+H1 src/a\.ts  ↔  H2 src/b\.ts", out)
+        self.assertIn("5 of 6 changes are merges", out)
+
+    def test_настройка_log_diffmerges_не_меняет_чтение_слияний(self):
+        """`-m` берёт формат из `log.diffMerges` пользователя, и с `combined` слияние, где
+        правила одна сторона, не перечисляло ни одного файла: история снова пустела."""
+        self._merge_history(diff_merges="combined")
+        out = self.s.run("order").stdout
+        self.assertRegex(out, r"H2\s+—\s+todo\s+6\s+1", out)
+        self.assertIn("5 of 6 changes are merges", out)
+
+    def test_на_линейной_истории_чтение_прежнее(self):
+        """Без слияний на первой родительской линии новое чтение обязано совпасть со
+        старым до коммита — и сказать, что слияний нет."""
+        self._churn_history()
+        for cmd in ("order", "coupling"):
+            with self.subTest(команда=cmd):
+                out = self.s.run(cmd).stdout
+                self.assertRegex(out, r"commits: 7\b", out)
+                self.assertIn("history: the first-parent line, no merges on it", out)
+        self.assertRegex(self.s.run("order").stdout, r"H1\s+—\s+todo\s+2\s+1")
+
     def test_риск_вне_словаря_это_отказ_а_не_трейсбек(self):
         """`risk` пишут руками в blocks.json. Слово мимо словаря доходило до
         `SEVERITIES.index` и выходило к человеку как ValueError."""
