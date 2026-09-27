@@ -21,6 +21,7 @@ import json
 import re
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1294,6 +1295,31 @@ class ReviewToolTest(unittest.TestCase):
                 with self.subTest(шаблон=name, правило=rule):
                     self.assertIn(rule.lower(), text, f"{name}: правило снято из шаблона")
 
+    def test_шаблоны_велят_коммитить_по_находке_ждать_ворот_и_убирать_черновики(self):
+        """Три правила из полевого прогона (see #44): исполнитель, упёршийся в предел ходов,
+        оставлял всё незакоммиченным; роли гоняли набор в фоне и заканчивали раньше его
+        исхода; черновой тест проверяющего остался в `tests/`. Правило, которого нет ни в
+        тесте, ни в журнале изменений, снимут при следующей правке шаблона."""
+        refs = SKILL / "references"
+        said = {"fix.md": ("commit each finding as it closes, not at the end",
+                           "never run a gate or a test in the background",
+                           "leave nothing in the tree outside your fixes",
+                           "{{batch}}"),
+                "fix.ru.md": ("коммить каждую находку, как только она закрыта, а не в конце",
+                              "никогда не запускай ворота и тесты в фоне",
+                              "не оставляй в дереве ничего, кроме своих правок",
+                              "{{batch}}"),
+                "verify.md": ("never run the stand, a gate or a test in the background",
+                              "leave nothing in the tree"),
+                "verify.ru.md": ("никогда не запускай стенд, ворота и тесты в фоне",
+                                 "не оставляй ничего в дереве")}
+        for name, rules in said.items():
+            # шаблон свёрстан по ширине: перенос строки внутри фразы — не пропуск
+            text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8")).lower()
+            for rule in rules:
+                with self.subTest(шаблон=name, правило=rule):
+                    self.assertIn(rule.lower(), text, f"{name}: правило снято из шаблона")
+
     def test_шаблоны_ролей_говорят_где_писать_вердикт(self):
         """Правка механизма — правка промпта: разборщик перестал читать вердикты внутри
         цитаты, и шаблоны обоих языков обязаны назвать все её формы. Иначе гейт краснеет
@@ -1400,6 +1426,42 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("prompt", "H1", "--role", "fix")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertIn("{{HUNTER_NOTE}}", out.stdout)
+
+    def _open_findings(self, severities: list[str]) -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": sev, "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": f"находка {i}", "scenario": "сценарий"},
+            ensure_ascii=False) + "\n" for i, sev in enumerate(severities)))
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("import", "H1")
+
+    def test_пачка_больше_предела_названа_исполнителю(self):
+        """16 из 46 прогонов исполнителя полевого замера упёрлись в предел ходов на пачках
+        крупнее 3–4 находок (see #44). Промпт называет предел и КАКИЕ находки берёт этот
+        прогон — первые по серьёзности, а не первые по номеру."""
+        self._open_findings(["low", "high", "low", "medium", "critical"])
+        out = self.s.run("prompt", "H1", "--role", "fix")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("Этот прогон берёт 3 из 5 открытых находок: H1-005, H1-002, H1-004.",
+                      out.stdout)
+        self.assertIn("следующий прогон исполнителя", out.stdout)
+        # Предел не отрезает список: остальные находки видны, иначе агент не знает, что
+        # оставляет следующему.
+        self.assertIn("H1-001", out.stdout)
+        self.assertIn("H1-003", out.stdout)
+
+    def test_пачка_в_пределе_без_оговорки(self):
+        """Обратная сторона: три находки — это задание целиком, оговорка о пределе там
+        только сбила бы исполнителя."""
+        self._open_findings(["low", "high", "medium"])
+        out = self.s.run("prompt", "H1", "--role", "fix")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertNotIn("Этот прогон берёт", out.stdout)
+        self.assertNotIn("{{BATCH}}", out.stdout)
 
     def test_ограда_при_любом_отступе_не_режет_манифест(self):
         """R3-001: открывающая ограда глубже трёх пробелов не открывалась, строка-пункт внутри
@@ -4837,9 +4899,9 @@ class SpendTest(unittest.TestCase):
         self.assertIn("PARTIAL RESULT", out.stdout)
         self.assertIn("11 assistant messages", out.stdout)
 
-    def _run_role(self, exit_code: int, truncated: bool = False, log_fails: bool = False,
-                  with_result: bool = True,
-                  **extra_env: str) -> tuple[subprocess.CompletedProcess, str]:
+    def _role_cmd(self, exit_code: int, truncated: bool = False, log_fails: bool = False,
+                  with_result: bool = True, role: str = "hunter",
+                  **extra_env: str) -> tuple[list[str], dict]:
         """run-role.sh с заглушкой вместо `claude`: настоящий клиент здесь не нужен,
         нужен его код возврата и поток, который он оставляет.
 
@@ -4848,13 +4910,20 @@ class SpendTest(unittest.TestCase):
         прогон обрывает последнюю строку на середине; `with_result=False` — поток без
         события `result` вовсе; `log_fails` — отказывает шаг отчёта; `extra_env` —
         переменные окружения скрипта. Заглушка записывает свои аргументы в `stub/args`,
-        каждый с NUL на конце (`_claude_args`).
+        каждый с NUL на конце (`_claude_args`), свой PID — в `stub/self.pid`, а то, что
+        лежало в это время в файле PID рядом с потоком, — в `stub/seen.pid`. С
+        `STUB_DIRTY=1` она оставляет в дереве `scratch.txt`, как агент — черновик; с
+        `STUB_SLEEP=1` не выходит сама, а ждёт, пока её остановят.
         """
         self.s.write("src/one.ts", "a\n")
         self.s.blocks(paths=["src/one.ts"])
         self.s.manifest(hypotheses=1)
         self.s.commit()
         self.s.run("init")
+        # Заглушка и каталог прогонов лежат в корне стенда, но деревом проекта не являются:
+        # без этого каждый прогон видел бы «грязь», которую оставил сам тест.
+        with (self.s.root / ".git" / "info" / "exclude").open("a", encoding="utf-8") as fh:
+            fh.write("stub/\nruns/\n")
         stub_dir = self.s.root / "stub"
         stub_dir.mkdir()
         # Поток лежит рядом с заглушкой файлом: так в нём переживают без потерь и
@@ -4866,6 +4935,10 @@ class SpendTest(unittest.TestCase):
         stub = stub_dir / "claude"
         stub.write_text("#!/usr/bin/env bash\n"
                         f"printf '%s\\0' \"$@\" > \"{stub_dir}/args\"\n"
+                        f'printf %s "$$" > "{stub_dir}/self.pid"\n'
+                        f'cat "$TMPDIR"/finetooth-runs/*.pid > "{stub_dir}/seen.pid" 2>/dev/null\n'
+                        'if [ -n "${STUB_DIRTY:-}" ]; then echo draft > scratch.txt; fi\n'
+                        'if [ -n "${STUB_SLEEP:-}" ]; then exec sleep 60; fi\n'
                         f'cat "{stub_dir}/stream.jsonl"\n'
                         f"exit {exit_code}\n", encoding="utf-8")
         stub.chmod(0o755)
@@ -4884,11 +4957,24 @@ class SpendTest(unittest.TestCase):
         (self.s.root / "runs").mkdir()
         # Через `shell_gate`: отказы этого скрипта — предмет мутационной узды ворот на
         # оболочке, а она подменяет скрипт копией через окружение.
-        out = subprocess.run(
-            ["bash", str(shell_gate("skills/finetooth/assets/run-role.sh")), "H1", "hunter"],
-            cwd=self.s.root, capture_output=True, text=True, env=env)
-        journal = (self.s.root / "docs/review/journal.md")
-        return out, journal.read_text(encoding="utf-8") if journal.exists() else ""
+        extra = ["--diff", "HEAD~1..HEAD"] if role == "fixreview" else []
+        return (["bash", str(shell_gate("skills/finetooth/assets/run-role.sh")), "H1", role,
+                 *extra], env)
+
+    def _journal(self) -> str:
+        journal = self.s.root / "docs/review/journal.md"
+        return journal.read_text(encoding="utf-8") if journal.exists() else ""
+
+    def _run_role(self, exit_code: int, truncated: bool = False, log_fails: bool = False,
+                  with_result: bool = True, role: str = "hunter", before=None,
+                  **extra_env: str) -> tuple[subprocess.CompletedProcess, str]:
+        """Прогон `_role_cmd` до конца; `before` — что сделать со стендом перед запуском."""
+        cmd, env = self._role_cmd(exit_code, truncated, log_fails, with_result, role,
+                                  **extra_env)
+        if before:
+            before()
+        out = subprocess.run(cmd, cwd=self.s.root, capture_output=True, text=True, env=env)
+        return out, self._journal()
 
     def _claude_args(self) -> list[str]:
         """Аргументы, с которыми `run-role.sh` позвал заглушку `claude`."""
@@ -4966,6 +5052,121 @@ class SpendTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("RUN FAILED", journal)
         self.assertIn("claude exit 1", journal)
+
+    def _dirty_src(self) -> None:
+        self.s.write("src/one.ts", "правка, которую никто не закоммитил\n")
+
+    def test_пишущая_роль_не_стартует_в_грязном_дереве(self):
+        """Прогон исполнителя, упёршийся в предел ходов, оставляет правки незакоммиченными, и
+        следующий начинал поверх чужой незаконченной работы (see #44: 16 из 46 прогонов
+        полевого замера). Роль, которая пишет, в грязном дереве не стартует: отказ называет
+        грязь и выход, а агент не запускается вовсе."""
+        for role in ("fix", "fixreview"):
+            with self.subTest(роль=role):
+                self.setUp()
+                out, _ = self._run_role(exit_code=0, role=role, before=self._dirty_src)
+                self.assertEqual(out.returncode, 4, out.stdout + out.stderr)
+                self.assertIn("uncommitted changes outside docs/review/", out.stderr)
+                self.assertIn("src/one.ts", out.stderr, "отказ обязан назвать грязь")
+                self.assertIn("ALLOW_DIRTY=1", out.stderr, "отказ обязан назвать выход")
+                self.assertFalse((self.s.root / "stub" / "args").exists(),
+                                 "агент запущен несмотря на отказ")
+
+    def test_allow_dirty_запускает_пишущую_роль(self):
+        """Выход, который называет отказ, работает: оператор сказал — роль идёт, и вывод
+        говорит, что дерево было грязным."""
+        out, journal = self._run_role(exit_code=0, role="fix", before=self._dirty_src,
+                                      ALLOW_DIRTY="1")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(self._claude_args(), "агент не запущен")
+        self.assertIn("ALLOW_DIRTY=1: starting fix on a dirty tree", out.stderr)
+        self.assertIn("dirty before the run too", journal)
+
+    def test_черновики_ролей_в_docs_review_не_грязь(self):
+        """Обратная сторона: отчёты и черновики находок роли пишут в docs/review/ по
+        замыслу — там незакоммиченное не мешает ни старту, ни строке журнала."""
+        def draft() -> None:
+            self.s.write("docs/review/reports/H1-findings.jsonl", "{}\n")
+        out, journal = self._run_role(exit_code=0, role="fix", before=draft)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(self._claude_args(), "агент не запущен")
+        self.assertNotIn("TREE LEFT DIRTY", journal)
+        self.assertNotIn("dirty after the run", out.stdout)
+
+    def test_читающая_роль_стартует_и_в_грязном_дереве(self):
+        """Охотник ничего не правит: запрет — только для ролей, которые пишут, иначе
+        охоту на рабочем дереве с правками владельца запрещал бы механизм не про неё."""
+        out, _ = self._run_role(exit_code=0, role="hunter", before=self._dirty_src)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(self._claude_args(), "агент не запущен")
+
+    def test_грязь_после_прогона_названа_в_выводе_и_журнале(self):
+        """Агент оставил черновик в дереве (see #44: черновой тест проверяющего в
+        `tests/`) — следующая роль начала бы поверх него. Об этом говорят вывод и строка
+        журнала, единственная память следующей сессии."""
+        out, journal = self._run_role(exit_code=0, STUB_DIRTY="1")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("dirty after the run", out.stdout)
+        self.assertIn("scratch.txt", out.stdout)
+        self.assertIn("TREE LEFT DIRTY (1 path(s) outside docs/review/)", journal)
+
+    def test_чистый_прогон_не_назван_грязным(self):
+        out, journal = self._run_role(exit_code=0)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertNotIn("TREE LEFT DIRTY", journal)
+        self.assertNotIn("dirty after the run", out.stdout)
+
+    def test_pid_агента_лежит_рядом_с_потоком_пока_он_идёт(self):
+        """Остановка обёртки не доставала до `claude -p` (see #44): PID агента пишется в
+        `<поток>.pid` раньше, чем агент начинает работу, — во время прогона там ровно его
+        PID, — а после конца файл убран, чтобы `kill` по нему не попал в чужой процесс."""
+        out, _ = self._run_role(exit_code=0)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        stub = self.s.root / "stub"
+        own = (stub / "self.pid").read_text(encoding="utf-8").strip()
+        self.assertTrue(own.isdigit(), own)
+        self.assertEqual((stub / "seen.pid").read_text(encoding="utf-8").strip(), own,
+                         "в файле PID рядом с потоком не PID агента")
+        self.assertIn(".stream.jsonl.pid", out.stdout, "вывод не называет файл PID")
+        self.assertEqual(list((self.s.root / "runs").rglob("*.pid")), [],
+                         "файл PID пережил прогон")
+
+    def test_остановка_обёртки_останавливает_агента(self):
+        """Убитая обёртка оставляла `claude -p` работать, и проверяющий дописал отчёт после
+        остановки (see #44). Остановка скрипта передаётся агенту, а строка журнала всё
+        равно пишется — как у упавшего прогона."""
+        cmd, env = self._role_cmd(exit_code=0, STUB_SLEEP="1")
+        proc = subprocess.Popen(cmd, cwd=self.s.root, env=env, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pid_file = self.s.root / "stub" / "self.pid"
+        agent = None
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and not (
+                    pid_file.exists() and pid_file.read_text(encoding="utf-8").strip()):
+                time.sleep(0.05)
+            agent = int(pid_file.read_text(encoding="utf-8"))
+            proc.send_signal(signal.SIGTERM)
+            proc.communicate(timeout=30)
+            deadline = time.monotonic() + 10
+            alive = True
+            while alive and time.monotonic() < deadline:
+                try:
+                    os.kill(agent, 0)
+                    time.sleep(0.05)
+                except ProcessLookupError:
+                    alive = False
+            self.assertFalse(alive, "агент пережил остановку обёртки")
+            self.assertIn("RUN FAILED", self._journal())
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if agent:
+                try:
+                    os.kill(agent, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def test_несобравшийся_промпт_не_оставляет_пустого_файла(self):
         """`review prompt` отказал — в TMPDIR оставался нулевой файл промпта."""
@@ -5866,7 +6067,8 @@ class ShellGateMutationTest(unittest.TestCase):
              "skills/finetooth/assets/guard-grep.sh": ("GuardGrepTest",),
              "skills/finetooth/assets/run-role.sh": (
                  "test_run_role_отказывает_на_неизвестной_роли",
-                 "test_потерянная_запись_в_журнал_не_выдаёт_себя_за_чистый_прогон")}
+                 "test_потерянная_запись_в_журнал_не_выдаёт_себя_за_чистый_прогон",
+                 "test_пишущая_роль_не_стартует_в_грязном_дереве")}
     # Мутанты ждут не процессора, а своих подпроцессов (git, bash, awk).
     WORKERS = 8
 

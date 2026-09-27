@@ -208,6 +208,12 @@ ROLES = ["hunter", "verify", "fix", "fixreview"]
 # reviewer's template, from the method author's own review: low ones are fixed by the lead
 # without a round. The loop signal asks the same question of the previous round's top finding.
 ROUND_SEVERITY = "medium"
+# How many open findings one fixer run is handed as its assignment. A field run of the kit
+# measured it: 16 of 46 fixer runs ended on the turn cap on batches larger than 3–4
+# findings, and each left its edits uncommitted for the next run to start on. The cap is the lower edge of that range — the batch size no capped run had —
+# not a round figure. A block with more open findings is closed in several runs; the prompt
+# names which ones this run takes.
+FIX_BATCH = 3
 # The block's proof kind. `read` — every file is read in full and named in the report;
 # `measured` — reading proves nothing (180 thousand lines of tests, performance,
 # scanners), the proof is the artifacts from the manifest. A block without `paths` is a
@@ -293,6 +299,7 @@ MSG = {
   "scope_line": " Your half of the fixes: **{scope}** — you file findings for this half; whatever else is in the diff below, read it for context.",
   "diff_vol": "The diff below: {kb} KB, {lines} lines. Order of magnitude: ~{k}k tokens just to read it, before any reasoning or tool calls. If that does not fit what you can hold at once, do not read half of it and report on the whole: say so in the report, and the lead splits the RANGE — `--diff <first part>` for you and `--diff <second>` for a second reviewer; that is what makes the diff smaller. `--scope <half>` does not: it names your half in the report and in its file name.",
   "no_open_findings": "(no open findings for this block — ask the lead session why the fixer was started)",
+  "fix_batch": "**This run takes {cap} of the {n} open findings: {ids}.** They are the first {cap} by severity in the list below. Close them — each committed as it lands — and stop: leave the rest `open`, the next fixer run takes them. The limit is measured, not a guess: in a field run, 16 of 46 fixer runs ended on the turn cap on batches larger than 3–4 findings, their work uncommitted.",
   "rec_none": "(nothing is recorded against this block yet)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(recorded {date})_",
   "dec_none": "(no human decision is recorded for this block — work by the rules above)",
@@ -364,6 +371,7 @@ MSG = {
   "scope_line": " Твоя половина правок: **{scope}** — находки ты оформляешь по ней; то, что кроме неё есть в диффе ниже, читай для контекста.",
   "diff_vol": "Дифф ниже: {kb} КБ, {lines} строк. Порядок величины: ~{k}k токенов только на чтение, до рассуждений и вызовов инструментов. Если это не помещается в то, что ты держишь за раз, — не читай половину, отчитываясь за целое: скажи об этом в отчёте, и ведущая сессия разделит ДИАПАЗОН — `--diff <первая часть>` тебе и `--diff <вторая>` второму ревьюеру; уменьшает дифф именно это. `--scope <половина>` его не уменьшает: он называет твою половину в отчёте и в его имени.",
   "no_open_findings": "(открытых находок по блоку нет — уточни у ведущей сессии, зачем запущен фиксер)",
+  "fix_batch": "**Этот прогон берёт {cap} из {n} открытых находок: {ids}.** Это первые {cap} по серьёзности в списке ниже. Закрой их — каждую коммитом, как только она закрыта, — и остановись: остальные оставь `open`, их возьмёт следующий прогон исполнителя. Предел измерен, а не придуман: в полевом прогоне 16 из 46 прогонов исполнителя упёрлись в предел ходов на пачках крупнее 3–4 находок, оставив работу незакоммиченной.",
   "rec_none": "(за блоком пока ничего не записано)",
   "rec_row": "- **{id}** · {severity} · {status} · `{where}` — {claim} _(записана {date})_",
   "dec_none": "(решений человека по блоку не записано — работай по правилам выше)",
@@ -2424,6 +2432,7 @@ def cmd_prompt(args) -> int:
             if sweep_lines(b)[0] else ""),
         "{{REF_FILES}}": render_refs(b.get("ref_paths", []), refs),
         "{{FINDINGS}}": render_findings_for(b["id"]),
+        "{{BATCH}}": batch_note(b["id"]),
         "{{RECORDED}}": render_recorded_for(b["id"]),
         "{{NEXT_ID}}": next_finding_id(b["id"]),
         # The project name and its gates are substitutions, not text in the template. A
@@ -2493,12 +2502,29 @@ def render_recorded_for(block_id: str) -> str:
     return "\n".join(out)
 
 
-def render_findings_for(block_id: str) -> str:
+def open_findings_for(block_id: str) -> list[dict]:
+    """The block's open findings in the order a fixer takes them: by severity, then by id."""
     rows = [f for f in findings() if f.get("block") == block_id and f.get("status") == "open"]
+    order = {s: i for i, s in enumerate(SEVERITIES)}
+    return sorted(rows, key=lambda f: (order.get(f.get("severity"), 9), f.get("id", "")))
+
+
+def batch_note(block_id: str) -> str:
+    """`{{BATCH}}`: the batch limit, named to the fixer when the block holds more than one
+    run can close (`FIX_BATCH`). Without it the fixer took the whole list, ran out of turns
+    halfway and left the half it had done uncommitted. Empty when everything fits: then the
+    list below is the assignment as it stands."""
+    rows = open_findings_for(block_id)
+    if len(rows) <= FIX_BATCH:
+        return ""
+    return T("fix_batch", n=len(rows), cap=FIX_BATCH,
+             ids=", ".join(f.get("id", "?") for f in rows[:FIX_BATCH]))
+
+
+def render_findings_for(block_id: str) -> str:
+    rows = open_findings_for(block_id)
     if not rows:
         return T("no_open_findings")
-    order = {s: i for i, s in enumerate(SEVERITIES)}
-    rows.sort(key=lambda f: (order.get(f.get("severity"), 9), f.get("id", "")))
     out = []
     line_of = shown_lines()
     for f in rows:
