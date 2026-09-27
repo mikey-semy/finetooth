@@ -229,7 +229,10 @@ check goes red.
   comes from practice: a second recurrence can still be a coincidence, a third means the
   defect is produced by the structure of the code. The `roots` command shows the classes, the
   number of instances and which guard each instance carries, and flags a class whose
-  instances disagree or where some carry none; `check` warns about the latter.
+  instances disagree or where some carry none; `check` warns about the latter. The guard is
+  demanded in the fix phase — once an instance is `fixed` or its block is `fixing`/`closed`;
+  before that `check` warns (`root/guard-due`), since a verified block has nobody yet to
+  write a guard and the release gate needs `check` green right after verification.
 
 **Added after checking against world practice** (see `comparison-with-practice` (in the knowledge base)):
 - **a second coverage denominator — hypotheses.** The file map answers "the file was opened";
@@ -257,7 +260,8 @@ check goes red.
   `blocks.json`: a template copied without proofreading greeted the agent in the name of
   someone else's project;
 - the command `set-finding <ID> <status>` — moves a finding and refuses `fixed` without a
-  commit, `rejected` without a reason, `duplicate` without a reference;
+  commit, `rejected` without a reason, `duplicate` without a reference; `--severity` and
+  `--confidence` carry the verifier's verdict onto a finding already in the register;
 - `check` requires a rejection reason for every rejected finding;
 - the hints in messages are gathered into one constant, `CLI` (in the original half of them
   called `make`, half `npm run` — the rig was carried between projects and never proofread);
@@ -290,7 +294,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-463 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+468 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -468,7 +472,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 463 scenarios
+tests/                            tests of the tool and the skill format: 468 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO

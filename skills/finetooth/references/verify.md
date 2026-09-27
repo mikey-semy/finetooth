@@ -88,6 +88,8 @@ Instances of one class that are **not** duplicates — five copies of one predic
 needing its own fix — carry the class name in `root` instead, the same string in every one
 of them. From the third instance the state check demands the class be closed by a guard
 rather than by three separate fixes, and it can only count instances that share the field.
+The guard is recorded in the fix phase — until then `check` only warns; your part is the same
+`root` string in every instance.
 
 # Project invariants
 
@@ -111,10 +113,29 @@ rather than by three separate fixes, and it can only count instances that share 
 
 {{RECORDED}}
 
-Check these too, but do not put them into the final findings file: give your verdict on each
-in a separate table of the report, **"Verdicts on recorded findings"** (id → confirmed /
-rejected / fixed already, with the reason). The lead session moves them in the register
-with `set-finding`.
+The hunter's findings are here too if the lead imported them before your pass. Check every
+one of them, but **do not put them into the final findings file** — they already have an id
+and a row in the register, and that row is changed by a command, not by a file. Give your
+verdict on each in a separate table of the report, **"Verdicts on recorded findings"**, with
+the exact command that brings the register to your verdict; the lead session runs the
+commands as written:
+
+```markdown
+## Verdicts on recorded findings
+| id | verdict | severity | confidence | reason | command |
+|---|---|---|---|---|---|
+| {{BLOCK_ID}}-001 | confirmed, lowered | low | confirmed | … | `{{CLI}} set-finding {{BLOCK_ID}}-001 open --severity low --confidence confirmed` |
+| {{BLOCK_ID}}-002 | rejected | — | — | … | `{{CLI}} set-finding {{BLOCK_ID}}-002 rejected --reason '<what rules the scenario out>'` |
+| {{BLOCK_ID}}-003 | duplicate | — | — | … | `{{CLI}} set-finding {{BLOCK_ID}}-003 duplicate --dup-of {{BLOCK_ID}}-001` |
+| {{BLOCK_ID}}-004 | fixed already | — | — | … | `{{CLI}} set-finding {{BLOCK_ID}}-004 fixed --commit <sha that fixed it>` |
+| {{BLOCK_ID}}-005 | confirmed as recorded | — | — | … | (none — the row already says so) |
+```
+
+`--severity` and `--confidence` take the same values as the file below (`critical|high|medium|low`,
+`confirmed|plausible`); a rejection is `rejected --reason`, never `--confidence rejected`.
+The final file then holds only what the register does not have yet — your own new findings
+and hunter findings that are not in the list above — so the lead imports it with
+`import {{BLOCK_ID}} --append`.
 
 # What to deliver
 
@@ -143,9 +164,10 @@ and a finding already recorded against the block keeps the id it has):
 {"block":"{{BLOCK_ID}}","severity":"critical|high|medium|low","confidence":"confirmed|plausible|rejected","status":"open|rejected|duplicate","file":"path/from/repository/root","line":123,"claim":"what is wrong, in one line","scenario":"failure scenario","invariant":"the violated invariant or ADR, if any","root":"the class name, the same string in every instance"}
 ```
 
-It becomes **final** for the block. Include in it:
-- confirmed hunter findings with corrected severity, `"confidence":"confirmed"`, and the
-  hunter's `root` carried over wherever it named a class;
+It becomes **final** for the block. Findings listed under "Findings already recorded against
+this block" are never in it — their verdicts are the table with commands above. Include in it:
+- confirmed hunter findings not recorded yet, with corrected severity,
+  `"confidence":"confirmed"`, and the hunter's `root` carried over wherever it named a class;
 - unresolved ones — `"confidence":"plausible"`;
 - rejected ones — `"confidence":"rejected","status":"rejected"` and the rejection reason in
   its own field, `"reject_reason":"what exactly rules the scenario out"` (keeping them

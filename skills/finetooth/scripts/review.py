@@ -443,6 +443,10 @@ STALE_RUNNING_HOURS = 24
 # the coverage-limits gate green without adding anything: the status changed, the gap stayed.
 POST_VERIFY = ("verified", "triaged", "fixing", "closed")
 
+# The statuses in which fixes are being made or have been accepted. `triaged` is not one of
+# them: triage decides WHAT to fix, and a guard is recorded when the fix is made.
+FIX_PHASE = ("fixing", "closed")
+
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2486,6 +2490,9 @@ def cmd_prompt(args) -> int:
         # template copied without proofreading greeted the agent on behalf of ANOTHER
         # project, and it was not noticed at once: the assignment looked meaningful as a whole.
         "{{PROJECT}}": defn.get("project", ROOT.name),
+        # The command the project calls the tool by: a template that names a command for the
+        # lead to run names it runnable, not as a bare subcommand.
+        "{{CLI}}": CLI,
         "{{GATES}}": "\n".join(f"- `{g}`" for g in defn.get("gates", []))
         or T("gates_missing"),
         # Read from the project's files only when the template asks: a hunter has no
@@ -3072,7 +3079,8 @@ def cmd_set_status(args) -> int:
 
 
 def cmd_set_finding(args) -> int:
-    """Move a finding: fixed, rejected, duplicate, deferred.
+    """Move a finding: fixed, rejected, duplicate, deferred — and record the verifier's
+    severity and confidence on it (`--severity`, `--confidence`).
 
     The rule "findings.jsonl is edited only by the tool" rested on the agent's own word:
     the kit had no command that sets `fixed` and the fix commit — the register was edited
@@ -3082,6 +3090,23 @@ def cmd_set_finding(args) -> int:
     """
     if len(args.finding) > 1 and args.dup_of:
         die("--dup-of takes one finding: several cannot meaningfully share the same duplicate target")
+    # The verifier's verdict on a finding already in the register — "real, but medium, not
+    # high" — had no way in: the template sent it to the lead as a table for `set-finding`,
+    # and `set-finding` moved the status only, so the register kept the hunter's severity and
+    # the fix gate counted findings the verifier had lowered (the gate-3 run of 0.8.0). The
+    # values are the ones `import` and `check` accept, and the refusal names them.
+    if args.severity is not None and args.severity not in SEVERITIES:
+        die(f"--severity {args.severity}: unknown; known: {', '.join(SEVERITIES)}")
+    if args.confidence is not None and args.confidence not in CONFIDENCE:
+        die(f"--confidence {args.confidence}: unknown; known: {', '.join(CONFIDENCE)}")
+    # A rejection is a verdict held by two fields (see set_one_finding); `--confidence` that
+    # sets one without the other would write the contradiction `check` refuses.
+    if args.confidence == "rejected" and args.status != "rejected":
+        die(f"--confidence rejected with status `{args.status}` — a rejected finding is moved "
+            f"with its reason: `{CLI} set-finding <ID> rejected --reason '…'`")
+    if args.status == "rejected" and args.confidence not in (None, "rejected"):
+        die(f"status `rejected` with --confidence {args.confidence} — a finding cannot be "
+            f"rejected and {args.confidence} at once; drop --confidence or the rejection")
     rows = findings()
     for fid in args.finding:
         set_one_finding(args, rows, fid)
@@ -3135,6 +3160,10 @@ def set_one_finding(args, rows: list[dict], fid: str) -> None:
         f["confidence"] = "rejected"
     elif f.get("status") == "rejected" and f.get("confidence") == "rejected":
         f["confidence"] = "plausible"
+    if args.confidence:
+        f["confidence"] = args.confidence
+    if args.severity:
+        f["severity"] = args.severity
     f["status"] = args.status
     if args.commit:
         f["fix_commit"] = args.commit
@@ -4549,6 +4578,24 @@ def cmd_check(args) -> int:
                     f"them with a guard of their own; `{CLI} roots` shows who carries what")
             continue
         ids = ", ".join(f.get("id", "?") for f in items[:4])
+        # The guard is recorded with `set-finding --rule` on a file that exists, i.e. by the
+        # fixer; demanded before that, it made a block red for having been hunted and verified
+        # well, and gate 3 of RELEASING.md ("hunter and verifier, and `check` green") could not
+        # be passed on a block whose hunter found one class three times (the gate-3 run of
+        # 0.8.0 on a live project). So the refusal waits for the fix phase: an instance
+        # already fixed, or the block of one in `fixing`/`closed`. Before it the class is
+        # named, so that whoever cuts the fix assignments plans a guard, not three edits.
+        if not any(f.get("status") == "fixed"
+                   or st["blocks"].get(f.get("block"), {}).get("status") in FIX_PHASE
+                   for f in items):
+            gates.warn(
+                "root/guard-due",
+                f"root '{root}': {len(items)} instances ({ids}) — a class that repeated "
+                f"{ROOT_RULE_AT} times will be closed by a rule, not by a list of fixes; the "
+                f"fix phase must record one: `{CLI} set-finding <ID>... <status> --rule "
+                f"<path-to-guard>` (until an instance is fixed or its block reaches `fixing`, "
+                f"this is a warning)")
+            continue
         gates.refuse(
             "root/no-guard",
             f"root '{root}': {len(items)} instances ({ids}) and no guard — "
@@ -4841,7 +4888,8 @@ def main() -> int:
     c.add_argument("--round", type=int,
                    help="the fix review round the decision follows (default: the latest one in the register)")
 
-    c = sub.add_parser("set-finding", help="move a finding (or several): fixed / rejected / duplicate / deferred")
+    c = sub.add_parser("set-finding", help="move a finding (or several): fixed / rejected / duplicate / deferred; "
+                            "--severity / --confidence record the verifier's verdict")
     c.add_argument("finding", nargs="+")
     c.add_argument("status")
     c.add_argument("--commit", help="fix commit; required for fixed")
@@ -4850,6 +4898,8 @@ def main() -> int:
     c.add_argument("--rule", help="what closes the class: path to the guard, test or linter rule")
     c.add_argument("--clear-rule", dest="clear_rule", action="store_true",
                    help="remove the recorded guard (it does not go red on this finding's defect)")
+    c.add_argument("--severity", help=f"the verifier's severity: {' / '.join(SEVERITIES)}")
+    c.add_argument("--confidence", help=f"the verifier's confidence: {' / '.join(CONFIDENCE)}")
     c.add_argument("--fixed-in", dest="fixed_in", action="append",
                    help="where the fix was made, if not in the finding's file (repeatable)")
 

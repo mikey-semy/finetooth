@@ -100,7 +100,12 @@ one of your own:
    Coverage incomplete — the block goes back for another pass, not to closure.
 5. **Register.** `review import <ID>`, `review findings`, `review check`. The plain import
    refuses when the file would erase a finding already recorded against the block or overturn
-   a recorded decision — then `import <ID> --append` (or `--force`, deliberately).
+   a recorded decision — then `import <ID> --append` (or `--force`, deliberately). If the
+   hunter's findings were imported before the verifier ran, its verdicts on them come as a
+   table with one `set-finding` command per change (`--severity`, `--confidence`, `rejected
+   --reason`, `duplicate --dup-of`) — run them; the draft then holds only new findings.
+   A class with a third instance is a warning until the fix phase (`root/guard-due`): the
+   guard is the fixer's, and `check` refuses once an instance is fixed or its block is `fixing`.
 6. **Journal.** `review log <ID> "what was decided and why"` — right away: this cannot be recovered.
 7. **Fixing** — yet another agent: `review prompt <ID> --role fix [--round N]`. Cut assignments
    by related areas, not one finding at a time. A repeat round needs `--round N`: without it
