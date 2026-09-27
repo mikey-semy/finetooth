@@ -290,7 +290,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-441 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+452 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -468,7 +468,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 441 scenarios
+tests/                            tests of the tool and the skill format: 452 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
@@ -507,7 +507,10 @@ input tokens and the share from cache, output, re-reads. `scripts/axes.py` break
 stream down by axis. The first measured block: the cost is **turns × context** — reading the
 block whole was 1% of the spend; the verifier's 118 shell calls were most of the rest. The role
 templates now say so (one file — one read; the stand is one script, run once), and the runner
-caps turns at twice what the measured run needed.
+caps turns at twice what the measured run needed. A run cut off by that cap leaves its work
+uncommitted, so the fixer is handed at most three findings a run, commits each as it lands,
+and the runner will not start a fixer or a fix reviewer in a dirty tree (`ALLOW_DIRTY=1` to
+insist); the agent's PID sits next to the stream while it runs, so a stop reaches it.
 
 **What outlives the review directory.** The method ends by deleting its own directory — a
 register nobody updates describes fixed things as open. `review summary` writes one immutable
