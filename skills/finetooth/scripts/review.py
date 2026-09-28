@@ -5410,12 +5410,14 @@ def negated_before(low: str, at: int) -> bool:
     return False
 
 
-def says_confirmed(line: str) -> bool:
-    """The verdict line CONFIRMS the hypothesis: an affirmative confirmation word in it that
-    no nearby negation turns round (`negated_before`). "проверена и подтверждена как
-    дефект" confirms; "refuted: the guard is there", "was not confirmed" and "не подтвердилась
-    бы" do not. A word quoted alone in backticks is a quotation, as for the parser."""
-    low = unquote_verdicts(line).lower()
+def says_confirmed(passage: str) -> bool:
+    """The verdict CONFIRMS the hypothesis: its passage (`verdict_passage` — the same lines
+    its finding id is read from) carries an affirmative confirmation word that no negation of
+    its own phrase turns round (`negated_before`). "проверена и подтверждена как дефект"
+    confirms, and so does "there is no guard, confirmed by running it"; "refuted: the guard
+    is there", "was not confirmed" and "не подтвердилась бы" do not. A word quoted alone in
+    backticks is a quotation, as for the parser."""
+    low = unquote_verdicts(passage).lower()
     return any(not negated_before(low, m.start()) for m in CONFIRM_AT.finditer(low))
 
 
@@ -5451,10 +5453,17 @@ def confirmed_without_finding(text: str, block_id: str, known: set[str],
     records = verdict_records(text, block_id)
     starts = {at for _, _, at in records}
     for h, verdict, at in records:
-        if verdict != CHECKED or (h, at) in seen or not says_confirmed(lines[at]):
+        if verdict != CHECKED or (h, at) in seen:
             continue
         seen.add((h, at))
-        named = ref.findall(verdict_passage(lines, at, starts))
+        # One passage for both questions: the word that confirms and the id that names the
+        # finding are looked for over the same lines. Asked of the verdict line alone, a
+        # confirmation hard-wrapped onto the next line, or written in the proof indented under
+        # it (as the templates allow), was no confirmation at all, while its id was read there.
+        passage = verdict_passage(lines, at, starts)
+        if not says_confirmed(passage):
+            continue
+        named = ref.findall(passage)
         if any(n in known for n in named):
             continue
         out.append((h, list(dict.fromkeys(n for n in named if n not in known))))
