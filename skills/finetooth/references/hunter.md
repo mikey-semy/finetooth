@@ -44,6 +44,15 @@ Review block: **{{BLOCK_ID}} — {{BLOCK_TITLE}}**.
 {{FILES}}
 ```
 
+# Seams inside the block
+
+{{SEAMS}}
+
+Reading each file whole is not the same as reading the pair: a caller that relies on a value
+being set, a callee that leaves it unset on one path — each file looks right on its own.
+Where the manifest has a hypothesis about a seam, answer it with the path you followed on
+both sides; where a listed pair has none, still read its two files against each other.
+
 # Files for context
 
 These files **are not in your coverage** — another block undertakes to read them in full,

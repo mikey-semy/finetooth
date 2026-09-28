@@ -15,11 +15,13 @@ Subcommands are described in main(). Standard library only, no dependencies.
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import hashlib
 import json
 import math
 import os
+import posixpath
 import re
 import signal
 import subprocess
@@ -339,6 +341,9 @@ MSG = {
   "aged_row": "  {block:<6} commits: {commits:<5} files: {files:<5} {title}",
   "aged_none": "nothing changed under the blocks' paths since the base — the summary still describes the tree",
   "backfill_note": "Fingerprints stamped retroactively at commit {head}: blocks {blocks}; findings {n}. Changes before this commit are not tracked.",
+  "seams_none": "(no two files of the block are linked by an import or by joint changes — every file here can be read on its own)",
+  "seams_head": "Pairs of the block's files that depend on each other: {n} found by `seams`, the top {top} below (an import with the names it takes; joint changes from the history). A defect that lives only where two files are joined is invisible from either file alone — for each pair, find what one side assumes about the other and check that the other side holds it on every path.",
+  "seams_co": "co-change {n}× ({a} / {b} of each file's changes)",
   "setup_note": "Static definition of the blocks. Progress lives in state.json, findings in findings.jsonl. Array order = execution order.",
   "excl_apparatus": "review apparatus, not its subject", "excl_skill": "the review skill — tooling, not the subject of review",
  },
@@ -413,6 +418,9 @@ MSG = {
   "aged_row": "  {block:<6} коммитов: {commits:<5} файлов: {files:<5} {title}",
   "aged_none": "под путями блоков ничего не менялось с базы — итог по-прежнему описывает дерево",
   "backfill_note": "Отпечатки проставлены задним числом на коммите {head}: блоки {blocks}; находок {n}. Изменения до этого коммита не отслежены.",
+  "seams_none": "(ни одна пара файлов блока не связана ни импортом, ни совместными правками — каждый файл здесь читается сам по себе)",
+  "seams_head": "Пары файлов блока, которые зависят друг от друга: `seams` нашёл {n}, ниже верхние {top} (импорт — с именами, которые он берёт; совместные правки — из истории). Дефект, живущий только на стыке двух файлов, не виден ни из одного из них по отдельности — на каждой паре найди, что одна сторона предполагает о другой, и проверь, что другая держит это на всех путях.",
+  "seams_co": "совместных правок {n}× ({a} / {b} правок каждого файла)",
   "setup_note": "Статическое определение блоков. Прогресс живёт в state.json, находки — в findings.jsonl. Порядок массива = порядок исполнения.",
   "excl_apparatus": "аппарат ревью, а не его предмет", "excl_skill": "скилл ревью — оснастка, а не предмет ревью",
  },
@@ -1520,10 +1528,14 @@ def mass_basis(sets: list[set[str]]) -> str:
             f"too few for a percentile")
 
 
-def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
-                   min_together: int, min_share: float,
-                   hub_at: int) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
-    """Cross-block pairs above the thresholds, the hub files, and the number of mass commits skipped."""
+def joint_changes(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
+                  keep: Callable[[str, str], bool]
+                  ) -> tuple[dict[str, int], dict[tuple[str, str], int], int]:
+    """How often each owned file changed, how often each pair `keep` accepts changed in one
+    commit, and how many mass commits were skipped. ONE count for `coupling` (pairs across
+    blocks) and `seams` (pairs inside one): the two differ only in which pairs they keep,
+    so a mass cutoff or a share can never mean one thing in one command and another in the
+    other."""
     changes: dict[str, int] = {}
     together: dict[tuple[str, str], int] = {}
     skipped = 0
@@ -1539,9 +1551,18 @@ def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: in
         ordered = sorted(files)
         for i, a in enumerate(ordered):
             for b in ordered[i + 1:]:
-                if set(owned[a]) & set(owned[b]):
-                    continue  # the same block reads both: not a seam
-                together[(a, b)] = together.get((a, b), 0) + 1
+                if keep(a, b):
+                    together[(a, b)] = together.get((a, b), 0) + 1
+    return changes, together, skipped
+
+
+def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
+                   min_together: int, min_share: float,
+                   hub_at: int) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
+    """Cross-block pairs above the thresholds, the hub files, and the number of mass commits skipped."""
+    # the same block reads both: not a seam between blocks
+    changes, together, skipped = joint_changes(
+        owned, sets, cutoff, lambda a, b: not set(owned[a]) & set(owned[b]))
     partners: dict[str, set[str]] = {}
     for (a, b), n in together.items():
         if n >= min_together:
@@ -1614,6 +1635,420 @@ def cmd_coupling(args) -> int:
                          f"\t{p['together']}\t{p['share_a']:.2f}\t{p['share_b']:.2f}")
         COUPLING_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"\nwritten: {COUPLING_FILE.relative_to(ROOT)}")
+    return 0
+
+
+# --------------------------------------------------------------------------- seams
+
+# Seams INSIDE a block: pairs of its own files that depend on each other. `coupling` sees
+# pairs across blocks; inside a block the hunter reads both files, but a defect that exists
+# only where they are joined (one side assumes what the other does not hold on every path)
+# was the weakest class of the recall measurement — of 7 cross-file cases on blocks of real
+# size, the kit found 3 in full. The link is shown, the assumption is not: what one side
+# assumes about the other is the manifest author's hypothesis, not something to generate.
+#
+# How many seams the prompt and the default listing carry: the manifest holds 10–15
+# hypotheses (the kit's guidance since the first project), and one hypothesis per seam at
+# the lower edge of that range is as many as a manifest can take without the seams crowding
+# out every other question.
+SEAMS_TOP = 10
+
+JS_EXTS = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+# A specifier written with the emitted extension names the source file: TypeScript's ESM
+# rule (`./x.js` resolves to `./x.ts`).
+JS_EMITTED = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
+PY_EXTS = (".py",)
+TS_CONFIGS = ("tsconfig.json", "jsconfig.json")
+
+# Static forms are anchored at the start of a line: a `// import …` or a ` * import …` in a
+# comment does not start with the keyword. `require(…)` and `import(…)` are calls and can
+# stand anywhere.
+JS_IMPORT = re.compile(
+    r"^[ \t]*import\s+(?:type\s+)?(?P<clause>[\w$*{},\s]+?)\s+from\s*(['\"])(?P<spec>[^'\"\n]+)\2",
+    re.M)
+JS_BARE_IMPORT = re.compile(r"^[ \t]*import\s*(['\"])(?P<spec>[^'\"\n]+)\1", re.M)
+JS_REEXPORT = re.compile(
+    r"^[ \t]*export\s+(?:type\s+)?(?P<clause>\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*"
+    r"(['\"])(?P<spec>[^'\"\n]+)\2", re.M)
+JS_REQUIRE = re.compile(
+    r"(?:(?:const|let|var)\s+(?P<bind>\{[^}]*\}|[\w$]+)\s*=\s*)?"
+    r"\brequire\s*\(\s*(['\"])(?P<spec>[^'\"\n]+)\2\s*\)")
+JS_DYNAMIC = re.compile(r"\bimport\s*\(\s*(['\"])(?P<spec>[^'\"\n]+)\1\s*\)")
+
+
+def jsonc(text: str):
+    """JSON with comments and trailing commas — what `tsconfig.json` is allowed to be.
+
+    A strict `json.loads` refuses most real configs (`create-next-app` writes none of the
+    extras, but half the projects add a comment): the comments are cut outside strings, a
+    comma before `}` or `]` is dropped. None when it still does not parse.
+    """
+    out, i, n, quote_ch = [], 0, len(text), None
+    while i < n:
+        c = text[i]
+        if quote_ch:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == quote_ch:
+                quote_ch = None
+        elif c == '"':
+            quote_ch = c
+            out.append(c)
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    try:
+        return json.loads(re.sub(r",(\s*[}\]])", r"\1", "".join(out)))
+    except ValueError:
+        return None
+
+
+class TsConfig:
+    """`compilerOptions.paths` and `baseUrl` of one config, with its relative `extends`.
+
+    Read, not guessed: an alias resolves only as the project's own config declares it. A
+    `paths` target and `baseUrl` are resolved the way TypeScript does — against `baseUrl`
+    when one is set, else against the directory of the config that declares `paths`. An
+    `extends` naming a package (`@tsconfig/node20`) is not followed: that file is not in
+    the repository.
+    """
+
+    def __init__(self, rel: str) -> None:
+        self.rel = rel
+        self.paths: list[tuple[str, list[str]]] = []   # (pattern, targets from the root)
+        self.base: str | None = None                   # baseUrl from the root
+        base_url, paths, seen, at = None, None, set(), rel
+        while at and at not in seen:
+            seen.add(at)
+            conf = jsonc((ROOT / at).read_text(encoding="utf-8", errors="replace")) \
+                if (ROOT / at).is_file() else None
+            if not isinstance(conf, dict):
+                break
+            opts = conf.get("compilerOptions") or {}
+            here = posixpath.dirname(at)
+            if base_url is None and isinstance(opts.get("baseUrl"), str):
+                base_url = posixpath.normpath(posixpath.join(here, opts["baseUrl"]))
+            if paths is None and isinstance(opts.get("paths"), dict):
+                paths = (here, opts["paths"])
+            ext = conf.get("extends")
+            if not (isinstance(ext, str) and ext.startswith(".")):
+                break
+            nxt = posixpath.normpath(posixpath.join(here, ext))
+            if nxt.startswith(".."):
+                break   # outside the repository: not a file of the project under review
+            at = nxt if nxt.endswith(".json") else nxt + ".json"
+        self.base = base_url
+        if paths:
+            anchor = base_url if base_url is not None else paths[0]
+            for pattern, targets in paths[1].items():
+                if isinstance(targets, list):
+                    self.paths.append((pattern, [posixpath.normpath(posixpath.join(anchor, t))
+                                                 for t in targets if isinstance(t, str)]))
+            # The longest prefix before `*` wins, as in TypeScript.
+            self.paths.sort(key=lambda p: -len(p[0].split("*")[0]))
+
+    def candidates(self, spec: str) -> list[str]:
+        for pattern, targets in self.paths:
+            if "*" in pattern:
+                head, _, tail = pattern.partition("*")
+                if spec.startswith(head) and spec.endswith(tail) and len(spec) >= len(head) + len(tail):
+                    mid = spec[len(head):len(spec) - len(tail)]
+                    return [t.replace("*", mid, 1) for t in targets]
+            elif spec == pattern:
+                return targets
+        return [posixpath.normpath(posixpath.join(self.base, spec))] if self.base is not None else []
+
+    def described(self) -> str:
+        if not self.paths and self.base is None:
+            return ""
+        shown = [f"{p} → {', '.join(t or '.' for t in ts)}" for p, ts in self.paths]
+        if self.base is not None:
+            shown.append(f"baseUrl {self.base or '.'}")
+        return f"{self.rel}: {'; '.join(shown)}"
+
+
+class Imports:
+    """Import edges between tracked files: who imports whom and which names.
+
+    TS/JS by pattern (static `import … from`, `export … from`, `require`, `import()`),
+    Python by `ast`. A specifier resolves to a tracked file or not at all: a package, an
+    alias the configs do not declare, a file that is not in the repository are counted and
+    skipped — never matched by a guess at the nearest name.
+    """
+
+    def __init__(self, tracked: set[str]) -> None:
+        self.tracked = tracked
+        self.configs: dict[str, TsConfig | None] = {}
+        self.resolved = self.unresolved = 0
+
+    def config_for(self, rel: str) -> TsConfig | None:
+        """The nearest `tsconfig.json`/`jsconfig.json` above the file — the one the compiler uses."""
+        d = posixpath.dirname(rel)
+        while True:
+            if d not in self.configs:
+                found = None
+                for name in TS_CONFIGS:
+                    cand = posixpath.join(d, name) if d else name
+                    if (ROOT / cand).is_file():
+                        found = TsConfig(cand)
+                        break
+                self.configs[d] = found
+            if self.configs[d] is not None or not d:
+                return self.configs[d]
+            d = posixpath.dirname(d)
+
+    def file_of(self, base: str, exts: tuple[str, ...], index: str) -> str | None:
+        if base.startswith("..") or base.startswith("/"):
+            return None
+        tries = [base]
+        stem, ext = posixpath.splitext(base)
+        if exts == JS_EXTS:
+            # `./x.js` names `./x.ts`; `./types` may be a declaration file only
+            tries += [stem + e for e in JS_EMITTED.get(ext, ())]
+            exts = exts + (".d.ts",)
+        tries += [base + e for e in exts]
+        tries += [posixpath.normpath(posixpath.join(base, index + e)) for e in exts]
+        return next((t for t in tries if t in self.tracked), None)
+
+    def js_target(self, rel: str, spec: str) -> str | None:
+        if spec.startswith("."):
+            return self.file_of(posixpath.normpath(posixpath.join(posixpath.dirname(rel), spec)),
+                                JS_EXTS, "index")
+        conf = self.config_for(rel)
+        for cand in (conf.candidates(spec) if conf else []):
+            hit = self.file_of(cand, JS_EXTS, "index")
+            if hit:
+                return hit
+        return None
+
+    @staticmethod
+    def js_names(clause: str) -> list[str]:
+        clause = re.sub(r"^type\s+", "", clause.strip())
+        names: list[str] = []
+        if clause.startswith("*"):
+            return ["*"]
+        brace = re.search(r"\{([^}]*)\}", clause)
+        head = clause[:brace.start()] if brace else clause
+        if head.strip(" ,"):
+            names.append("default")
+        if brace:
+            for part in brace.group(1).split(","):
+                word = re.sub(r"^type\s+", "", part.strip()).split()
+                if word:
+                    names.append(word[0].split(":")[0])
+        return names
+
+    def js_edges(self, rel: str, text: str) -> list[tuple[str, list[str]]]:
+        found: list[tuple[str, list[str]]] = []
+        for m in JS_IMPORT.finditer(text):
+            found.append((m["spec"], self.js_names(m["clause"])))
+        for m in JS_BARE_IMPORT.finditer(text):
+            found.append((m["spec"], []))
+        for m in JS_REEXPORT.finditer(text):
+            found.append((m["spec"], self.js_names(m["clause"])))
+        for m in JS_REQUIRE.finditer(text):
+            bind = m["bind"] or ""
+            found.append((m["spec"], self.js_names(bind) if bind.startswith("{")
+                          else (["*"] if bind else [])))
+        for m in JS_DYNAMIC.finditer(text):
+            found.append((m["spec"], []))
+        return [(t, names) for spec, names in found if (t := self.counted(self.js_target(rel, spec)))]
+
+    def counted(self, target: str | None) -> str | None:
+        if target:
+            self.resolved += 1
+        else:
+            self.unresolved += 1
+        return target
+
+    def py_module(self, rel: str, dotted: str, level: int) -> str | None:
+        """A module name to its file. Relative (`level` dots) from the importer's package; an
+        absolute one from the nearest directory above the importer that holds it — the
+        script's own directory first, the root last, as `sys.path` would have them for a
+        project run from its tree. `pyproject` package maps are not read."""
+        parts = [p for p in dotted.split(".") if p]
+        if level:
+            d = posixpath.dirname(rel)
+            for _ in range(level - 1):
+                d = posixpath.dirname(d)
+            roots = [d]
+        else:
+            roots, d = [], posixpath.dirname(rel)
+            while True:
+                roots.append(d)
+                if not d:
+                    break
+                d = posixpath.dirname(d)
+        for r in roots:
+            base = posixpath.join(r, *parts) if parts else r
+            hit = self.file_of(base, PY_EXTS, "__init__") if parts else (
+                posixpath.join(r, "__init__.py") if posixpath.join(r, "__init__.py") in self.tracked
+                else None)
+            if hit:
+                return hit
+        return None
+
+    def py_edges(self, rel: str, text: str) -> list[tuple[str, list[str]]]:
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            return []
+        found: list[tuple[str | None, list[str]]] = []
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    found.append((self.py_module(rel, a.name, 0), []))
+            elif isinstance(n, ast.ImportFrom):
+                module = n.module or ""
+                whole: list[str] = []
+                for a in n.names:
+                    # `from pkg import mod` imports a submodule when there is one
+                    sub = (self.py_module(rel, f"{module}.{a.name}" if module else a.name, n.level)
+                           if a.name != "*" else None)
+                    if sub:
+                        found.append((sub, []))
+                    else:
+                        whole.append(a.name)
+                if whole:
+                    found.append((self.py_module(rel, module, n.level), whole))
+        return [(t, names) for t, names in found if self.counted(t)]
+
+    def edges(self, rel: str) -> list[tuple[str, list[str]]]:
+        ext = posixpath.splitext(rel)[1]
+        if ext not in JS_EXTS and ext not in PY_EXTS:
+            return []
+        lines = text_lines(rel)
+        if lines is None:
+            return []
+        text = b"\n".join(lines).decode("utf-8", "replace")
+        return self.js_edges(rel, text) if ext in JS_EXTS else self.py_edges(rel, text)
+
+
+def block_seams(b: dict, min_together: int, min_share: float,
+                since: str | None = None) -> dict:
+    """The pairs of the block's files linked by an import, by joint changes, or both —
+    sorted: both kinds first, then by joint changes, then by imported names."""
+    defn = blocks()
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    files = sorted(git_files(b.get("paths", [])) - excluded)
+    inside = set(files)
+    imp = Imports(all_files())
+    pairs: dict[tuple[str, str], dict] = {}
+
+    def pair(a: str, c: str) -> dict:
+        return pairs.setdefault(tuple(sorted((a, c))), {"imports": {}, "together": 0,
+                                                         "share": (0.0, 0.0)})
+    outside = 0
+    for f in files:
+        for target, names in imp.edges(f):
+            if target == f:
+                continue
+            if target not in inside:
+                outside += 1
+                continue
+            got = pair(f, target)["imports"].setdefault((f, target), set())
+            got.update(names)
+    owned, _, _ = coverage_map()
+    sets, merges = commit_file_sets(since)
+    cutoff = mass_cutoff(sets) if sets else 0
+    changes, together, skipped = joint_changes(owned, sets, cutoff,
+                                               lambda a, c: a in inside and c in inside)
+    for (a, c), n in together.items():
+        share = (n / changes[a], n / changes[c])
+        if n >= min_together and max(share) >= min_share:
+            got = pair(a, c)
+            got["together"], got["share"] = n, share
+    rows = []
+    for (a, c), p in pairs.items():
+        names = set().union(*p["imports"].values()) if p["imports"] else set()
+        rows.append({"a": a, "b": c, **p, "names": names,
+                     "both": bool(p["imports"]) and p["together"] > 0})
+    rows.sort(key=lambda r: (not r["both"], -r["together"], -len(r["names"]), r["a"], r["b"]))
+    configs = sorted({c.described() for c in imp.configs.values() if c and c.described()})
+    return {"files": files, "rows": rows, "resolved": imp.resolved, "unresolved": imp.unresolved,
+            "outside": outside, "configs": configs, "sets": sets, "merges": merges,
+            "cutoff": cutoff, "skipped": skipped}
+
+
+SEAM_CO = "co-change {n}× ({a} / {b} of each file's changes)"
+
+
+def seam_lines(rows: list[dict], indent: str = "  ", co: str = SEAM_CO) -> list[str]:
+    """The pairs as the listing and the hunter prompt print them — one shape for both; `co`
+    words the joint-change line in the language of the reader."""
+    out = []
+    for i, r in enumerate(rows, 1):
+        out.append(f"{indent}{i}. {r['a']}  ↔  {r['b']}")
+        for (src, dst), names in sorted(r["imports"].items()):
+            shown = ", ".join(sorted(names)) if names else "—"
+            out.append(f"{indent}     import {src} → {dst}: {shown}")
+        if r["together"]:
+            out.append(f"{indent}     " + co.format(n=r["together"], a=f"{r['share'][0]:.0%}",
+                                                     b=f"{r['share'][1]:.0%}"))
+    return out
+
+
+def render_seams_for(b: dict) -> str:
+    """`{{SEAMS}}`: the block's top seams for the hunter — where reading must join two files."""
+    found = block_seams(b, COUPLING_MIN_TOGETHER, COUPLING_MIN_SHARE)
+    rows = found["rows"]
+    if not rows:
+        return T("seams_none")
+    head = T("seams_head", n=len(rows), top=min(SEAMS_TOP, len(rows)))
+    return head + "\n\n```\n" + "\n".join(
+        seam_lines(rows[:SEAMS_TOP], indent="", co=MSG[review_lang()]["seams_co"])) + "\n```"
+
+
+def cmd_seams(args) -> int:
+    """Pairs of files INSIDE one block linked by an import or by joint changes."""
+    defn = blocks()
+    idx = block_index(defn)
+    if args.block not in idx:
+        die(f"unknown block {args.block}; known: {', '.join(idx)}")
+    b = idx[args.block]
+    if args.top < 1:
+        die(f"--top must be at least 1, not {args.top}")
+    found = block_seams(b, args.min_together, args.min_share, args.since)
+    rows = found["rows"]
+    n_imp = sum(1 for r in rows if r["imports"])
+    n_co = sum(1 for r in rows if r["together"])
+    n_both = sum(1 for r in rows if r["both"])
+    print(f"block {b['id']}: {len(found['files'])} files; pairs linked by an import: {n_imp}, "
+          f"by joint changes: {n_co}, by both: {n_both}")
+    print(f"imports: {found['resolved']} resolved to a tracked file ({found['outside']} of them "
+          f"outside the block), {found['unresolved']} not resolved — packages, aliases no config "
+          f"declares, files not in the repository; skipped")
+    for c in found["configs"]:
+        print(f"aliases: {c}")
+    sets = found["sets"]
+    if sets:
+        print(history_line(sets, found["merges"]))
+        print(f"joint changes: together ≥ {args.min_together}, share ≥ {args.min_share:.0%} "
+              f"(the thresholds of `coupling`); {found['skipped']} mass commits skipped "
+              f"(> {found['cutoff']} files, {mass_basis(sets)})")
+    else:
+        print("no commits in the history — joint changes cannot be counted")
+    if not rows:
+        print("\nno two files of the block are linked — nothing to join across files")
+        return 0
+    top = rows[:args.top]
+    print(f"\nseams ({len(top)} of {len(rows)}; both kinds first, then joint changes, then "
+          f"imported names):")
+    print("\n".join(seam_lines(top)))
+    print(f"\nfor each: a hypothesis in the manifest ({manifest_path(b).relative_to(ROOT)}) on "
+          f"what one side assumes about the other — the value, the state, the error it expects "
+          f"— and the check that the other side holds it on every path. The hunter prompt "
+          f"carries the top {SEAMS_TOP} (`{CLI} prompt {b['id']} --role hunter`).")
     return 0
 
 
@@ -2499,6 +2934,8 @@ def cmd_prompt(args) -> int:
         # commits to make, and the lookup is a git run per file it reads.
         "{{COMMIT_RULES}}": commit_rules(args.role, args.diff or "")
         if "{{COMMIT_RULES}}" in body else "",
+        # The same: the seams read the whole history, and only the hunter's template asks.
+        "{{SEAMS}}": render_seams_for(b) if "{{SEAMS}}" in body else "",
     }
     if diff:
         # The diff is a substitution like any other and goes in the SAME pass. Applied
@@ -4818,6 +5255,9 @@ Next — by hand, and this is not a formality:
    first, domain ones next, live-system ones last. Example: {asset(ASSET_BLOCKS, lang)}
 3. The manifest of the first block — docs/review/blocks/<ID>-<slug>.md: 10–15 hypotheses about your
    project and the acceptance criterion. Example: {asset(ASSET_MANIFEST, lang)}
+   `{cli} seams <ID>` lists the pairs of the block's files linked by an import or by joint
+   changes: for each of the top ones write a hypothesis on what one side assumes about the
+   other — nobody else joins them, and the hunter gets the same list in its prompt.
 4. `{cli} init`, then `{cli} coverage` — and deal with the unowned files until there are
    none left. This is where everything forgotten surfaces.
 5. `{cli} log <ID> "what was decided and why"` — from the first decision on: findings a
@@ -4923,6 +5363,12 @@ def main() -> int:
     c.add_argument("--min-together", type=int, default=COUPLING_MIN_TOGETHER, help="joint commits a pair needs")
     c.add_argument("--min-share", type=float, default=COUPLING_MIN_SHARE, help="share of one file's commits the pair must cover")
     c.add_argument("--write", action="store_true", help="also write docs/review/coupling.tsv")
+    c = sub.add_parser("seams", help="pairs of files inside one block linked by an import or by joint changes")
+    c.add_argument("block")
+    c.add_argument("--top", type=int, default=SEAMS_TOP, help=f"how many pairs to print (default {SEAMS_TOP})")
+    c.add_argument("--since", help="only commits since this date (git --since)")
+    c.add_argument("--min-together", type=int, default=COUPLING_MIN_TOGETHER, help="joint commits a pair needs")
+    c.add_argument("--min-share", type=float, default=COUPLING_MIN_SHARE, help="share of one file's commits the pair must cover")
     c = sub.add_parser("order", help="blocks in the order worth walking them: risk first, change frequency second")
     c.add_argument("--since", help="only commits since this date (git --since)")
     sub.add_parser("refs", help="finding ids of the register named in the code outside docs/review/")
@@ -4953,7 +5399,7 @@ def main() -> int:
         "check": cmd_check, "log": cmd_log, "import": cmd_import, "decide": cmd_decide,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
-        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order, "refs": cmd_refs, "summary": cmd_summary, "sarif": cmd_sarif,
+        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "seams": cmd_seams, "order": cmd_order, "refs": cmd_refs, "summary": cmd_summary, "sarif": cmd_sarif,
         "setup": cmd_setup,
     }[args.cmd](args)
 

@@ -4173,7 +4173,7 @@ BODY_ARGV = {
     # Именно находка, а не блок: `set-status` в обходе идёт раньше `restamp`, и после него
     # блок не в том статусе, который штампуется, — блочный `restamp` отказывался бы всегда.
     "restamp": ("H1-001",), "backfill": (), "inventory": (), "sizes": (),
-    "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
+    "coupling": (), "seams": ("H1",), "order": (), "refs": (), "summary": ("--out", "s.md"),
     "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
     "decide": ("H1", "решение"),
     # Без `--out`: поток — поведение по умолчанию, и обход границы записи проверяет, что оно
@@ -4941,6 +4941,195 @@ class ThresholdTest(unittest.TestCase):
         self.s.run("init")
         out = self.s.run("coupling").stdout
         self.assertIn("95th percentile of this repository", out)
+
+
+class SeamsTest(unittest.TestCase):
+    """`seams`: пары файлов ВНУТРИ блока, связанные импортом или совместными правками.
+
+    Замер полноты (finetooth-hq, 2026-09-recall, фаза 2): из семи дефектов, видимых только
+    при связывании нескольких файлов блока, полностью найдено три. `coupling` смотрит пары
+    между блоками, стыков внутри блока не видел никто.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _ts_stand(self, tsconfig: str | None) -> str:
+        if tsconfig is not None:
+            self.s.write("tsconfig.json", tsconfig)
+        self.s.write("src/lib/db.ts", "export function getUser() {}\nexport const LIMIT = 5\n")
+        self.s.write("src/lib/index.ts", "export { getUser, LIMIT as MAX } from './db'\n")
+        self.s.write("src/lib/all.ts", "export * from './db'\n")
+        self.s.write("src/api/route.ts", (
+            "import { getUser, type LIMIT } from '@/lib/db'\n"
+            "import React from 'react'\n"
+            "// import { ghost } from './ghost'\n"
+            "const helper = require('./helper')\n"))
+        self.s.write("src/api/helper.ts", "export const h = 1\n")
+        self.s.write("src/api/ghost.ts", "export const ghost = 1\n")
+        self.s.write("src/api/esm.ts", "import { h } from './helper.js'\nimport type { T } from '.'\n")
+        self.s.write("src/api/index.d.ts", "export type T = string\n")
+        self.s.blocks(paths=["src/**", "tsconfig.json"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("seams", "H1")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    TSCONFIG = ('{\n  // комментарий, как в живых проектах\n  "compilerOptions": {\n'
+                '    "paths": { "@/*": ["./src/*"], },\n  },\n}\n')
+
+    def test_импорт_ts_относительный_алиас_и_реэкспорт(self):
+        out = self._ts_stand(self.TSCONFIG)
+        self.assertIn("import src/api/route.ts → src/lib/db.ts: LIMIT, getUser", out,
+                      "алиас `@/` из paths в tsconfig обязан разрешиться в src/")
+        self.assertIn("import src/lib/index.ts → src/lib/db.ts: LIMIT, getUser", out,
+                      "`export { … } from` — тоже импорт, с именами источника")
+        self.assertIn("import src/lib/all.ts → src/lib/db.ts: *", out)
+        self.assertIn("import src/api/route.ts → src/api/helper.ts: *", out, "require")
+        self.assertIn("import src/api/esm.ts → src/api/helper.ts: h", out,
+                      "`./x.js` в TypeScript называет `./x.ts`")
+        self.assertIn("import src/api/esm.ts → src/api/index.d.ts: T", out,
+                      "`'.'` — каталог: его index, в том числе файл объявлений")
+        self.assertIn("aliases: tsconfig.json: @/* → src/*", out,
+                      "вывод обязан назвать конфиг, из которого прочитан алиас")
+        self.assertNotIn("ghost", out, "импорт в комментарии — не импорт")
+        self.assertRegex(out, r"1 not resolved", "пакет `react` не разрешается и считается")
+
+    def test_алиас_без_конфига_не_угадывается(self):
+        """`@/` — соглашение, а не правило: без paths в конфиге проект мог назвать им что
+        угодно, и связь, выведенная догадкой, была бы ложной."""
+        out = self._ts_stand(None)
+        self.assertNotIn("src/api/route.ts → src/lib/db.ts", out)
+        self.assertIn("import src/lib/index.ts → src/lib/db.ts", out)
+        self.assertNotIn("aliases:", out)
+
+    def test_алиас_из_относительного_extends(self):
+        """`paths` часто лежат в общем базовом конфиге, а `tsconfig.json` его расширяет;
+        цели разрешаются от конфига, который объявил `paths`, а не от расширяющего."""
+        self.s.write("config/tsconfig.base.json",
+                     '{"compilerOptions": {"paths": {"@/*": ["../src/*"]}}}\n')
+        out = self._ts_stand('{"extends": "./config/tsconfig.base.json"}\n')
+        self.assertIn("import src/api/route.ts → src/lib/db.ts: LIMIT, getUser", out)
+        self.assertIn("aliases: tsconfig.json: @/* → src/*", out)
+
+    def test_импорт_python(self):
+        self.s.write("pkg/__init__.py", "")
+        self.s.write("pkg/a.py", "from .b import thing, other\nfrom . import sub\nimport pkg.c\n"
+                                 "import os\n\ndef f():\n    from pkg.d import late\n")
+        self.s.write("pkg/b.py", "thing = other = 1\n")
+        self.s.write("pkg/c.py", "")
+        self.s.write("pkg/d.py", "late = 1\n")
+        self.s.write("pkg/sub.py", "")
+        self.s.blocks(paths=["pkg/**"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("seams", "H1").stdout
+        self.assertIn("import pkg/a.py → pkg/b.py: other, thing", out)
+        self.assertIn("import pkg/a.py → pkg/sub.py: —", out,
+                      "`from . import sub` берёт подмодуль, а не имя из __init__")
+        self.assertNotIn("pkg/a.py → pkg/__init__.py", out)
+        self.assertIn("import pkg/a.py → pkg/c.py: —", out)
+        self.assertIn("import pkg/a.py → pkg/d.py: late", out, "импорт внутри функции — тоже импорт")
+
+    def _touch(self, *files: str) -> None:
+        for f in files:
+            p = self.s.root / f
+            p.write_text(p.read_text(encoding="utf-8") + "1\n", encoding="utf-8")
+        self.s.commit("t")
+
+    def _history_stand(self) -> None:
+        """a↔b: импорт и три совместные правки; c↔d: четыре совместные правки, импорта нет;
+        g→h: три имени; e→f: одно имя (по алфавиту e раньше g — сортировку по именам видно);
+        i↔j: две совместные правки — ниже порога; a↔x:
+        три совместные правки, но x в другом блоке."""
+        w = self.s.write
+        w("src/a.ts", "import { b1 } from './b'\n")
+        w("src/b.ts", "export const b1 = 1\n")
+        w("src/c.ts", "0\n")
+        w("src/d.ts", "0\n")
+        w("src/e.ts", "import { f1 } from './f'\n")
+        w("src/f.ts", "export const f1 = 1\n")
+        w("src/g.ts", "import { h1, h2, h3 } from './h'\n")
+        w("src/h.ts", "export const h1 = 1, h2 = 2, h3 = 3\n")
+        w("src/i.ts", "0\n")
+        w("src/j.ts", "0\n")
+        w("other/x.ts", "0\n")
+        self.s.blocks(paths=["src/**"], extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+            "goal": "г", "paths": ["other/**"], "ref_paths": []}])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        for _ in range(3):
+            self._touch("src/a.ts", "src/b.ts")
+        for _ in range(4):
+            self._touch("src/c.ts", "src/d.ts")
+        for _ in range(2):
+            self._touch("src/i.ts", "src/j.ts")
+        for _ in range(3):
+            self._touch("src/e.ts", "other/x.ts")
+        self.s.run("init")
+
+    def test_совместные_правки_внутри_блока_и_порог_coupling(self):
+        self._history_stand()
+        out = self.s.run("seams", "H1").stdout
+        self.assertIn("src/c.ts  ↔  src/d.ts", out)
+        self.assertIn("co-change 4× (100% / 100% of each file's changes)", out)
+        self.assertIn("together ≥ 3, share ≥ 50% (the thresholds of `coupling`)", out)
+        self.assertNotIn("src/i.ts", out, "две совместные правки — ниже порога `coupling`")
+        self.assertNotIn("other/x.ts", out, "пара через блоки — работа `coupling`, не `seams`")
+
+    def test_сортировка_оба_вида_затем_правки_затем_имена(self):
+        self._history_stand()
+        out = self.s.run("seams", "H1").stdout
+        order = [out.index(p) for p in ("1. src/a.ts  ↔  src/b.ts", "2. src/c.ts  ↔  src/d.ts",
+                                        "3. src/g.ts  ↔  src/h.ts", "4. src/e.ts  ↔  src/f.ts")]
+        self.assertEqual(order, sorted(order), out)
+        top = self.s.run("seams", "H1", "--top", "2").stdout
+        self.assertIn("seams (2 of 4;", top)
+        self.assertNotIn("src/g.ts  ↔", top)
+
+    def test_промпт_охотника_несёт_стыки_блока(self):
+        self._history_stand()
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("1. src/a.ts  ↔  src/b.ts", out.stdout)
+        self.assertIn("совместных правок 3×", out.stdout, "стенд русский — строка тоже")
+        self.assertNotIn("{{SEAMS}}", out.stdout)
+
+    def test_без_стыков_промпт_говорит_нейтрально(self):
+        self.s.write("src/one.ts", "0\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ни одна пара файлов блока не связана", out.stdout)
+        self.assertIn("no two files of the block are linked", self.s.run("seams", "H1").stdout)
+
+    def test_английский_шаблон_охотника_тоже_несёт_стыки(self):
+        """Шаблоны ролей живут парой: подстановка в русском при забытой английской
+        оставила бы английскому ревью список стыков только в выводе `seams`."""
+        self.s.write("src/a.ts", "import { b1 } from './b'\n")
+        self.s.write("src/b.ts", "export const b1 = 1\n")
+        self.s.blocks(paths=["src/**"], lang="en")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Pairs of the block's files that depend on each other", out.stdout)
+        self.assertIn("import src/a.ts → src/b.ts: b1", out.stdout)
+
+    def test_неизвестный_блок_назван(self):
+        self._history_stand()
+        out = self.s.run("seams", "Z9")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("unknown block Z9; known: H1, H2", out.stderr)
 
 
 STREAM_REPLY = "блок пройден"
