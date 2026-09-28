@@ -296,7 +296,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-486 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+496 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -456,8 +456,8 @@ share of what exists that is.
 skills/finetooth/                THE SKILL — this is what gets installed into the agent
   SKILL.md                        when to apply and the order of work (read by the agent)
   LICENSE                         terms — travel with the skill
-  scripts/review.py               the tool, 24 commands: version, setup, init, status, next,
-                                  inventory, sizes, coverage, coupling, order, roots, prompt,
+  scripts/review.py               the tool, 25 commands: version, setup, init, status, next,
+                                  inventory, sizes, coverage, coupling, seams, order, roots, prompt,
                                   import, set-status, set-finding, hypotheses, restamp,
                                   backfill, refs, findings, summary, sarif, check, log
   scripts/axes.py                 the spend of a headless run, broken down by axis
@@ -485,7 +485,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 486 scenarios
+tests/                            tests of the tool and the skill format: 496 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
@@ -517,6 +517,19 @@ above the 95th percentile of files per commit **here** — or, on a history of f
 commits, where the percentile cannot separate anything, above Tukey's fence; a file is a
 shared node when it is coupled with a tenth of the review's blocks, never fewer than three
 (a seam runs between two, so a third means it no longer describes one seam).
+
+**Seams inside a block.** Reading every file of a block whole is not reading the pair: on
+blocks of real size, defects visible only when several files are joined were the weakest
+class of the recall measurement (of 7 such cases, 3 found in full). `review seams <ID>` lists
+the pairs of the block's own files linked by an import or by joint changes. Imports are read
+for TS/JS (`import … from`, `export … from`, `require`, `import()`; relative paths, and the
+`paths`/`baseUrl` aliases of the nearest `tsconfig.json`/`jsconfig.json` with its relative
+`extends` — an alias no config declares is not guessed) and for Python (`ast`: absolute and
+relative imports); a specifier that resolves to no tracked file is counted and skipped. Joint
+changes use the history reading and the thresholds of `coupling`. Pairs with both kinds of
+link come first, then by joint changes, then by the number of imported names; `--top` (10 by
+default). What one side assumes about the other is not generated — that is the manifest's
+hypothesis; the hunter prompt carries the same top pairs so the hunter knows where to join.
 
 **What a run costs, measured.** `assets/run-role.sh <ID> <role>` runs a role headless through
 `claude -p`, keeps the event stream and writes one line to the journal: turns, tool calls,

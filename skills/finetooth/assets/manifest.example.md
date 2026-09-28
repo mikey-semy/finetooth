@@ -61,6 +61,12 @@ grants.
     lists. Can a person receive an event about an order they have no right to see?
 14. **A deactivated user.** A dismissed employee with a still-live token: where are
     `account_status` and `deleted_at` checked — on every request or only at login?
+15. **A seam: the handler trusts the repository's filter.** `orders_handler.go` calls
+    `repo.ListOrders(scope)` and returns the result without its own ownership check — it
+    relies on `ListOrders` applying `scope` on every path. Check that `repo.ListOrders` holds
+    this on all of them: the cached branch, the empty-scope branch, the export variant. One
+    hypothesis per top pair of `review seams H1` — the tool names the link, the manifest names
+    what one side assumes about the other.
 
 ## Acceptance criterion
 

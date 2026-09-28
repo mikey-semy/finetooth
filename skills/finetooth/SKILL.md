@@ -88,6 +88,10 @@ one of your own:
    finding, 10–15 numbered hypotheses about this project, an acceptance criterion that cannot
    be met without reading the code. Sample — [assets/manifest.example.md](assets/manifest.example.md).
    Without project-specific hypotheses the review comes out "on general grounds"; do not cut this part.
+   `review seams <ID>` lists the pairs of the block's own files linked by an import (TS/JS
+   with the `paths` aliases of `tsconfig.json`/`jsconfig.json`, Python) or by joint changes
+   (the thresholds of `coupling`): for each of the top ones write a hypothesis on what one side
+   assumes about the other. The hunter prompt carries the same top pairs.
 2. **Hunter.** `review prompt <ID> --role hunter` prints a ready prompt — hand it to a subagent
    **whole and unedited**. The agent writes the report and the draft findings to disk itself.
    Then `review set-status <ID> hunted`. Headless, with the spend measured and written to the
