@@ -451,6 +451,13 @@ POST_VERIFY = ("verified", "triaged", "fixing", "closed")
 # them: triage decides WHAT to fix, and a guard is recorded when the fix is made.
 FIX_PHASE = ("fixing", "closed")
 
+# The statuses in which the block has been read: a hunter report stands behind each of them
+# (gate 4 of `check`). `todo`, `running` and `blocked` are not — "a blocked block is not a
+# read one" (`status`). The readability ceiling is a promise about a reading still to come:
+# once the reading happened, the report was written on the volume of that day, and growth
+# of the code afterwards is caught by the block fingerprint, not by the ceiling.
+READ_STATUSES = ("hunted", *POST_VERIFY)
+
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1055,6 +1062,7 @@ def cmd_status(args) -> int:
         if f.get("status") == "open":
             open_by_block[f.get("block", "?")] = open_by_block.get(f.get("block", "?"), 0) + 1
 
+    limit = readable_lines()
     mark = {
         "todo": "·", "running": "»", "hunted": "h", "verified": "v",
         "triaged": "t", "fixing": "f", "closed": "✓", "blocked": "!",
@@ -1068,6 +1076,8 @@ def cmd_status(args) -> int:
         status = s.get("status", "todo")
         opened = open_by_block.get(b["id"], 0)
         tail = f"  open findings: {opened}" if opened else ""
+        if size := ceiling_mark(b, status, limit)[0]:
+            tail += f"  {size}"
         print(f"  {mark.get(status,'?')} {b['id']:<4} {status:<9} {b['title']}{tail}")
 
     total = len(defn["blocks"])
@@ -1377,11 +1387,30 @@ def enumerates_beyond(b: dict) -> bool:
     return bool(ENUMERATION.search("\n".join(unquoted(body, "text"))))
 
 
+def ceiling_mark(b: dict, status: str, limit: int) -> tuple[str, bool]:
+    """What the ceiling says of a readable block: the mark and whether it blocks the reading.
+
+    Shared by `sizes` and `status`, so they say what `check` says: above the ceiling before
+    the reading — split now; above it after — the report stands, the next review splits.
+    """
+    if b.get("proof", "read") != "read" or not b.get("paths"):
+        return "", False
+    _, lines = block_lines(b["paths"])
+    if lines <= limit:
+        return "", False
+    if status in READ_STATUSES:
+        return (f"grew past the ceiling by {lines - limit} after the review — the next "
+                f"review splits it", False)
+    return f"⚠ above the ceiling by {lines - limit} — split by subject", True
+
+
 def cmd_sizes(args) -> int:
     """Size of every block against the readability ceiling: what to split before it is too late."""
     defn = blocks()
+    # `sizes` is a cutting tool and runs before `init`; without a state every block is unread.
+    st = state() if STATE_FILE.exists() else {"blocks": {}}
     limit = readable_lines()
-    over = 0
+    over = grown = 0
     print(f"{'block':<6} {'proof':<9} {'files':>6} {'lines':>8}  {'ceiling ' + str(limit)}")
     for b in defn["blocks"]:
         if not b.get("paths"):
@@ -1389,20 +1418,25 @@ def cmd_sizes(args) -> int:
             continue
         n, lines = block_lines(b["paths"])
         proof = b.get("proof", "read")
-        mark = ""
-        if proof == "read" and lines > limit:
-            mark = f"⚠ above the ceiling by {lines - limit} — split by subject"
+        mark, blocking = ceiling_mark(b, st["blocks"].get(b["id"], {}).get("status", "todo"), limit)
+        if blocking:
             over += 1
-        elif proof == "measured":
+        elif mark:
+            grown += 1
+        if proof == "measured":
             mark = "measured, the ceiling does not apply"
         sn, sl = sweep_lines(b)
         if sn:
             mark = (mark + "; " if mark else "") + f"+ sweep {sn} files / {sl} lines (mechanical, not read)"
         print(f"{b['id']:<6} {proof:<9} {n:>6} {lines:>8}  {mark}")
+    if grown:
+        print(f"\nblocks grown past the ceiling after their review: {grown} — the report "
+              f"stands; split them before the next review of this code")
     if over:
         print(f"\nblocks above the ceiling: {over}")
         return 1
-    print("\nall readable blocks are within the ceiling")
+    if not grown:
+        print("\nall readable blocks are within the ceiling")
     return 0
 
 
@@ -4766,12 +4800,25 @@ def cmd_check(args) -> int:
             continue
         n, lines = block_lines(b["paths"])
         limit = readable_lines()
-        if lines > limit:
-            gates.refuse(
-                "blocks/too-big-to-read",
-                f"{bid}: {n} files, {lines} lines — cannot be read in one session "
-                f"(ceiling {limit}). Split the block, or the report will lie about coverage"
-            )
+        if lines <= limit:
+            continue
+        # The split must come BEFORE the reading: after it the report already says what was
+        # read, and refusing then made a closed block red for code added later (this kit's
+        # own T1 grew past the ceiling with new commands, and every PR into review.py failed
+        # `check`). What is left is a debt of the next review, said aloud.
+        status = st["blocks"].get(bid, {}).get("status", "todo")
+        if status in READ_STATUSES:
+            gates.warn(
+                "blocks/grew-past-ceiling",
+                f"{bid}: {n} files, {lines} lines — grew past the ceiling ({limit}) after the "
+                f"review (status {status}); the report stands for what was read then, but the "
+                f"next review of this code must split the block first: `{CLI} sizes`")
+            continue
+        gates.refuse(
+            "blocks/too-big-to-read",
+            f"{bid}: {n} files, {lines} lines — cannot be read in one session "
+            f"(ceiling {limit}). Split the block, or the report will lie about coverage"
+        )
 
     # The loop signal, as `prompt --role fix` will refuse it: said here too, because the lead
     # reads `check` after every import, and the stop belongs before the next round is cut, not

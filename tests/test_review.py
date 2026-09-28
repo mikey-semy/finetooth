@@ -2489,6 +2489,75 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("check")
         self.assertIn("cannot be read in one session", refused(out), out.stdout)
 
+    HUNTER_STUB = "# охотник\n## Гипотезы\n- H1.1 — проверена: да\n## Ограничения охвата\nнет\n"
+
+    def _read_block(self, lines: int) -> None:
+        """Стенд, на котором `check` иначе зелёный: блок с отчётами обеих ролей и картой
+        покрытия, потолок 100 строк, в блоке `lines` строк. Статус ставит тест."""
+        self.s.write("src/big.ts", "x\n" * lines)
+        self.s.blocks(paths=["src/big.ts"], readable_lines=100)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter=self.HUNTER_STUB, verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+
+    def test_непрочитанный_блок_выше_потолка_роняет_проверку_в_любом_статусе_до_охоты(self):
+        """Резать блок надо ДО чтения: `running` и `blocked` — тоже ещё не прочитанный блок
+        (отчёта охотника за ними нет), и отказ на них тот же, что на `todo`."""
+        self._read_block(150)
+        for status in ("running", "blocked"):
+            with self.subTest(статус=status):
+                self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
+                out = self.s.run("check")
+                self.assertIn("cannot be read in one session", refused(out), out.stdout)
+                self.assertNotIn("grew past the ceiling", out.stdout)
+
+    def test_блок_выросший_за_потолок_после_охоты_предупреждает(self):
+        """Потолок — обещание о чтении, которое ещё впереди. У прочитанного блока отчёт
+        написан на объёме того дня, рост кода после ревью ловит отпечаток блока, а отказ
+        ронял `check` на закрытом блоке за код, добавленный позже: закрытый T1
+        самоизучения набора вырос за потолок новыми командами, и каждый PR в review.py
+        краснел. Теперь это долг следующего ревью — вслух, с командой, и прогон зелёный."""
+        self._read_block(150)
+        for status in ("hunted", "verified", "triaged", "fixing", "closed"):
+            with self.subTest(статус=status):
+                self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
+                out = self.s.run("check")
+                self.assertEqual(out.returncode, 0, out.stdout)
+                said = warned(out)
+                self.assertIn("150 lines — grew past the ceiling (100) after the review", said,
+                              out.stdout)
+                self.assertIn(f"(status {status})", said)
+                self.assertIn(" sizes`", said, "предупреждение обязано назвать команду")
+                self.assertNotIn("cannot be read in one session", out.stdout)
+
+    def test_sizes_и_status_различают_непрочитанный_и_выросший_блок(self):
+        """`sizes` и `status` говорят то же, что `check`: до охоты — резать сейчас (и
+        `sizes` краснеет), после — долг следующего ревью (и `sizes` зелёный)."""
+        self._read_block(150)
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("above the ceiling by 50 — split by subject", out.stdout)
+        self.assertIn("above the ceiling by 50", self.s.run("status").stdout)
+        self.s.run("set-status", "H1", "hunted")
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("grew past the ceiling by 50 after the review", out.stdout)
+        self.assertIn("blocks grown past the ceiling after their review: 1", out.stdout)
+        self.assertNotIn("split by subject", out.stdout)
+        self.assertIn("grew past the ceiling by 50", self.s.run("status").stdout)
+
+    def test_прочитанный_блок_в_пределах_потолка_молчит(self):
+        self._read_block(100)
+        self.s.run("set-status", "H1", "closed")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        for said in (out.stdout, self.s.run("status").stdout, self.s.run("sizes").stdout):
+            self.assertNotIn("grew past", said)
+            self.assertNotIn("above the ceiling", said)
+            self.assertNotIn("cannot be read", said)
+
     def test_порог_размера_не_считает_исключённое(self):
         """Исключённый кодоген не должен требовать резать блок."""
         self.s.write("src/one.ts", "a\n")
@@ -6095,6 +6164,7 @@ class GateRegistryTest(unittest.TestCase):
         ("freshness/tree-behind",               "test_отставшее_от_сервера_дерево_роняет_проверку"),
         ("blocks/proof-unknown",                "test_род_доказательства_вне_словаря"),
         ("blocks/too-big-to-read",              "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
+        ("blocks/grew-past-ceiling",            "test_блок_выросший_за_потолок_после_охоты_предупреждает"),
         ("refs/findings-named-in-code",         "test_refs_находит_номер_находки_в_коде_и_только_его"),
         ("findings/fix-debt-age",               "test_check_предупреждает_о_находке_старше_недели"),
         ("sweep/undeclared",                    "test_перечисление_без_sweep_краснеет"),

@@ -176,7 +176,9 @@ check goes red.
 - `check` compares `coverage.tsv` with a recount — a stale map no longer stays silent;
 - a manifest is asked of only the block that has reached work, not all at once;
 - a block readability ceiling: 6000 lines, exclusions are **not** counted (otherwise the
-  ceiling measures `package-lock.json`, not the code the agent will read);
+  ceiling measures `package-lock.json`, not the code the agent will read) — a refusal before
+  the block is read, a warning after (the report stands for what was read; the next review
+  splits the block);
 - a coverage failure says what to do and why the choice is made by a human, not by a pattern;
 - the hunter's report must contain a **file-by-file list** of what was read: without it the
   report cannot be told from a retelling. In a neighbouring project this is exactly what
@@ -294,7 +296,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-477 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+481 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -483,7 +485,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 477 scenarios
+tests/                            tests of the tool and the skill format: 481 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
