@@ -6638,6 +6638,7 @@ class GateRegistryTest(unittest.TestCase):
         ("paths/matches-nothing",               "test_шаблон_который_ничего_не_нашёл_роняет_проверку"),
         ("coverage/unowned-files",              "test_ничей_файл_роняет_не_только_карту_но_и_проверку"),
         ("coverage/stale",                      "test_устаревшая_карта_покрытия_роняет_проверку"),
+        ("coverage/multiple-owners",            "test_файл_двух_блоков_назван_в_coverage_и_check_предупреждает"),
         ("manifest/no-hypotheses",              "test_манифест_без_гипотез_роняет_проверку"),
         ("report/verdicts-conflict",            "test_противоречивые_вердикты_в_одном_отчёте_роняют_проверку"),
         ("report/hypothesis-without-verdict",   "test_гипотеза_без_вердикта_роняет_проверку"),
@@ -6652,6 +6653,7 @@ class GateRegistryTest(unittest.TestCase):
         ("state/closed-without-fix-review",     "test_закрытие_с_починками_требует_ревью_правок"),
         ("report/no-coverage-limits",           "test_отчёт_без_раздела_про_непросмотренное_роняет_проверку"),
         ("report/empty-coverage-limits",        "test_пустой_раздел_ограничений_роняет_проверку"),
+        ("report/no-acceptance-artifacts",      "test_критерий_приёмки_без_раздела_в_отчёте_охотника_предупреждает"),
         ("root/guard-unusable",                 "test_узда_обязана_существовать"),
         ("root/no-guard",                       "test_третий_повтор_корня_требует_узду"),
         ("root/guard-due",                      "test_третий_повтор_на_стадии_проверки_предупреждает"),
@@ -12779,6 +12781,202 @@ class SummaryHtmlTest(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertIn("--html", out.stderr)
         self.assertNotIn("Traceback", out.stderr)
+
+
+
+class FieldRun46Test(unittest.TestCase):
+    """Полевой прогон на четырёх репозиториях клиента (see #46): мелкие дефекты набора."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _stand(self, status: str = "verified") -> None:
+        self.s.write("src/one.ts", "a\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter="# охотник\n## Гипотезы\n- H1.1 — проверена: да\n"
+                              "## Ограничения охвата\nнет\n", verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        self.s.run("set-status", "H1", status)
+
+    # ------------------------------------------------ пределы реестра в шаблонах ролей
+
+    def test_пределы_реестра_в_шаблонах_ролей_берутся_из_кода(self):
+        """Черновики проверяющего несли `claim` длиннее 220 и `scenario` длиннее 700, и
+        `import` отказывал всему блоку. Шаблон называет пределы — и называет ТЕ, что держит
+        код: инструмент копируется с другими значениями констант, и промпт обязан сказать
+        новые. Число, вписанное в шаблон руками, этого не переживает."""
+        self._stand(status="running")
+        tool_dir = TOOL.resolve().parent.parent
+        with tempfile.TemporaryDirectory(prefix="finetooth-limits-") as d:
+            skill = Path(d, "finetooth")
+            shutil.copytree(tool_dir, skill, ignore=shutil.ignore_patterns("__pycache__"))
+            tool = skill / "scripts" / "review.py"
+            src = tool.read_text(encoding="utf-8")
+            for name, value in (("CLAIM_MAX", "173"), ("SCENARIO_MAX", "611")):
+                src, n = re.subn(rf"^{name} = \d+$", f"{name} = {value}", src, flags=re.M)
+                self.assertEqual(n, 1, f"{name} не найдена в инструменте")
+            tool.write_text(src, encoding="utf-8")
+            for lang in ("ru", "en"):
+                self.s.blocks(paths=["src/one.ts"], lang=lang)
+                for role in ("hunter", "verify"):
+                    with self.subTest(язык=lang, роль=role):
+                        out = subprocess.run([sys.executable, str(tool), "prompt", "H1", "--role", role],
+                                             cwd=self.s.root, capture_output=True, text=True,
+                                             env=child_env())
+                        self.assertEqual(out.returncode, 0, out.stderr)
+                        self.assertIn("173", out.stdout, "предел claim не взят из кода")
+                        self.assertIn("611", out.stdout, "предел scenario не взят из кода")
+                        for stale in ("220", "700"):
+                            self.assertNotIn(stale, out.stdout, "число вписано в шаблон руками")
+                        self.assertIn("reject_reason", out.stdout)
+                        self.assertIn("import H1 --dry-run", out.stdout,
+                                      "роль не знает, чем проверить черновик до сдачи")
+
+    def test_import_dry_run_называет_каждую_плохую_строку_и_ничего_не_пишет(self):
+        """Роль проверяет свой черновик до сдачи: каждая строка, которую откажут `import`
+        или `check`, названа сразу, и ни реестр, ни черновик не тронуты."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        good = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"}
+        rows = [good,
+                dict(good, claim="и" * 221),
+                dict(good, scenario="и" * 701),
+                dict(good, status="rejected", confidence="rejected", claim="не то"),
+                dict(good, severity="огромная")]
+        text = "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n"
+        draft.write_text(text, encoding="utf-8")
+        register = self.s.root / "docs/review/findings.jsonl"
+        before = register.read_bytes() if register.exists() else None
+        out = self.s.run("import", "H1", "--dry-run")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("4 problem(s)", out.stdout, out.stdout)
+        self.assertIn("line 2: claim is 221 characters", out.stdout)
+        self.assertIn("line 3: scenario is 701 characters", out.stdout)
+        self.assertIn("line 4: rejected with no reason", out.stdout)
+        self.assertIn("line 5: severity='огромная'", out.stdout)
+        self.assertNotIn("line 1", out.stdout, "верная строка названа плохой")
+        self.assertEqual(register.read_bytes() if register.exists() else None, before, "реестр записан")
+        self.assertEqual(draft.read_text(encoding="utf-8"), text, "черновик переписан")
+        # Та же отвергнутая строка без причины — то, что `check` откажет после импорта:
+        # правило одно на обоих.
+        draft.write_text(json.dumps(rows[3], ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        self.s.run("findings")
+        self.assertIn("rejected, but the reject reason is not recorded", refused(self.s.run("check")))
+        draft.write_text(json.dumps(dict(rows[3], reject_reason="сценарий исключён выше"),
+                                    ensure_ascii=False) + "\n", encoding="utf-8")
+        out = self.s.run("import", "H1", "--dry-run")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("1 row(s), nothing `import` or `check` would refuse", out.stdout)
+
+    # ------------------------------------------------------ файлы итога — не «код»
+
+    def test_файлы_итога_не_считаются_кодом_для_refs(self):
+        """`summary` пишет номера находок — в этом его смысл, — и `check` потом называл
+        каждую строку итога ссылкой из кода. Итог исключается тем же правилом, что
+        `docs/review/`: по пути по умолчанию и по своей метке, где бы его ни записали."""
+        self._stand()
+        self.s.write("src/two.ts", "// see H1-001\n")
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self.s.write("docs/review/reports/H1-findings.jsonl", json.dumps({
+            "block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"},
+            ensure_ascii=False) + "\n")
+        self.s.run("import", "H1")
+        self.s.run("findings")
+        for extra in ((), ("--html",), ("--out", "notes/итог.md"), ("--html", "--out", "site/review.html")):
+            out = self.s.run("summary", *extra)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.s.run("coverage")
+        self.s.commit("итог")
+        written = ("docs/review-summary.md", "docs/review-summary.html", "notes/итог.md", "site/review.html")
+        for rel in written:
+            self.assertIn("H1-001", (self.s.root / rel).read_text(encoding="utf-8"), rel)
+        out = self.s.run("refs")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("src/two.ts:1: H1-001", out.stdout)
+        self.assertIn("\n1 reference(s)", out.stdout, "итог назван ссылкой из кода: " + out.stdout)
+        for rel in written:
+            self.assertNotIn(rel, out.stdout)
+
+    # ------------------------------------------------------ двойное владение
+
+    def test_файл_двух_блоков_назван_в_coverage_и_check_предупреждает(self):
+        """Префикс каталога одного блока захватил файлы другого, и `coverage` об этом
+        молчал: файл читался в объёме обоих, а каждый охотник считал его чужим."""
+        self.s.write("src/a.ts", "a\n")
+        self.s.write("src/billing/b.ts", "b\n")
+        self.s.write("src/billing/c.ts", "c\n")
+        h2 = {"id": "H2", "slug": "billing", "phase": 1, "title": "Оплата", "role": "demo",
+              "goal": "оплата", "paths": ["src/billing"]}
+        self.s.blocks(paths=["src"], extra_blocks=[h2])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("coverage")
+        self.assertEqual(out.returncode, 0, "карта полна — двойное владение не отказ: " + out.stdout)
+        self.assertIn("OWNED BY MORE THAN ONE BLOCK: 2 files", out.stdout, out.stdout)
+        self.assertIn("  src/billing/b.ts\tH1, H2", out.stdout)
+        self.assertNotIn("src/a.ts\t", out.stdout.split("OWNED BY", 1)[1])
+        self.assertIn(":(exclude)", out.stdout, "отказ не говорит, что делать")
+        self.assertIn("2 file(s) owned by more than one block (H1, H2)", warned(self.s.run("check")))
+        self.s.blocks(paths=["src", ":(exclude)src/billing"], extra_blocks=[h2])
+        self.s.commit("разделили")
+        out = self.s.run("coverage")
+        self.assertNotIn("OWNED BY", out.stdout)
+        self.assertNotIn("more than one block", self.s.run("check").stdout)
+
+    # ------------------------------------------------------ артефакты приёмки
+
+    def test_критерий_приёмки_без_раздела_в_отчёте_охотника_предупреждает(self):
+        """Охотник пропустил таблицы критерия приёмки, и `check` промолчал — заметил
+        только проверяющий. Критерий в манифесте есть → у охотника есть его раздел."""
+        self._stand()
+        hunter = "# охотник\n## Гипотезы\n- H1.1 — проверена: да\n## Ограничения охвата\nнет\n"
+        said = lambda: warned(self.s.run("check"))
+        self.assertIn("the hunter report has no 'Acceptance criterion' section", said())
+        self.s.reports(hunter=hunter + "## Критерий приёмки\n```\n| вход | ожидание | факт |\n```\n")
+        self.assertIn("the hunter report has an empty 'Acceptance criterion' section", said())
+        self.s.reports(hunter=hunter + "## Критерий приёмки\n| вход | ожидание | факт |\n|---|---|---|\n"
+                                       "| 0 | отказ | отказ |\n")
+        self.assertNotIn("Acceptance criterion", self.s.run("check").stdout)
+        # Без критерия в манифесте раздела не спрашивают.
+        manifest = self.s.root / "docs/review/blocks/H1-demo.md"
+        text = manifest.read_text(encoding="utf-8")
+        manifest.write_text(text.split("## Критерий приёмки")[0], encoding="utf-8")
+        self.s.reports(hunter=hunter)
+        self.s.run("restamp", "H1")
+        self.assertNotIn("Acceptance criterion", self.s.run("check").stdout)
+
+    def test_шаблон_охотника_даёт_место_артефактам_приёмки(self):
+        for name, heading in (("hunter.md", "## Acceptance criterion"),
+                              ("hunter.ru.md", "## Критерий приёмки")):
+            with self.subTest(шаблон=name):
+                text = (TOOL.resolve().parent.parent / "references" / name).read_text(encoding="utf-8")
+                self.assertIn(heading, text)
+
+    # ------------------------------------------------------ setup по-русски
+
+    def test_setup_на_русском_печатает_подсказки_по_русски(self):
+        """`setup --lang ru` заводил русские файлы и печатал английский список дел."""
+        self.s.write(".claude/settings.local.json", json.dumps(
+            {"permissions": {"deny": ["Bash(pytest *)"]}}))
+        out = self.s.run("setup", "--lang", "ru", "--project", "Демо", "--cli", "npm run review --")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        text = out.stdout
+        for ru in ("Дальше — руками", "В .gitignore нет __pycache__/", "задевает `pytest`",
+                   "Что делать:", "`npm run review -- init`", "`npm run review -- status`",
+                   "Идёт сплошное ревью проекта Демо"):
+            self.assertIn(ru, text)
+        for en in ("Next — by hand", ".gitignore has no", "hits ", "What to do", "make"):
+            self.assertNotIn(en, text, f"в русском выводе setup осталось «{en}»")
+        again = self.s.run("setup", "--lang", "ru").stdout
+        self.assertIn("docs/review/invariants.md — уже есть, не тронут", again)
 
 
 if __name__ == "__main__":

@@ -409,6 +409,37 @@ MSG = {
   "seams_co": "co-change {n}× ({a} / {b} of each file's changes)",
   "setup_note": "Static definition of the blocks. Progress lives in state.json, findings in findings.jsonl. Array order = execution order.",
   "excl_apparatus": "review apparatus, not its subject", "excl_skill": "the review skill — tooling, not the subject of review",
+  "setup_skipped": "  · {rel} — already exists, left untouched",
+  "setup_pycache": "\n⚠️ .gitignore has no __pycache__/ — add it, otherwise the tool's bytecode ends up in a commit",
+  "deny_unreadable": "{rel} could not be read ({exc}) — its deny rules were not checked",
+  "deny_not_list": "{rel}: permissions.deny is not a list — its rules were not checked",
+  "deny_gate": "gate `{g}`", "deny_roles": "`{prefix}` (roles: {roles})",
+  "deny_head": "\n⚠️ The project's own permission settings deny commands the review runs. A deny wins over the roles' pre-approvals, and a role that cannot run a gate falls back to reading:",
+  "deny_hits": "      hits {what}",
+  "deny_todo": "  What to do: {advice}.",
+  "deny_advice": "name the form that works in docs/review/invariants.md and in the gates (for example `python3 -m pytest` where `pytest` is denied), or lift the rule for the review runs",
+  "setup_next": """
+Next — by hand, and this is not a formality:
+
+1. docs/review/invariants.md — the rules of YOUR project. The most important file: it is
+   pasted to every agent and decides what the agent will count as a defect. Example: {invariants}
+2. docs/review/blocks.json — `gates` (the project's gate commands) and the blocks: cross-cutting
+   first, domain ones next, live-system ones last. Example: {blocks}
+3. The manifest of the first block — docs/review/blocks/<ID>-<slug>.md: 10–15 hypotheses about your
+   project and the acceptance criterion. Example: {manifest}
+   `{cli} seams <ID>` lists the pairs of the block's files linked by an import or by joint
+   changes: for each of the top ones write a hypothesis on what one side assumes about the
+   other — nobody else joins them, and the hunter gets the same list in its prompt.
+4. `{cli} init`, then `{cli} coverage` — and deal with the unowned files until there are
+   none left. This is where everything forgotten surfaces. Reviewing only a part on purpose
+   (a trial run, a release gate, one risky area)? Declare `"scope": {{"paths": [...], "reason": "..."}}`
+   in blocks.json instead of excluding the rest: coverage counts inside it, and every report says the review is partial.
+5. `{cli} log <ID> "what was decided and why"` — from the first decision on: findings a
+   re-run recovers, decisions it does not. What a useful line looks like: {journal}
+6. The banner in the root instructions file ({banner_path}), otherwise a new session
+   will not know a review is in progress and will start its own parallel one. Ready to paste:
+
+{banner}""",
  },
  "ru": {
   "none": "(нет)",
@@ -548,6 +579,37 @@ MSG = {
   "seams_co": "совместных правок {n}× ({a} / {b} правок каждого файла)",
   "setup_note": "Статическое определение блоков. Прогресс живёт в state.json, находки — в findings.jsonl. Порядок массива = порядок исполнения.",
   "excl_apparatus": "аппарат ревью, а не его предмет", "excl_skill": "скилл ревью — оснастка, а не предмет ревью",
+  "setup_skipped": "  · {rel} — уже есть, не тронут",
+  "setup_pycache": "\n⚠️ В .gitignore нет __pycache__/ — добавьте, иначе байткод инструмента уедет в коммит",
+  "deny_unreadable": "{rel} не читается ({exc}) — его запреты не проверены",
+  "deny_not_list": "{rel}: permissions.deny — не список, его правила не проверены",
+  "deny_gate": "ворота `{g}`", "deny_roles": "`{prefix}` (роли: {roles})",
+  "deny_head": "\n⚠️ Настройки разрешений самого проекта запрещают команды, которые запускает ревью. Запрет сильнее заранее одобренного ролям, и роль, которой не дали запустить ворота, откатывается к чтению:",
+  "deny_hits": "      задевает {what}",
+  "deny_todo": "  Что делать: {advice}.",
+  "deny_advice": "назовите работающую форму в docs/review/invariants.md и в воротах (например, `python3 -m pytest` там, где запрещён `pytest`) или снимите правило на время прогонов ревью",
+  "setup_next": """
+Дальше — руками, и это не формальность:
+
+1. docs/review/invariants.md — правила ВАШЕГО проекта. Самый важный файл: он вставляется
+   каждому агенту и решает, что агент сочтёт дефектом. Образец: {invariants}
+2. docs/review/blocks.json — `gates` (команды ворот проекта) и блоки: сначала сквозные,
+   потом предметные, последними — на живой системе. Образец: {blocks}
+3. Манифест первого блока — docs/review/blocks/<ID>-<slug>.md: 10–15 гипотез о вашем
+   проекте и критерий приёмки. Образец: {manifest}
+   `{cli} seams <ID>` перечисляет пары файлов блока, связанные импортом или совместными
+   правками: на каждую из верхних напишите гипотезу о том, что одна сторона предполагает о
+   другой, — больше их никто не сводит, и охотник получает тот же список в промпте.
+4. `{cli} init`, затем `{cli} coverage` — и разбирайте ничьи файлы, пока их не останется.
+   Здесь всплывает всё забытое. Смотрите намеренно только часть (пробный прогон, ворота
+   выпуска, одна рискованная область)? Объявите `"scope": {{"paths": [...], "reason": "..."}}`
+   в blocks.json вместо исключения остального: покрытие считается внутри, и каждый отчёт говорит, что ревью частичное.
+5. `{cli} log <ID> "что решили и почему"` — с первого же решения: находки повторный прогон
+   восстановит, решения — нет. Как выглядит полезная строка: {journal}
+6. Баннер в корневой файл инструкций ({banner_path}), иначе новая сессия не узнает, что
+   идёт ревью, и начнёт своё параллельное. Готов к вставке:
+
+{banner}""",
  },
 }
 
@@ -1346,6 +1408,21 @@ def coverage_map() -> tuple[dict[str, list[str]], set[str], set[str]]:
     return owned, excluded, unassigned
 
 
+def shared_owners(owned: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Files two or more blocks own — usually one block's directory prefix capturing the files
+    another block was cut for (`src/` over `src/billing/`), which nobody asked for: the file is
+    counted into both blocks' volume, and each hunter takes it for the other's (#46)."""
+    return {f: bs for f, bs in owned.items() if len(bs) > 1}
+
+
+# What to do about files owned twice — one sentence, shared by `coverage` and `check`.
+SHARED_OWNERS_ADVICE = (
+    "a file is owned by exactly one block: narrow the wider block's `paths`, or subtract the "
+    "other block's part from it with a pathspec such as `:(exclude)src/billing` in the same "
+    "list (docs/review/blocks.json); if both blocks must read the file, the second one names "
+    "it in `ref_paths`")
+
+
 # How far behind in TIME the tree must be for that to mean "it has gone stale".
 #
 # Time is what must be measured, not commits: in the case this check was created for, the
@@ -1448,6 +1525,16 @@ def cmd_coverage(args) -> int:
     print(f"covered:     {n_owned}/{total} files{' of the declared scope' if partial else ''}")
     print(f"excluded:    {len(excluded)} (with a reason in blocks.json)")
     print(f"map:         docs/review/coverage.tsv{' (not rewritten: --no-write)' if args.no_write else ''}")
+    # Owned twice is not a refusal here (the map is still complete), but it is said: the
+    # map's own column shows it one line at a time, and nobody reads a map line by line.
+    shared = shared_owners(owned)
+    if shared:
+        print(f"\nOWNED BY MORE THAN ONE BLOCK: {len(shared)} files")
+        for f in sorted(shared)[: args.limit]:
+            print(f"  {f}\t{', '.join(shared[f])}")
+        if len(shared) > args.limit:
+            print(f"  … and {len(shared) - args.limit} more")
+        print(f"What to do: {SHARED_OWNERS_ADVICE}.")
     if unassigned:
         print(f"\nNOT COVERED: {len(unassigned)} files{' inside the declared scope' if partial else ''}"
               f" — the review is incomplete:")
@@ -2673,6 +2760,10 @@ def render_summary(defn: dict, st: dict, rows: list[dict], facts: dict | None = 
 # redefined for `prefers-color-scheme: dark`; the chart reads the same properties.
 
 SUMMARY_HTML_DEFAULT = "docs/review-summary.html"
+# The HTML summary's mark, as the Markdown one has its machine line: a page written with
+# `--out` elsewhere is still known for what it is (`summary_files`). `generator` is the
+# standard name for it (HTML Living Standard, 4.2.5.1 "Standard metadata names").
+SUMMARY_HTML_MARK = '<meta name="generator" content="finetooth summary">'
 
 HTML_STYLE = """
 :root{color-scheme:light;--bg:#fcfcfb;--panel:#f3f2ef;--ink:#0b0b0b;--muted:#52514e;--line:#dcdad4;
@@ -2823,7 +2914,7 @@ def render_summary_html(facts: dict) -> str:
     def finding_rows(fs: list[dict], last) -> list[list[str]]:
         return [[f"<b>{h(f.get('id'))}</b>", h(sev_label.get(f.get("severity"), f.get("severity"))),
                  where(f), h((f.get("claim") or "").strip()), last(f)] for f in fs]
-    out = [f'<!doctype html><html lang="{h(lang)}"><head><meta charset="utf-8">'
+    out = [f'<!doctype html><html lang="{h(lang)}"><head><meta charset="utf-8">{SUMMARY_HTML_MARK}'
            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
            f'<title>{H("h_title", project=h(x["project"]))}</title><style>{HTML_STYLE}</style></head>'
            f'<body><main>']
@@ -3202,6 +3293,19 @@ def cmd_sarif(args) -> int:
 
 # -------------------------------------------------------------------------- refs
 
+def summary_files() -> list[str]:
+    """Tracked files `summary` wrote: the two default paths, and a file written with `--out`
+    anywhere else — recognised by its machine line at the start of a line (Markdown) or its
+    generator tag in the head (HTML), as it is written and nowhere else. The tool's own source
+    names both marks too, but never at the start of a line."""
+    found = git("grep", "-l", "-I", "--full-name", "-E",
+                # POSIX ERE, not Python's: `re.escape` writes `\-` and `\ `, which ERE leaves
+                # undefined. Neither mark holds an ERE metacharacter, so they go in as they are.
+                "-e", "^" + SUMMARY_MARK + r"\{",
+                "-e", "^<!doctype html>.*" + SUMMARY_HTML_MARK).fields
+    return sorted({SUMMARY_DEFAULT, SUMMARY_HTML_DEFAULT, *found})
+
+
 def review_refs() -> list[tuple[str, int, str, str]]:
     """Places in the tracked tree, outside `docs/review/`, that name a finding of this
     register by its id: (path, line, id, text). The ids die with the review directory; a
@@ -3215,7 +3319,11 @@ def review_refs() -> list[tuple[str, int, str, str]]:
     args = ["grep", "-n", "-I", "-w", "-F", "--full-name"]
     for fid in ids:
         args += ["-e", fid]
-    args += ["--", ".", ":(exclude)docs/review/**"]
+    # The summary is excluded by the same rule as the review directory: it is the register
+    # rendered for a reader, and naming the ids is its whole point. `summary` wrote it and
+    # `check` then called every row a reference in the code (#46).
+    args += ["--", ".", ":(exclude)docs/review/**",
+             *(f":(exclude,literal){p}" for p in summary_files())]
     hits = []
     for record in git(*args).records:
         # A record git prints short (no line number for some reason) is not worth a
@@ -3655,6 +3763,11 @@ def cmd_prompt(args) -> int:
         "{{BATCH}}": batch_note(b["id"]),
         "{{RECORDED}}": render_recorded_for(b["id"]),
         "{{NEXT_ID}}": next_finding_id(b["id"]),
+        # The register's own limits, from the constants `import` and `check` hold: a template
+        # that wrote them by hand fell behind the code the day a limit moved, and a field run
+        # still had verifier drafts refused whole for fields past them (#46).
+        "{{CLAIM_MAX}}": str(CLAIM_MAX),
+        "{{SCENARIO_MAX}}": str(SCENARIO_MAX),
         # The project name and its gates are substitutions, not text in the template. A
         # template copied without proofreading greeted the agent on behalf of ANOTHER
         # project, and it was not noticed at once: the assignment looked meaningful as a whole.
@@ -3693,6 +3806,60 @@ def cmd_prompt(args) -> int:
         die(f"template {template.name} has substitutions left without a value: {', '.join(left)}")
     print(body)
     return 0
+
+
+def reject_reason_of(f: dict) -> str:
+    """The recorded reason a finding was rejected, or an empty string.
+
+    The reason is written either as its own field or right in the claim ("Rejected: …") —
+    a register written by an older template says it there, and demanding only the field
+    would fail the check on every finding written exactly by those instructions. ONE place
+    answers it: `check` refuses a rejected finding without it, and `import --dry-run` names
+    the same row before the draft is handed in."""
+    claim = (f.get("claim") or "").strip()
+    return (f.get("reject_reason") or "").strip() or (
+        claim if re.match(r"отвергнут|отклонен|отклонён|не подтверд|rejected|not confirmed", claim, re.I) else "")
+
+
+def draft_problems(block: str, numbered: list) -> list[str]:
+    """What `import` and then `check` would refuse in a block's draft, row by row — every
+    row, not the first: the role that wrote the draft fixes it in one pass.
+
+    The row-level rules only, and the same ones: the length limits `import` holds, the
+    vocabularies and required fields `check` holds, a rejection with no reason. What depends
+    on the register (whether a plain import would overwrite a recorded decision) is the
+    lead's question at import time, not the draft's."""
+    out = []
+    for n, row in numbered:
+        at = f"line {n}"
+        if not isinstance(row, dict):
+            out.append(f"{at}: not a JSON object — one finding per line, as `{{...}}`")
+            continue
+        for field in ("severity", "file", "claim", "scenario"):
+            if not str(row.get(field) or "").strip():
+                out.append(f"{at}: `{field}` is empty — `check` refuses a finding without it")
+        if row.get("block") not in (None, block):
+            out.append(f"{at}: `block` is {row.get('block')!r} — this is the draft of {block}")
+        if isinstance(row.get("id"), str) and (m := re.fullmatch(r"(.+)-(\d+)", row["id"])) \
+                and m.group(1) != block:
+            out.append(f"{at}: id {row['id']} is numbered for another block")
+        for field, vocab in (("severity", SEVERITIES), ("confidence", CONFIDENCE),
+                             ("status", FINDING_STATUS)):
+            if row.get(field) not in (None, "", *vocab):
+                out.append(f"{at}: {field}={row.get(field)!r} is not one of {', '.join(vocab)}")
+        for field, limit in (("claim", CLAIM_MAX), ("scenario", SCENARIO_MAX)):
+            if len(str(row.get(field) or "")) > limit:
+                out.append(f"{at}: {field} is {len(str(row[field]))} characters against a limit "
+                           f"of {limit} — shorten it; the evidence belongs in the report")
+        if row.get("status") == "rejected":
+            if row.get("confidence") != "rejected":
+                out.append(f"{at}: status rejected needs \"confidence\":\"rejected\" too")
+            if not reject_reason_of(row):
+                out.append(f"{at}: rejected with no reason — write it into \"reject_reason\": "
+                           f"what exactly rules the scenario out")
+        if row.get("status") == "duplicate" and not row.get("dup_of"):
+            out.append(f"{at}: duplicate with no \"dup_of\" — name the primary finding's id")
+    return out
 
 
 def block_findings_path(b: dict) -> Path:
@@ -3866,7 +4033,24 @@ def cmd_import(args) -> int:
     try:
         numbered = read_draft(src)
     except ValueError as exc:
+        if args.dry_run:
+            print(f"{src.relative_to(ROOT)}: {exc}")
+            return 1
         die(str(exc))
+    if args.dry_run:
+        # The role's own check of its draft before it hands it in: a verifier draft with a
+        # claim past the limit had the whole block refused at import, and a rejection with no
+        # reason turned `check` red — both found by the lead, after the role was gone (#46).
+        # Nothing is written: not the register, not the draft.
+        problems = draft_problems(args.block, numbered)
+        rel = src.relative_to(ROOT)
+        if problems:
+            print(f"{rel}: {len(problems)} problem(s) — fix them in the draft and run this again:")
+            for p in problems:
+                print(f"  {p}")
+            return 1
+        print(f"{rel}: {len(numbered)} row(s), nothing `import` or `check` would refuse")
+        return 0
     for n, row in numbered:
         # The limits `check` holds are held here too: a draft that `import` accepted and
         # `check` then refused made every later gate red on a row nobody could fix through
@@ -5637,13 +5821,7 @@ def cmd_check(args) -> int:
         # spends the time again. The review's completion condition demanded a reason for
         # every rejected finding from the start, but there was no check, and the field stayed empty.
         if f.get("status") == "rejected":
-            # The reject reason is written either as a separate field or — as the role
-            # template instructs — right in the finding's claim ("Rejected: …"). Demanding
-            # only the field would fail the check on every finding written exactly by the instructions.
-            claim = (f.get("claim") or "").strip()
-            said = (f.get("reject_reason") or "").strip() or (
-                claim if re.match(r"отвергнут|отклонен|отклонён|не подтверд|rejected|not confirmed", claim, re.I) else "")
-            if not said:
+            if not reject_reason_of(f):
                 gates.refuse(
                     "finding/rejected-without-reason",
                     f"finding {fid}: rejected, but the reject reason is not recorded — "
@@ -5714,10 +5892,18 @@ def cmd_check(args) -> int:
                 )
 
     # 9. coverage
-    _, _, unassigned = coverage_map()
+    owned, _, unassigned = coverage_map()
     if unassigned:
         gates.refuse("coverage/unowned-files",
                      f"{len(unassigned)} files belong to no block — `{CLI} coverage`")
+    # A warning, not a refusal: the map is complete, and a review already running with an
+    # overlap should not stop over it — but the volume of both blocks is counted with the
+    # file, and each hunter may leave it to the other.
+    if shared := shared_owners(owned):
+        pairs = sorted({", ".join(bs) for bs in shared.values()})
+        gates.warn("coverage/multiple-owners",
+                   f"{len(shared)} file(s) owned by more than one block ({'; '.join(pairs)}), "
+                   f"e.g. {min(shared)} — {SHARED_OWNERS_ADVICE}; `{CLI} coverage` lists them")
 
     # The coverage map on disk must match the recount: otherwise the consumer reads
     # yesterday's ownership and does not know it. That is exactly how it diverged —
@@ -5896,6 +6082,32 @@ def cmd_check(args) -> int:
                     f"{b['id']}: closed with fixed findings, but there is no fix reviewer report — "
                     f"`{CLI} prompt {b['id']} --role fixreview --diff <range>`"
                 )
+
+    # The manifest's acceptance criterion asks for artifacts — tables built by reading, a
+    # mutation list — and the hunter delivers them under a heading of its own. In a field run
+    # the hunter skipped them and nothing said so until the verifier did (#46). A warning,
+    # not a refusal: the words of a criterion do not say which role must build its table,
+    # and a review already past its hunts is not stopped retroactively. A closed block's
+    # reports are history — asked of the blocks still in work.
+    for b in defn["blocks"]:
+        if st["blocks"].get(b["id"], {}).get("status", "todo") not in ("hunted", "verified",
+                                                                       "triaged", "fixing"):
+            continue
+        manifest, hunter = manifest_path(b), REVIEW / "reports" / f"{b['id']}-{b['slug']}.hunter.md"
+        if not (manifest.exists() and hunter.exists()):
+            continue
+        asked = section_body(manifest.read_text(encoding="utf-8"), ACCEPTANCE_HEADING)
+        if not [ln for ln in unquoted(asked or [], "text") if ln.strip()]:
+            continue
+        given = section_body(hunter.read_text(encoding="utf-8"), ACCEPTANCE_HEADING, "quoted")
+        if given is None or not [ln for ln in unquoted(given) if ln.strip()]:
+            gates.warn(
+                "report/no-acceptance-artifacts",
+                f"{b['id']}: the manifest has an acceptance criterion, and the hunter report has "
+                f"{'no' if given is None else 'an empty'} 'Acceptance criterion' section outside "
+                f"a fence or a quotation — the tables or lists the criterion asks for go there; "
+                f"what the hunter could not build is named there with the reason"
+            )
 
     # The coverage-limits section is mandatory: completeness is proven by listing what was
     # NOT reviewed, and in audit reports that is a separate chapter. "No findings" without
@@ -6202,7 +6414,7 @@ def role_commands() -> dict[str, list[str]]:
     return out
 
 
-def deny_hits(gates: list) -> tuple[list[tuple[str, str, list[str]]], list[str]]:
+def deny_hits(gates: list, lang: str = "en") -> tuple[list[tuple[str, str, list[str]]], list[str]]:
     """Which of the project's deny rules hit a gate command or a command the roles run.
 
     Returns the hits — (settings file, rule, what it hits) — and the problems: a settings file
@@ -6212,8 +6424,9 @@ def deny_hits(gates: list) -> tuple[list[tuple[str, str, list[str]]], list[str]]
     hits: list[tuple[str, str, list[str]]] = []
     problems: list[str] = []
     gates = gates if isinstance(gates, list) else []
-    targets = [(f"gate `{g}`", g) for g in gates if isinstance(g, str)]
-    targets += [(f"`{prefix}` (roles: {', '.join(roles)})", prefix)
+    m = MSG[lang]
+    targets = [(m["deny_gate"].format(g=g), g) for g in gates if isinstance(g, str)]
+    targets += [(m["deny_roles"].format(prefix=prefix, roles=", ".join(roles)), prefix)
                 for prefix, roles in role_commands().items()]
     for rel in SETTINGS_FILES:
         path = ROOT / rel
@@ -6222,12 +6435,12 @@ def deny_hits(gates: list) -> tuple[list[tuple[str, str, list[str]]], list[str]]
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            problems.append(f"{rel} could not be read ({exc}) — its deny rules were not checked")
+            problems.append(m["deny_unreadable"].format(rel=rel, exc=exc))
             continue
         perms = data.get("permissions") if isinstance(data, dict) else None
         deny = perms.get("deny", []) if isinstance(perms, dict) else []
         if not isinstance(deny, list):
-            problems.append(f"{rel}: permissions.deny is not a list — its rules were not checked")
+            problems.append(m["deny_not_list"].format(rel=rel))
             continue
         for rule in deny:
             match = bash_rule_matcher(rule) if isinstance(rule, str) else None
@@ -6240,11 +6453,6 @@ def deny_hits(gates: list) -> tuple[list[tuple[str, str, list[str]]], list[str]]
     return hits, problems
 
 
-DENY_ADVICE = ("name the form that works in docs/review/invariants.md and in the gates (for "
-               "example `python3 -m pytest` where `pytest` is denied), or lift the rule for "
-               "the review runs")
-
-
 def gates_on_disk() -> list:
     """The gates from blocks.json without the definition checks: `setup` runs before the
     definition is complete, and a half-written file is not this report's business."""
@@ -6255,18 +6463,17 @@ def gates_on_disk() -> list:
     return gates if isinstance(gates, list) else []
 
 
-def deny_report() -> str:
-    """The full report for `setup`: every rule, what it hits, and what to do."""
-    hits, problems = deny_hits(gates_on_disk())
+def deny_report(lang: str) -> str:
+    """The full report for `setup`, in the review language: every rule, what it hits, and what to do."""
+    m = MSG[lang]
+    hits, problems = deny_hits(gates_on_disk(), lang)
     lines = [f"\n⚠️ {p}" for p in problems]
     if hits:
-        lines.append("\n⚠️ The project's own permission settings deny commands the review runs. "
-                     "A deny wins over the roles' pre-approvals, and a role that cannot run a "
-                     "gate falls back to reading:")
+        lines.append(m["deny_head"])
         for rel, rule, what in hits:
             lines.append(f"  {rel}: {rule}")
-            lines += [f"      hits {w}" for w in what]
-        lines.append(f"  What to do: {DENY_ADVICE}.")
+            lines += [m["deny_hits"].format(what=w) for w in what]
+        lines.append(m["deny_todo"].format(advice=m["deny_advice"]))
     return "\n".join(lines)
 
 
@@ -6278,7 +6485,7 @@ def deny_line(gates: list) -> str:
         rules = ", ".join(f"{rule} ({rel})" for rel, rule, _ in hits)
         n = sum(len(what) for _, _, what in hits)
         said.append(f"project deny rules hit {n} command(s) the review runs: {rules} — "
-                    f"{DENY_ADVICE}; the full list: `{CLI} setup`")
+                    f"{MSG['en']['deny_advice']}; the full list: `{CLI} setup`")
     said += problems
     return ("⚠️ " + "; ".join(said)) if said else ""
 
@@ -6383,17 +6590,19 @@ def cmd_setup(args) -> int:
 
     for rel in done:
         print(f"  + {rel}")
+    # Everything `setup` prints is in the review language, as its scaffolds are: a Russian
+    # review was handed its files in Russian and its checklist in English (#46).
+    m = MSG[lang]
     for rel in skipped:
-        print(f"  · {rel} — already exists, left untouched")
+        print(m["setup_skipped"].format(rel=rel))
     # Bytecode appears as soon as someone imports the tool as a module, and rides into a
     # commit if the skill lives in the project. In the first project that is exactly what
     # happened. We do not edit someone else's .gitignore — we say so.
     ignore = ROOT / ".gitignore"
     known = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
     if not any(k in known for k in ("__pycache__", "*.pyc", "*.py[cod]")):
-        print("\n⚠️ .gitignore has no __pycache__/ — add it, otherwise the tool's bytecode "
-              "ends up in a commit")
-    denied = deny_report()
+        print(m["setup_pycache"])
+    denied = deny_report(lang)
     if denied:
         print(denied)
     # The banner is not written anywhere by the tool — it goes into the project's own root
@@ -6403,28 +6612,10 @@ def cmd_setup(args) -> int:
     # command that does not exist.
     banner = asset(ASSET_BANNER, lang).read_text(encoding="utf-8")
     banner = fill(banner.split("\n---\n", 1)[-1].strip(), project, cli)
-    print(f"""
-Next — by hand, and this is not a formality:
-
-1. docs/review/invariants.md — the rules of YOUR project. The most important file: it is
-   pasted to every agent and decides what the agent will count as a defect. Example: {asset(ASSET_INVARIANTS, lang)}
-2. docs/review/blocks.json — `gates` (the project's gate commands) and the blocks: cross-cutting
-   first, domain ones next, live-system ones last. Example: {asset(ASSET_BLOCKS, lang)}
-3. The manifest of the first block — docs/review/blocks/<ID>-<slug>.md: 10–15 hypotheses about your
-   project and the acceptance criterion. Example: {asset(ASSET_MANIFEST, lang)}
-   `{cli} seams <ID>` lists the pairs of the block's files linked by an import or by joint
-   changes: for each of the top ones write a hypothesis on what one side assumes about the
-   other — nobody else joins them, and the hunter gets the same list in its prompt.
-4. `{cli} init`, then `{cli} coverage` — and deal with the unowned files until there are
-   none left. This is where everything forgotten surfaces. Reviewing only a part on purpose
-   (a trial run, a release gate, one risky area)? Declare `"scope": {{"paths": [...], "reason": "..."}}`
-   in blocks.json instead of excluding the rest: coverage counts inside it, and every report says the review is partial.
-5. `{cli} log <ID> "what was decided and why"` — from the first decision on: findings a
-   re-run recovers, decisions it does not. What a useful line looks like: {asset(ASSET_JOURNAL, lang)}
-6. The banner in the root instructions file ({asset(ASSET_BANNER, lang)}), otherwise a new session
-   will not know a review is in progress and will start its own parallel one. Ready to paste:
-
-{banner}""")
+    print(m["setup_next"].format(
+        cli=cli, banner=banner, invariants=asset(ASSET_INVARIANTS, lang),
+        blocks=asset(ASSET_BLOCKS, lang), manifest=asset(ASSET_MANIFEST, lang),
+        journal=asset(ASSET_JOURNAL, lang), banner_path=asset(ASSET_BANNER, lang)))
     return 0
 
 
@@ -6480,6 +6671,9 @@ def main() -> int:
     c.add_argument("--round", type=int,
                    help="with --append: the fix review round that found the new findings (recorded as found_in)")
     c.add_argument("--diff", help="with --round: the diff range that fix review read (pinned to commit ids)")
+    c.add_argument("--dry-run", action="store_true",
+                   help="only check the draft row by row (limits, vocabularies, reasons) — writes nothing; "
+                        "the role runs it before handing the draft in")
 
     c = sub.add_parser("decide", help="record a human's decision on a block — the answer to the loop signal")
     c.add_argument("block")

@@ -207,20 +207,20 @@ Every command of `review.py`; `review <command> --help` has the flags.
 | `next` | the id of the next unclosed block |
 | `inventory` | the repository tree with sizes and ownership, to cut blocks by (`--under`, `--unassigned`) |
 | `sizes` | every block against the readability ceiling |
-| `coverage` | the file → block map; fails on an unowned file (`--no-write` for CI) |
+| `coverage` | the file → block map; fails on an unowned file (`--no-write` for CI), lists files owned by more than one block |
 | `coupling` | pairs of files that change together but sit in different blocks (`--write`) |
 | `seams <ID>` | pairs of a block's own files linked by an import or by joint changes (`--top`) |
 | `order` | the blocks by cost of failure, then by change frequency |
 | `prompt <ID> --role …` | the ready prompt for `hunter`, `verify`, `fix`, `fixreview` (`--round`, `--diff`, `--scope`) |
 | `set-status <ID> <status>` | move a block; refuses what the phase does not allow (`--report`, `--note`) |
-| `import <ID>` | take a block's draft findings into the register (`--append`, `--round`, `--diff`, `--force`) |
+| `import <ID>` | take a block's draft findings into the register (`--append`, `--round`, `--diff`, `--force`); `--dry-run` only checks the draft row by row and writes nothing |
 | `set-finding <ID…> <status>` | move findings: `fixed --commit`, `rejected --reason`, `duplicate --dup-of`, `deferred --reason`; `--rule` / `--clear-rule` for the class guard, `--severity` / `--confidence` for the verifier's verdict, `--fixed-in` when the fix is in another file |
 | `decide <ID> "<text>"` | record a human's decision on a block — the answer to the loop signal |
 | `hypotheses <ID>` | the block's hypotheses and where each got its verdict |
 | `roots [ID]` | defect classes: instances, and which guard each instance carries |
 | `restamp <ID>` | confirm that changes under a block or a finding were reviewed (`--line` for a finding that moved) |
 | `backfill` | stamp fingerprints on records written before fingerprints existed |
-| `refs` | finding ids of the register named in the code outside `docs/review/` |
+| `refs` | finding ids of the register named in the code outside `docs/review/` and the summary files |
 | `findings` | regenerate `findings.md` from `findings.jsonl` |
 | `log <ID> "<text>"` | append a line to the journal |
 | `check` | the whole state for consistency — the gate for CI |
@@ -241,7 +241,11 @@ register describes code that no longer exists. So `set-status <ID> running` refu
 findings at `fix_gate` severity or above (`high` by default; `"fix_gate": "none"` in
 `blocks.json` switches it off) are open in the blocks already passed. The way out is to fix,
 defer with a reason or reject — never to ignore. `status` prints the debt as its own line, and
-`check` warns about open findings older than a week.
+`check` warns about open findings older than a week. Hunting every block first and fixing
+afterwards is a strategy the gate leaves to the project, not a defect of it: `"fix_gate": "none"`,
+and it pays with what the gate exists to prevent — findings wait while the code under them
+moves (their fingerprints go red, each is re-checked or restamped), and a class found in the
+first block is found again in every later one instead of being closed by a guard before them.
 
 ### Seams between blocks
 
@@ -670,7 +674,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-529 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
+536 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -713,7 +717,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 529 scenarios
+tests/                            tests of the tool and the skill format: 536 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
