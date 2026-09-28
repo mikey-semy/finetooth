@@ -18,6 +18,7 @@ import argparse
 import ast
 import datetime as dt
 import hashlib
+import html
 import json
 import math
 import os
@@ -332,6 +333,64 @@ MSG = {
   "sum_open_none": "Nothing open.",
   "sum_seams": "## Seams between blocks (from `coupling`)",
   "sum_machine": "## For the tool — do not edit",
+  "sum_coverage": "**Files:** {covered} of {total} are in blocks, {unowned} without a block, {excluded} excluded from review",
+  "sum_economy": "## Economy (measured role runs from the journal)",
+  "sum_economy_head": "| role | runs | of them unmeasured | turns | cost |",
+  "sum_at_least": "≥ {v}",
+  "sum_not_known": "unknown",
+  "sum_economy_total": "total",
+  "sum_economy_unknown": "Runs whose turns or cost the stream did not report: {n}. They are counted as runs, never as zero: a sum they are part of is a lower bound (≥), and \"unknown\" when no run in it reported the number.",
+  "sum_economy_none": "No measured role runs in the journal (`assets/run-role.sh` writes them).",
+  "h_title": "{project} — review summary",
+  "h_meta": "Date {date} · base commit {sha} ({branch}) · finetooth {version}",
+  "h_intro": "What was reviewed, what was found, what was fixed, what it cost and what is left — counted from the review register and journal at the base commit. The Markdown summary (`{cli} summary`) carries the same numbers.",
+  "h_goal": "Goal and coverage",
+  "h_t_blocks": "blocks closed",
+  "h_t_findings": "findings recorded",
+  "h_t_fixed": "fixed",
+  "h_t_open": "still open",
+  "h_t_deferred": "accepted risks",
+  "h_t_files": "files in blocks",
+  "h_t_cost": "measured cost",
+  "h_of": "{a} of {b}",
+  "h_coverage": "{covered} of {total} files are in blocks; {unowned} without a block; {excluded} excluded from review with a stated reason.",
+  "h_goals": "What each block set out to check:",
+  "h_blocks": "Blocks",
+  "h_blocks_cols": "block|title|status|files|critical|high|medium|low|fixed|open|deferred|rejected|duplicate|runs|turns|cost",
+  "h_blocks_note": "Severity columns count defects (rejected findings and duplicates left out); status columns count every record, so they add up to the block's findings. Runs, turns and cost are the measured role runs in the journal; ≥ marks a sum that a run with an unreported number is part of.",
+  "h_chart": "Findings by severity and status, per block",
+  "h_chart_note": "Upper bar of each block: defects by severity; lower bar: every record by status. The same numbers are in the table above.",
+  "h_sev": "severity",
+  "h_stat": "status",
+  "h_sev_names": "critical|high|medium|low",
+  "h_status_names": "open|fixed|rejected|duplicate|deferred",
+  "h_open": "Open findings",
+  "h_open_cols": "finding|severity|where|claim|block report",
+  "h_open_note": "The place is the line the finding's code sits on now (as in findings.md), not necessarily the line it was recorded at.",
+  "h_open_none": "Nothing open.",
+  "h_closed": "What closed each class",
+  "h_closed_note": "A defect class (root) is closed by a guard — a test or a rule — recorded on the findings it holds.",
+  "h_roots_cols": "defect class|findings|guard → findings it is recorded on",
+  "h_no_guard": "no guard recorded",
+  "h_no_root": "(no class named)",
+  "h_closed_none": "No defect classes or guards recorded.",
+  "h_fixes": "Fixes by commit ({n})",
+  "h_risks": "Accepted risks",
+  "h_risks_note": "Deferred findings stay in the code; each carries the reason it was accepted.",
+  "h_risks_cols": "finding|severity|where|claim|reason",
+  "h_risks_none": "Nothing deferred.",
+  "h_rejected": "Rejected findings — do not find them again ({n})",
+  "h_economy": "Economy",
+  "h_economy_cols": "role|runs|of them unmeasured|turns|cost",
+  "h_economy_chart": "Measured cost by role",
+  "h_remains": "What is left",
+  "h_r_open": "{n} open findings",
+  "h_r_deferred": "{n} accepted risks stay in the code",
+  "h_r_blocks": "blocks not closed: {ids}",
+  "h_r_blocks_none": "every block is closed",
+  "h_r_unowned": "{n} files belong to no block",
+  "h_r_outside": "{n} files lie outside the declared scope and were not reviewed",
+  "h_footer": "Written by `{cli} summary --html`: one self-contained file, no network, no scripts.",
   "sarif_deferred": "Accepted risk, deferred: ",
   "sarif_deferred_why": "Deferred because: {reason}",
   "sarif_report": "Block report: {path}",
@@ -413,6 +472,64 @@ MSG = {
   "sum_open_none": "Открытого нет.",
   "sum_seams": "## Стыки между блоками (из `coupling`)",
   "sum_machine": "## Для инструмента — не править",
+  "sum_coverage": "**Файлы:** в блоках {covered} из {total}, без блока {unowned}, исключено из ревью {excluded}",
+  "sum_economy": "## Экономика (замеренные прогоны ролей из журнала)",
+  "sum_economy_head": "| роль | прогонов | из них без замера | ходов | цена |",
+  "sum_at_least": "≥ {v}",
+  "sum_not_known": "неизвестно",
+  "sum_economy_total": "всего",
+  "sum_economy_unknown": "Прогонов, чьи ходы или цену поток не сообщил: {n}. Они посчитаны как прогоны и никогда как ноль: сумма, в которую они входят, — нижняя граница (≥), а «неизвестно» — когда ни один прогон в ней числа не сообщил.",
+  "sum_economy_none": "Замеренных прогонов ролей в журнале нет (их пишет `assets/run-role.sh`).",
+  "h_title": "{project} — итог ревью",
+  "h_meta": "Дата {date} · коммит-база {sha} ({branch}) · finetooth {version}",
+  "h_intro": "Что проверяли, что нашли, что починили, сколько стоило и что осталось — по реестру и журналу ревью на коммите-базе. Итог в Markdown (`{cli} summary`) несёт те же числа.",
+  "h_goal": "Цель и охват",
+  "h_t_blocks": "блоков закрыто",
+  "h_t_findings": "находок записано",
+  "h_t_fixed": "починено",
+  "h_t_open": "ещё открыто",
+  "h_t_deferred": "принятых рисков",
+  "h_t_files": "файлов в блоках",
+  "h_t_cost": "замеренная цена",
+  "h_of": "{a} из {b}",
+  "h_coverage": "В блоках {covered} из {total} файлов; без блока {unowned}; исключено из ревью с названной причиной {excluded}.",
+  "h_goals": "Что проверял каждый блок:",
+  "h_blocks": "Блоки",
+  "h_blocks_cols": "блок|название|статус|файлов|критич.|высокая|средняя|низкая|починено|открыто|отложено|отвергнуто|дублей|прогонов|ходов|цена",
+  "h_blocks_note": "Столбцы серьёзности считают дефекты (отвергнутые находки и дубли не входят); столбцы статусов — все записи, и в сумме дают число находок блока. Прогоны, ходы и цена — замеренные прогоны ролей из журнала; ≥ — сумма, в которую вошёл прогон с несообщённым числом.",
+  "h_chart": "Находки по серьёзности и статусу, по блокам",
+  "h_chart_note": "Верхняя полоса блока — дефекты по серьёзности, нижняя — все записи по статусу. Те же числа — в таблице выше.",
+  "h_sev": "серьёзность",
+  "h_stat": "статус",
+  "h_sev_names": "критическая|высокая|средняя|низкая",
+  "h_status_names": "открыта|починена|отвергнута|дубль|отложена",
+  "h_open": "Открытые находки",
+  "h_open_cols": "находка|серьёзность|место|суть|отчёт блока",
+  "h_open_note": "Место — строка, на которой код находки стоит сейчас (как в findings.md), не обязательно та, на которой её записали.",
+  "h_open_none": "Открытого нет.",
+  "h_closed": "Чем закрыт каждый класс",
+  "h_closed_note": "Класс дефекта (корень) закрывает узда — тест или правило, записанная на те находки, которые она держит.",
+  "h_roots_cols": "класс дефекта|находки|узда → находки, на которые она записана",
+  "h_no_guard": "узда не записана",
+  "h_no_root": "(класс не назван)",
+  "h_closed_none": "Ни классов дефектов, ни узд не записано.",
+  "h_fixes": "Починки по коммитам ({n})",
+  "h_risks": "Принятые риски",
+  "h_risks_note": "Отложенные находки остаются в коде; у каждой — причина, по которой риск принят.",
+  "h_risks_cols": "находка|серьёзность|место|суть|причина",
+  "h_risks_none": "Отложенного нет.",
+  "h_rejected": "Отвергнутые находки — не искать заново ({n})",
+  "h_economy": "Экономика",
+  "h_economy_cols": "роль|прогонов|из них без замера|ходов|цена",
+  "h_economy_chart": "Замеренная цена по ролям",
+  "h_remains": "Что осталось",
+  "h_r_open": "открытых находок: {n}",
+  "h_r_deferred": "принятых рисков, оставшихся в коде: {n}",
+  "h_r_blocks": "не закрыты блоки: {ids}",
+  "h_r_blocks_none": "все блоки закрыты",
+  "h_r_unowned": "файлов без блока: {n}",
+  "h_r_outside": "файлов вне объявленной области, не просмотренных: {n}",
+  "h_footer": "Собрано `{cli} summary --html`: один самодостаточный файл, без сети и без скриптов.",
   "sarif_deferred": "Принятый риск, отложено: ",
   "sarif_deferred_why": "Отложено, потому что: {reason}",
   "sarif_report": "Отчёт блока: {path}",
@@ -2345,54 +2462,157 @@ def git_head() -> tuple[str, str]:
             git("rev-parse", "--abbrev-ref", "HEAD").out.strip())
 
 
-def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
+# One line of the journal that `assets/run-role.sh` writes for a role run: `<role> — spend: …`,
+# possibly after the markers it puts in front (`RUN FAILED (…) · `, `TREE LEFT DIRTY (…) · `,
+# the stream's own outcome). The wording is `axes.journal_line`'s; what it did not measure it
+# prints as `?` and `unknown`, never as zero, and neither is read as zero here.
+SPEND_LINE = re.compile(
+    r"^- \*\*[^*]*\*\* · `(?P<block>[^`]+)` — (?P<role>" + "|".join(ROLES) + r") — "
+    r"(?:.* · )?spend: (?P<minutes>\d+|\?) min, (?P<turns>\d+|\?) turns, "
+    r".*?cost estimate (?:\$(?P<cost>\d+(?:\.\d+)?)|unknown)")
+
+
+def journal_spend() -> list[dict]:
+    """The measured role runs of the journal: block, role, turns, cost (None when unknown).
+    The one reader of the spend lines — the Markdown and the HTML summary both count from it."""
+    if not JOURNAL_FILE.exists():
+        return []
+    out = []
+    for line in JOURNAL_FILE.read_text(encoding="utf-8").splitlines():
+        m = SPEND_LINE.match(line)
+        if m:
+            out.append({"block": m["block"], "role": m["role"],
+                        "turns": int(m["turns"]) if m["turns"] != "?" else None,
+                        "cost": float(m["cost"]) if m["cost"] is not None else None})
+    return out
+
+
+def money(x: float) -> str:
+    return f"${x:.2f}"
+
+
+def bounded(known: list, fmt: Callable[[float], str]) -> str:
+    """A sum over runs some of which did not report the number (`None`): the known part as a
+    lower bound, `≥ N`, or "unknown" when none reported it. A plain sum of the known values
+    printed 0 for a run cut off before its result — "free" to the reader — and a bare total
+    under-reported by exactly the runs that went wrong."""
+    have = [v for v in known if v is not None]
+    if not have and known:
+        return T("sum_not_known")
+    text = fmt(sum(have))
+    return T("sum_at_least", v=text) if len(have) < len(known) else text
+
+
+def spend_sum(runs: list[dict]) -> dict:
+    """Runs, turns and cost of a set of runs. `unknown` counts the runs a number is missing
+    in; `turns_text` and `cost_text` are what every summary shows — see `bounded`."""
+    costs = [r["cost"] for r in runs]
+    return {"runs": len(runs),
+            "turns": sum(r["turns"] for r in runs if r["turns"] is not None),
+            "cost": round(sum(c for c in costs if c is not None), 2),
+            "unknown": sum(1 for r in runs if r["turns"] is None or r["cost"] is None),
+            "cost_known": any(c is not None for c in costs),
+            "turns_text": bounded([r["turns"] for r in runs], lambda v: str(v)),
+            "cost_text": bounded(costs, lambda v: money(round(v, 2)))}
+
+
+def summary_facts(defn: dict, st: dict, rows: list[dict]) -> dict:
+    """Every number and list the summary shows — counted ONCE, here. The Markdown and the HTML
+    renderings take their numbers from this and from nowhere else, so the two cannot disagree
+    about what the review found or what it cost."""
     sha, branch = git_head()
     by_status = {k: 0 for k in FINDING_STATUS}
     for f in rows:
         by_status[f.get("status", "open")] = by_status.get(f.get("status", "open"), 0) + 1
     closed = sum(1 for b in defn["blocks"] if st["blocks"].get(b["id"], {}).get("status") == "closed")
-    out = [T("sum_title", project=defn.get("project", "?")), "",
-           T("sum_intro", cli=CLI), "",
-           T("sum_base", date=now()[:10], sha=sha[:12], branch=branch, closed=closed,
-             total=len(defn["blocks"]), total_f=len(rows), fixed=by_status["fixed"],
-             rejected=by_status["rejected"], deferred=by_status["deferred"],
-             dups=by_status["duplicate"], open=by_status["open"]), ""]
-    # A partial review says so before anything else: the file outlives docs/review/, and a
-    # reader who meets it a year later must not take one area's review for the whole.
-    partial = scope_line(defn, review_lang())
-    if partial:
-        out[1:1] = [f"> **{partial}**", ""]
-    out += [T("sum_blocks"), "", T("sum_blocks_head"), "|---|---|---|---|---|---|---|"]
+    owned, excluded, unassigned = coverage_map()
+    inside = scope_files(defn)
+    universe = (all_files() if inside is None else inside) - excluded
+    spend = journal_spend()
+    idx = block_index(defn)
+    blocks_out = []
     for b in defn["blocks"]:
         s = st["blocks"].get(b["id"], {})
-        n_files = len(git_files(b.get("paths", []))) if b.get("paths") else 0
-        out.append(f"| {b['id']} | {b['title']} | {s.get('status', 'todo')} | "
-                   f"{(s.get('finished') or '')[:10]} | {n_files} | `{s.get('reviewed_sha') or '—'}` | "
-                   f"{acceptance_of(b)} |")
-    out.append("")
+        mine = [f for f in rows if f.get("block") == b["id"]]
+        defects = [f for f in mine if f.get("status", "open") not in ("rejected", "duplicate")]
+        blocks_out.append({
+            "id": b["id"], "title": b["title"], "goal": b.get("goal", ""),
+            "status": s.get("status", "todo"), "finished": (s.get("finished") or "")[:10],
+            "files": len(git_files(b.get("paths", []))) if b.get("paths") else 0,
+            "reviewed_sha": s.get("reviewed_sha") or "—", "acceptance": acceptance_of(b),
+            "by_severity": {k: sum(1 for f in defects if f.get("severity") == k) for k in SEVERITIES},
+            "statuses": {k: sum(1 for f in mine if f.get("status", "open") == k) for k in FINDING_STATUS},
+            "spend": spend_sum([r for r in spend if r["block"] == b["id"]]),
+        })
+    rules: dict[str, list[str]] = {}
+    for f in rows:
+        if f.get("rule"):
+            rules.setdefault(f["rule"], []).append(f.get("id", "?"))
     line_of = shown_lines()
 
+    shown = [f for f in rows if f.get("status", "open") in ("open", "deferred", "rejected")]
+    return {
+        "project": defn.get("project", "?"), "date": now()[:10], "sha": sha, "branch": branch,
+        "closed": closed, "total_blocks": len(defn["blocks"]), "total_findings": len(rows),
+        "by_status": by_status, "scope_line": scope_line(defn, review_lang()),
+        "coverage": {"total": len(universe), "covered": len(universe & set(owned)),
+                     "unowned": len(unassigned), "excluded": len(excluded),
+                     "outside": len(all_files() - excluded - universe) if inside is not None else 0},
+        "blocks": blocks_out,
+        "rejected": [f for f in rows if f.get("status") == "rejected"],
+        "deferred": [f for f in rows if f.get("status") == "deferred"],
+        "open": [f for f in rows if f.get("status", "open") == "open"],
+        # Where each shown finding is: the line its code sits on now, and its block report.
+        # Kept beside the records, not written into them: they are displays, not fields.
+        "at": {f.get("id"): line_of(f) for f in shown},
+        "report": {f.get("id"): sarif_report(idx.get(f.get("block", ""))) for f in shown},
+        "fixed": [f for f in rows if f.get("status") == "fixed"],
+        "rules": rules, "roots": roots_of(rows),
+        "unrooted_rules": root_guards([f for f in rows if f.get("rule") and not (f.get("root") or "").strip()
+                                       and f.get("status") not in ("rejected", "duplicate")]),
+        "spend_roles": {role: spend_sum([r for r in spend if r["role"] == role]) for role in ROLES},
+        "spend_total": spend_sum(spend),
+    }
+
+
+def render_summary(defn: dict, st: dict, rows: list[dict], facts: dict | None = None) -> str:
+    fx = facts or summary_facts(defn, st, rows)
+    sha, by_status = fx["sha"], fx["by_status"]
+    cov = fx["coverage"]
+    out = [T("sum_title", project=fx["project"]), "",
+           T("sum_intro", cli=CLI), "",
+           T("sum_base", date=fx["date"], sha=sha[:12], branch=fx["branch"], closed=fx["closed"],
+             total=fx["total_blocks"], total_f=fx["total_findings"], fixed=by_status["fixed"],
+             rejected=by_status["rejected"], deferred=by_status["deferred"],
+             dups=by_status["duplicate"], open=by_status["open"]) + "  ",
+           T("sum_coverage", covered=cov["covered"], total=cov["total"], unowned=cov["unowned"],
+             excluded=cov["excluded"]), ""]
+    # A partial review says so before anything else: the file outlives docs/review/, and a
+    # reader who meets it a year later must not take one area's review for the whole.
+    if fx["scope_line"]:
+        out[1:1] = [f"> **{fx['scope_line']}**", ""]
+    out += [T("sum_blocks"), "", T("sum_blocks_head"), "|---|---|---|---|---|---|---|"]
+    for b in fx["blocks"]:
+        out.append(f"| {b['id']} | {b['title']} | {b['status']} | "
+                   f"{b['finished']} | {b['files']} | `{b['reviewed_sha']}` | "
+                   f"{b['acceptance']} |")
+    out.append("")
+
     def finding_line(f: dict, reason_key: str | None) -> str:
-        at = line_of(f)
+        at = fx["at"].get(f.get("id"))
         where = f"`{f.get('file')}:{at}`" if at else f"`{f.get('file')}`"
         line = f"- **{f.get('id')}** ({f.get('severity')}) {where} — {f.get('claim', '').strip()}"
         if reason_key and f.get(reason_key):
             line += f"  \n  *{f[reason_key].strip()}*"
         return line
-    rejected = [f for f in rows if f.get("status") == "rejected"]
     out += [T("sum_rejected"), ""]
-    out += [finding_line(f, "reject_reason") for f in rejected] or [T("sum_rejected_none")]
+    out += [finding_line(f, "reject_reason") for f in fx["rejected"]] or [T("sum_rejected_none")]
     out.append("")
-    deferred = [f for f in rows if f.get("status") == "deferred"]
     out += [T("sum_deferred"), ""]
-    out += [finding_line(f, "defer_reason") for f in deferred] or [T("sum_deferred_none")]
+    out += [finding_line(f, "defer_reason") for f in fx["deferred"]] or [T("sum_deferred_none")]
     out.append("")
     out += [T("sum_classes"), ""]
-    rules: dict[str, list[str]] = {}
-    for f in rows:
-        if f.get("rule"):
-            rules.setdefault(f["rule"], []).append(f.get("id", "?"))
-    fixed = [f for f in rows if f.get("status") == "fixed"]
+    rules, fixed = fx["rules"], fx["fixed"]
     if rules:
         out.append(T("sum_classes_rules"))
         out += [f"- `{rule}` — {', '.join(ids)}" for rule, ids in sorted(rules.items())]
@@ -2404,9 +2624,8 @@ def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
         out.append("")
     if not rules and not fixed:
         out += [T("sum_classes_none"), ""]
-    open_rows = [f for f in rows if f.get("status") == "open"]
     out += [T("sum_open"), ""]
-    out += [finding_line(f, None) for f in open_rows] or [T("sum_open_none")]
+    out += [finding_line(f, None) for f in fx["open"]] or [T("sum_open_none")]
     out.append("")
     if COUPLING_FILE.exists():
         lines = COUPLING_FILE.read_text(encoding="utf-8").splitlines()[1:]
@@ -2416,6 +2635,20 @@ def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
                     [(x.split("\t")[0], x.split("\t")[1]), (x.split("\t")[2], x.split("\t")[3])])
                     + f" ({x.split(chr(9))[4]}×)" for x in lines[:50]]
             out.append("")
+    # The journal dies with docs/review/; what the review cost is part of what it was.
+    out += [T("sum_economy"), ""]
+    total = fx["spend_total"]
+    if total["runs"]:
+        out += [T("sum_economy_head"), "|---|---|---|---|---|"]
+        out += [f"| {role} | {s['runs']} | {s['unknown']} | {s['turns_text']} | {s['cost_text']} |"
+                for role, s in fx["spend_roles"].items() if s["runs"]]
+        out.append(f"| **{T('sum_economy_total')}** | {total['runs']} | {total['unknown']} | "
+                   f"{total['turns_text']} | {total['cost_text']} |")
+        if total["unknown"]:
+            out += ["", T("sum_economy_unknown", n=total["unknown"])]
+    else:
+        out.append(T("sum_economy_none"))
+    out.append("")
     machine = {"base": sha, **({"scope": review_scope(defn)} if review_scope(defn) else {}),
                "blocks": {b["id"]: {"title": b["title"], "paths": b.get("paths", [])}
                                         for b in defn["blocks"]}}
@@ -2423,10 +2656,297 @@ def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+# ------------------------------------------------------------------- summary --html
+#
+# The same summary as one self-contained HTML file for a reader who never saw the review's
+# conversation: opened from disk, attached to a PR, read on a phone. Built from
+# `summary_facts` and nothing else. Nothing is fetched: no font, no script, no stylesheet,
+# no image — a file that loads something from the network is not the same file a year later,
+# and a page that runs code is not something to attach to a PR. Charts are SVG drawn here;
+# a segment's count is its `<title>` (the browser's own tooltip, no script needed).
+#
+# Colours (the palette validated for colour-blind separation in both themes, the dataviz
+# skill's reference instance): severity is ordered, so it is one blue ramp — darker is more
+# severe on the light surface, lighter on the dark one; a finding's status is an identity,
+# so it takes categorical hues other than blue (orange, aqua, yellow, magenta, violet — the
+# reference order with blue left to the severity ramp, so the two bars never share a hue). Every colour is a custom property
+# redefined for `prefers-color-scheme: dark`; the chart reads the same properties.
+
+SUMMARY_HTML_DEFAULT = "docs/review-summary.html"
+
+HTML_STYLE = """
+:root{color-scheme:light;--bg:#fcfcfb;--panel:#f3f2ef;--ink:#0b0b0b;--muted:#52514e;--line:#dcdad4;
+--accent:#1c5cab;--warn-bg:#fdf0d5;--warn-ink:#6b4500;
+--sev-critical:#0d366b;--sev-high:#1c5cab;--sev-medium:#3987e5;--sev-low:#86b6ef;
+--st-open:#eb6834;--st-fixed:#1baf7a;--st-deferred:#eda100;--st-rejected:#e87ba4;--st-duplicate:#4a3aa7;
+--bar:#2a78d6}
+@media (prefers-color-scheme: dark){:root{color-scheme:dark;--bg:#1a1a19;--panel:#252523;--ink:#f4f3ee;
+--muted:#c3c2b7;--line:#3a3a37;--accent:#86b6ef;--warn-bg:#3d2e0c;--warn-ink:#fad38a;
+--sev-critical:#cde2fb;--sev-high:#86b6ef;--sev-medium:#3987e5;--sev-low:#1c5cab;
+--st-open:#d95926;--st-fixed:#199e70;--st-deferred:#c98500;--st-rejected:#d55181;--st-duplicate:#9085e9;
+--bar:#3987e5}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:1.6rem;line-height:1.25;margin:.5rem 0}
+h2{font-size:1.25rem;margin:2rem 0 .5rem;padding-top:.5rem;border-top:1px solid var(--line)}
+p,li{overflow-wrap:anywhere}
+code{font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
+.meta,.note{color:var(--muted);font-size:.9rem}
+.scope{background:var(--warn-bg);color:var(--warn-ink);padding:12px 16px;border-radius:8px;font-weight:600}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin:1rem 0}
+.tile{background:var(--panel);border-radius:8px;padding:10px 12px;min-width:0}
+.tile b{display:block;font-size:1.4rem;font-variant-numeric:tabular-nums}
+.tile>span{color:var(--muted);font-size:.85rem}
+.scroll{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;font-size:.9rem;min-width:100%}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;white-space:nowrap}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td.wide{min-width:16rem}td.mid{min-width:10rem}
+svg{display:block;width:100%;height:auto;max-width:760px}
+svg text{fill:var(--ink);font:12px system-ui,sans-serif}
+svg .muted{fill:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;margin:.5rem 0;font-size:.85rem;color:var(--muted);padding:0;list-style:none}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+details{margin:.75rem 0}summary{cursor:pointer;color:var(--accent)}
+"""
+
+
+def h(text) -> str:
+    """Every piece of text from the register, the journal or git goes through here: a claim
+    holding `<script>` or `&` is text on the page, not markup."""
+    return html.escape(str(text), quote=True)
+
+
+def H(key: str, **kw) -> str:
+    """A message of the review's language as HTML. The template is escaped FIRST and the
+    values put in after, so a value may carry markup built here (`num`) and the template
+    itself can never inject any."""
+    return CODE_SPAN.sub(r"<code>\1</code>", h(MSG[review_lang()][key])).format(**kw)
+
+
+def num(key: str, value) -> str:
+    """A number of the summary, tagged with where it comes from. The tag is what the test
+    reads to hold every number against the register and the journal."""
+    return f'<span data-k="{h(key)}">{h(value)}</span>'
+
+
+def names(key: str) -> list[str]:
+    return MSG[review_lang()][key].split("|")
+
+
+def html_table(head: list[str], rows: list[list[str]], numeric: set[int] = frozenset(),
+               wide: set[int] = frozenset(), mid: set[int] = frozenset()) -> str:
+    """A table in its own scrolling box: a wide table scrolls inside the box, the page never
+    scrolls sideways (the reader is on a phone as often as not)."""
+    def cls(i: int) -> str:
+        c = "n" if i in numeric else "wide" if i in wide else "mid" if i in mid else ""
+        return f' class="{c}"' if c else ""
+    th = "".join(f"<th{cls(i)}>{h(c)}</th>" for i, c in enumerate(head))
+    body = "".join("<tr>" + "".join(f"<td{cls(i)}>{c}</td>" for i, c in enumerate(r)) + "</tr>"
+                   for r in rows)
+    return f'<div class="scroll"><table><thead><tr>{th}</tr></thead><tbody>{body}</tbody></table></div>'
+
+
+def legend(items: list[tuple[str, str]]) -> str:
+    return '<ul class="legend">' + "".join(
+        f'<li><i style="background:var({var})"></i>{h(label)}</li>' for var, label in items) + "</ul>"
+
+
+def stacked_chart(blocks_: list[dict]) -> str:
+    """Two stacked bars per block — defects by severity, then every record by status — on
+    one scale (the largest bar), so bars compare across blocks. Drawn in viewBox units; the
+    SVG scales to the width of the page."""
+    sev_names, st_names = names("h_sev_names"), names("h_status_names")
+    # 400 units wide: on a phone (~360 px) the 12-unit labels stay ~11 px; wider screens scale up.
+    width, label_w, bar_h, gap, row_gap = 400, 48, 14, 3, 14
+    plot_w = width - label_w - 36
+    most = max([sum(b["statuses"].values()) for b in blocks_] + [1])
+    parts, y = [], 8
+    for b in blocks_:
+        parts.append(f'<text x="0" y="{y + bar_h + 4}">{h(b["id"])}</text>')
+        for series, keys, labels, var in (
+                (b["by_severity"], SEVERITIES, sev_names, "--sev-"),
+                (b["statuses"], FINDING_STATUS, st_names, "--st-")):
+            x0 = label_w
+            for k, label in zip(keys, labels):
+                n = series[k]
+                if not n:
+                    continue
+                w = max(n / most * plot_w - 2, 1)
+                parts.append(f'<rect x="{x0:.1f}" y="{y}" width="{w:.1f}" height="{bar_h}" rx="3" '
+                             f'style="fill:var({var}{k})"><title>{h(b["id"])} · {h(label)}: {n}</title></rect>')
+                x0 += w + 2
+            kind = "sev" if var == "--sev-" else "status"
+            parts.append(f'<text class="muted" x="{x0 + 4:.1f}" y="{y + bar_h - 3}" '
+                         f'data-k="chart.{h(b["id"])}.{kind}">{sum(series.values())}</text>')
+            y += bar_h + gap
+        y += row_gap
+    return (f'<svg viewBox="0 0 {width} {y}" role="img" aria-label="{H("h_chart")}">'
+            + "".join(parts) + "</svg>")
+
+
+def cost_chart(roles: dict[str, dict]) -> str:
+    """One bar per role, its measured cost. A single series: the heading names it."""
+    live = [(r, s) for r, s in roles.items() if s["runs"]]
+    if not any(s["cost_known"] for _, s in live):
+        return ""
+    if not live:
+        return ""
+    width, label_w, bar_h, gap = 400, 70, 18, 8
+    most = max(s["cost"] for _, s in live) or 1
+    parts, y = [], 4
+    for role, s in live:
+        # A role no run of which reported its cost gets no bar: a bar of zero would say "free".
+        w = s["cost"] / most * (width - label_w - 64) if s["cost_known"] else 0
+        bar = (f'<rect x="{label_w}" y="{y}" width="{max(w, 1):.1f}" height="{bar_h}" rx="3" '
+               f'style="fill:var(--bar)"><title>{h(role)}: {h(s["cost_text"])}</title></rect>'
+               if s["cost_known"] else "")
+        parts.append(f'<text x="0" y="{y + bar_h - 5}">{h(role)}</text>{bar}'
+                     f'<text class="muted" x="{label_w + w + 6:.1f}" y="{y + bar_h - 5}">{h(s["cost_text"])}</text>')
+        y += bar_h + gap
+    return (f'<svg viewBox="0 0 {width} {y}" role="img" aria-label="{H("h_economy_chart")}">'
+            + "".join(parts) + "</svg>")
+
+
+def render_summary_html(facts: dict) -> str:
+    x, lang = facts, review_lang()
+    bs, cov = x["by_status"], x["coverage"]
+    sev_names, st_names = names("h_sev_names"), names("h_status_names")
+    sev_label = dict(zip(SEVERITIES, sev_names))
+
+    def where(f: dict) -> str:
+        at = x["at"].get(f.get("id"))
+        return f"<code>{h(f.get('file'))}{':' + h(at) if at else ''}</code>"
+
+    def finding_rows(fs: list[dict], last) -> list[list[str]]:
+        return [[f"<b>{h(f.get('id'))}</b>", h(sev_label.get(f.get("severity"), f.get("severity"))),
+                 where(f), h((f.get("claim") or "").strip()), last(f)] for f in fs]
+    out = [f'<!doctype html><html lang="{h(lang)}"><head><meta charset="utf-8">'
+           f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+           f'<title>{H("h_title", project=h(x["project"]))}</title><style>{HTML_STYLE}</style></head>'
+           f'<body><main>']
+    # A partial review says so FIRST (#53): the reader must not take one area for the whole.
+    if x["scope_line"]:
+        out.append(f'<p class="scope" data-k="scope">{h(x["scope_line"])}</p>')
+    out += [f'<h1>{H("h_title", project=h(x["project"]))}</h1>',
+            f'<p class="meta">{H("h_meta", date=h(x["date"]), sha="<code>" + h(x["sha"][:12]) + "</code>", branch=h(x["branch"]), version=h(VERSION))}</p>',
+            f'<p>{H("h_intro", cli=h(CLI))}</p>']
+    # Goal and coverage.
+    total = x["spend_total"]
+    tiles = [(H("h_of", a=num("blocks.closed", x["closed"]), b=num("blocks.total", x["total_blocks"])), "h_t_blocks"),
+             (num("findings.total", x["total_findings"]), "h_t_findings"),
+             (num("findings.fixed", bs["fixed"]), "h_t_fixed"),
+             (num("findings.open", bs["open"]), "h_t_open"),
+             (num("findings.deferred", bs["deferred"]), "h_t_deferred"),
+             (H("h_of", a=num("files.covered", cov["covered"]), b=num("files.total", cov["total"])), "h_t_files")]
+    if total["runs"]:
+        tiles.append((num("cost.total", total["cost_text"]), "h_t_cost"))
+    out += [f'<h2 id="goal">{H("h_goal")}</h2>', '<div class="tiles">']
+    out += [f'<div class="tile"><b>{v}</b><span>{H(k)}</span></div>' for v, k in tiles]
+    out += ['</div>', '<p>' + H("h_coverage", covered=num("files.covered", cov["covered"]),
+                                   total=num("files.total", cov["total"]),
+                                   unowned=num("files.unowned", cov["unowned"]),
+                                   excluded=num("files.excluded", cov["excluded"])) + '</p>',
+            f'<p>{H("h_goals")}</p><ul>']
+    out += [f'<li><b>{h(b["id"])}</b> {h(b["title"])}{" — " + h(b["goal"]) if b["goal"] else ""}</li>'
+            for b in x["blocks"]]
+    out.append("</ul>")
+    # Blocks.
+    rows = []
+    for b in x["blocks"]:
+        k, sp = f"block.{b['id']}", b["spend"]
+        rows.append([f"<b>{h(b['id'])}</b>", h(b["title"]), h(b["status"]), num(f"{k}.files", b["files"])]
+                    + [num(f"{k}.sev.{s}", b["by_severity"][s]) for s in SEVERITIES]
+                    # Every status, duplicates included: the row adds up to the block's findings.
+                    + [num(f"{k}.status.{s}", b["statuses"][s])
+                       for s in ("fixed", "open", "deferred", "rejected", "duplicate")]
+                    + [num(f"{k}.runs", sp["runs"]), num(f"{k}.turns", sp["turns_text"]),
+                       num(f"{k}.cost", sp["cost_text"])])
+    out += [f'<h2 id="blocks">{H("h_blocks")}</h2>',
+            html_table(names("h_blocks_cols"), rows, numeric=set(range(3, 16))),
+            f'<p class="note">{H("h_blocks_note")}</p>']
+    # Chart.
+    out += [f'<h2 id="chart">{H("h_chart")}</h2>',
+            legend([(f"--sev-{s}", n) for s, n in zip(SEVERITIES, sev_names)]),
+            legend([(f"--st-{s}", n) for s, n in zip(FINDING_STATUS, st_names)]),
+            stacked_chart(x["blocks"]), f'<p class="note">{H("h_chart_note")}</p>']
+    # Open findings.
+    out.append(f'<h2 id="open">{H("h_open")}</h2>')
+    if x["open"]:
+        out += [html_table(names("h_open_cols"), finding_rows(
+                    x["open"], lambda f: f"<code>{h(x['report'][f.get('id')])}</code>"
+                    if x["report"].get(f.get("id")) else "—"),
+                    wide={3}), f'<p class="note">{H("h_open_note")}</p>']
+    else:
+        out.append(f'<p>{H("h_open_none")}</p>')
+    # What closed each class: the guards per root, then fixes by commit.
+    out += [f'<h2 id="closed">{H("h_closed")}</h2>', f'<p class="note">{H("h_closed_note")}</p>']
+    groups = sorted(x["roots"].items()) + ([("", [])] if x["unrooted_rules"] else [])
+    trows = []
+    for root, items in groups:
+        guards = root_guards(items) if root else x["unrooted_rules"]
+        ids = [i for g in guards.values() for i in g]
+        gtext = "<br>".join((f"<code>{h(g)}</code>" if g else H("h_no_guard")) + " → " + h(", ".join(v))
+                            for g, v in guards.items())
+        trows.append([h(root) if root else H("h_no_root"), num(f"root.{root or '-'}.findings", len(ids)), gtext])
+    if trows:
+        out.append(html_table(names("h_roots_cols"), trows, numeric={1}, wide={2}, mid={0}))
+    else:
+        out.append(f'<p>{H("h_closed_none")}</p>')
+    if x["fixed"]:
+        out.append(f'<details><summary>{H("h_fixes", n=num("findings.fixed", len(x["fixed"])))}</summary><ul>')
+        out += [f"<li>{h(f.get('id'))} → <code>{h(f.get('fix_commit') or ', '.join(f.get('fixed_in', [])))}</code></li>"
+                for f in x["fixed"]]
+        out.append("</ul></details>")
+    # Accepted risks, and what was rejected.
+    out += [f'<h2 id="risks">{H("h_risks")}</h2>', f'<p class="note">{H("h_risks_note")}</p>']
+    if x["deferred"]:
+        out.append(html_table(names("h_risks_cols"), finding_rows(
+            x["deferred"], lambda f: h((f.get("defer_reason") or "").strip())), wide={3, 4}))
+    else:
+        out.append(f'<p>{H("h_risks_none")}</p>')
+    if x["rejected"]:
+        out.append(f'<details><summary>{H("h_rejected", n=num("findings.rejected", len(x["rejected"])))}</summary>')
+        out.append(html_table(names("h_risks_cols"), finding_rows(
+            x["rejected"], lambda f: h((f.get("reject_reason") or "").strip())), wide={3, 4}))
+        out.append("</details>")
+    # Economy.
+    out.append(f'<h2 id="economy">{H("h_economy")}</h2>')
+    if total["runs"]:
+        erows = [[h(role), num(f"role.{role}.runs", s["runs"]), num(f"role.{role}.unknown", s["unknown"]),
+                  num(f"role.{role}.turns", s["turns_text"]), num(f"role.{role}.cost", s["cost_text"])]
+                 for role, s in x["spend_roles"].items() if s["runs"]]
+        erows.append([f"<b>{H('sum_economy_total')}</b>", num("total.runs", total["runs"]),
+                      num("total.unknown", total["unknown"]), num("total.turns", total["turns_text"]),
+                      num("total.cost", total["cost_text"])])
+        out.append(html_table(names("h_economy_cols"), erows, numeric={1, 2, 3, 4}))
+        if total["unknown"]:
+            out.append(f'<p class="note">{H("sum_economy_unknown", n=num("total.unknown", total["unknown"]))}</p>')
+        out += [f'<p class="note">{H("h_economy_chart")}</p>', cost_chart(x["spend_roles"])]
+    else:
+        out.append(f'<p>{H("sum_economy_none")}</p>')
+    # What is left.
+    not_closed = [b["id"] for b in x["blocks"] if b["status"] != "closed"]
+    left = [H("h_r_open", n=num("findings.open", bs["open"])),
+            H("h_r_deferred", n=num("findings.deferred", bs["deferred"])),
+            H("h_r_blocks", ids=h(", ".join(not_closed))) if not_closed else H("h_r_blocks_none"),
+            H("h_r_unowned", n=num("files.unowned", cov["unowned"]))]
+    if x["scope_line"]:
+        left.append(H("h_r_outside", n=num("files.outside", cov["outside"])))
+    out += [f'<h2 id="left">{H("h_remains")}</h2><ul>'] + [f"<li>{v}</li>" for v in left] + ["</ul>"]
+    out.append(f'<p class="note">{H("h_footer", cli=h(CLI))}</p></main></body></html>')
+    return "\n".join(out) + "\n"
+
+
 def cmd_summary(args) -> int:
     """The one file that outlives docs/review/: what was checked, against which revision,
     what was rejected and why, what closes each class. With --aged: how far each block has
     drifted from the summary's base commit — the only thing a re-run needs to start from."""
+    if args.aged and args.html:
+        die("--aged reads a Markdown summary and --html writes one as HTML — give one of them: "
+            f"`{CLI} summary --aged <file>` or `{CLI} summary --html`")
     if args.aged:
         path = Path(args.aged)
         if not path.is_absolute():
@@ -2469,8 +2989,13 @@ def cmd_summary(args) -> int:
             print(T("aged_row", block=bid, commits=commits, files=files, title=title))
         return 0
     defn, st, rows = blocks(), state(), findings()
-    text = render_summary(defn, st, rows)
-    out = Path(args.out)
+    # One count for both renderings: the HTML is the same summary, not a second tally.
+    facts = summary_facts(defn, st, rows)
+    if args.html:
+        text = render_summary_html(facts).rstrip("\n")
+    else:
+        text = render_summary(defn, st, rows, facts)
+    out = Path(args.out or (SUMMARY_HTML_DEFAULT if args.html else SUMMARY_DEFAULT))
     if not out.is_absolute():
         out = ROOT / out
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -5979,7 +6504,8 @@ def main() -> int:
     c.add_argument("--since", help="only commits since this date (git --since)")
     sub.add_parser("refs", help="finding ids of the register named in the code outside docs/review/")
     c = sub.add_parser("summary", help="the one file that outlives docs/review/; --aged <file>: drift since its base commit")
-    c.add_argument("--out", default=SUMMARY_DEFAULT, help=f"where to write (default {SUMMARY_DEFAULT}, outside docs/review/)")
+    c.add_argument("--out", help=f"where to write (default {SUMMARY_DEFAULT}, with --html {SUMMARY_HTML_DEFAULT}; outside docs/review/)")
+    c.add_argument("--html", action="store_true", help="the same summary as one self-contained HTML file: tables, SVG charts, light and dark theme, no network")
     c.add_argument("--aged", metavar="FILE", help="read a summary and print how much each block changed since its base commit")
 
     c = sub.add_parser("sarif", help="open and deferred findings as SARIF 2.1.0 for GitHub code scanning")

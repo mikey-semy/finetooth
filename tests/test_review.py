@@ -4547,7 +4547,7 @@ class WriteBoundaryTest(unittest.TestCase):
 
     # Единственное разрешённое исключение: итог задуман пережить снос каталога ревью,
     # поэтому пишется вне него — по умолчанию сюда, а по `--out` туда, куда скажут.
-    ALLOWED_OUTSIDE = {"docs/review-summary.md"}
+    ALLOWED_OUTSIDE = {"docs/review-summary.md", "docs/review-summary.html"}
 
     def setUp(self) -> None:
         self.s = Stand()
@@ -4670,6 +4670,21 @@ class WriteBoundaryTest(unittest.TestCase):
         self.assertTrue(target.exists())
         appeared = {rel for rel in self._snapshot() if rel not in before}
         self.assertEqual(appeared, {"docs/review-summary.md"})
+
+    def test_итог_в_html_пишется_туда_куда_сказали_и_только_туда(self):
+        """ — то же разрешённое исключение другим файлом: по умолчанию
+        , по  — куда сказали, в том числе вне репозитория, и
+        ничего больше (обход выше зовёт  без )."""
+        before = self._snapshot()
+        self.assertEqual(self.s.run("summary", "--html").returncode, 0)
+        outside = Path(tempfile.mkdtemp(prefix="finetooth-out-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        out = self.s.run("summary", "--html", "--out", str(outside / "итог.html"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue((outside / "итог.html").exists())
+        after = self._snapshot()
+        self.assertEqual({rel for rel in after if rel not in before}, {"docs/review-summary.html"})
+        self.assertEqual({rel for rel in before if after[rel] != before[rel]}, set())
 
     def test_sarif_пишет_только_по_out_и_только_туда(self):
         """`sarif` без `--out` печатает в поток и не пишет ничего (это держит обход выше);
@@ -12346,6 +12361,374 @@ class RegionFingerprintTest(unittest.TestCase):
         self.assertIn("no code fingerprint", refused(self.s.run("check")))
         self.assertEqual(self.s.run("backfill").returncode, 0)
         self.assertEqual(self._row()["region_span"], [self.K, self.K])
+
+
+class _HtmlShape(__import__("html.parser").parser.HTMLParser):
+    """Разбор итога в HTML штатным разборщиком: теги с атрибутами и родителями, числа с
+    меткой `data-k` и текст `<style>`. Регулярка по тексту файла приняла бы `<script` в
+    атрибуте за тег, а разборщик браузера — нет; проверяется то, что увидит браузер."""
+
+    VOID = {"meta", "br", "link", "img", "input", "hr", "source", "col", "area", "base", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tags: list[tuple[str, dict, tuple[str, ...]]] = []
+        self.numbers: dict[str, list[str]] = {}
+        self.style = ""
+        self._stack: list[tuple[str, dict]] = []
+        self._k: list[tuple[str, list[str]]] = []
+
+    def handle_starttag(self, tag, attrs) -> None:
+        a = {k: v or "" for k, v in attrs}
+        self.tags.append((tag, a, tuple(f"{t}.{p.get('class', '')}" for t, p in self._stack)))
+        if tag in self.VOID:
+            return
+        self._stack.append((tag, a))
+        if "data-k" in a:
+            self._k.append((a["data-k"], []))
+
+    def handle_endtag(self, tag) -> None:
+        while self._stack:
+            t, a = self._stack.pop()
+            if "data-k" in a:
+                key, parts = self._k.pop()
+                self.numbers.setdefault(key, []).append("".join(parts).strip())
+            if t == tag:
+                break
+
+    def handle_data(self, data) -> None:
+        if self._stack and self._stack[-1][0] == "style":
+            self.style += data
+        for _key, parts in self._k:
+            parts.append(data)
+
+
+def html_shape(text: str) -> _HtmlShape:
+    p = _HtmlShape()
+    p.feed(text)
+    p.close()
+    return p
+
+
+# Атрибуты, по которым браузер САМ что-то загружает. `href` у `<a>` — переход по щелчку
+# человека, а не загрузка, и он разрешён; у `<link>`, `<use>`, `<image>` — загрузка.
+FETCHING_ATTRS = ("src", "href", "xlink:href", "srcset", "data", "poster", "action", "background")
+NETWORK = re.compile(r"^\s*(?:[a-z][a-z0-9+.-]*:)?//|^\s*https?:", re.I)
+
+
+def external_resources(text: str) -> list[str]:
+    """Всё, что итог в HTML грузил бы по сети: атрибуты-загрузчики любого тега, кроме
+    ссылки-перехода `<a href>`, и `url(…)` / `@import` в стилях."""
+    shape = html_shape(text)
+    out = [f"<{tag} {attr}={a[attr]}>" for tag, a, _ in shape.tags for attr in FETCHING_ATTRS
+           if attr in a and NETWORK.search(a[attr]) and not (tag == "a" and attr == "href")]
+    css = shape.style + " ".join(a.get("style", "") for _t, a, _p in shape.tags)
+    out += [m.group(0) for m in re.finditer(r"url\(\s*['\"]?\s*(?:https?:)?//[^)]*\)|@import[^;]*", css, re.I)]
+    return out
+
+
+def css_vars(block: str) -> set[str]:
+    return set(re.findall(r"(--[a-z0-9-]+)\s*:", block))
+
+
+class SummaryHtmlTest(unittest.TestCase):
+    """`summary --html`: тот же итог одним самодостаточным файлом для человека, не видевшего
+    переписки (roadmap, направление 17). Числа берутся из того же счёта, что у текстового
+    итога, и тест держит каждое против реестра, журнала и текстового итога."""
+
+    # Строки журнала — в том виде, в каком их пишет `run-role.sh` через `log` (axes.py):
+    # замеренный прогон, прогон с неизвестными ходами и ценой (`?`, `unknown` — не ноль) и
+    # запись решения, которая прогоном не является.
+    RUNS = (("hunter", "spend: 12 min, 40 turns, 39 tool calls, input 1.0M tokens (90% from cache, "
+             "100k written), output 50k, re-reads 0, cost estimate $5.25, model m", 40, 5.25),
+            ("verify", "RUN FAILED (claude exit 1 — the assignment was NOT completed) · spend: ? min, "
+             "? turns, 3 tool calls, input 0.1M tokens (50% from cache, 1k written), output ?, "
+             "re-reads 0, cost estimate unknown, model m", None, None),
+            ("fix", "spend: 30 min, 120 turns, 119 tool calls, input 9.0M tokens (99% from cache, "
+             "200k written), output 90k, re-reads 1, cost estimate $12.40, model m", 120, 12.40),
+            ("fix", "spend: 20 min, 60 turns, 59 tool calls, input 5.0M tokens (99% from cache, "
+             "100k written), output 40k, re-reads 0, cost estimate $7.01, model m", 60, 7.01))
+    HOSTILE = '<script>alert(1)</script> & co "q"'
+    HOSTILE_REASON = "</td></tr></table><img src=https://evil.example/x.png> & принято"
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.out = Path(tempfile.mkdtemp(prefix="finetooth-html-"))
+        self.addCleanup(shutil.rmtree, self.out, True)
+
+    def _stand(self, lang: str = "ru", scope: dict | None = None) -> None:
+        self.s.write("src/one.ts", "".join(f"строка {i}\n" for i in range(1, 13)))
+        self.s.write("src/two.ts", "x\n")
+        self.s.write("tests/guard.test.ts", "g\n")
+        self.s.write("README.md", "вне блоков\n")
+        self.s.blocks(paths=["src/one.ts", "tests/guard.test.ts"], lang=lang, scope=scope,
+                      extra_blocks=[{"id": "H2", "slug": "two", "phase": 1, "title": "Второй",
+                                     "role": "demo", "goal": "второй блок", "paths": ["src/two.ts"]}])
+        self.s.manifest(hypotheses=1)
+        rows = [(1, "high", "a class", "дефект 1"), (2, "low", "", "дефект 2"),
+                (3, "medium", "a class", "дефект 3"), (4, "critical", "", self.HOSTILE),
+                (5, "medium", "", "дефект 5")]
+        self.s.write("docs/review/reports/H1-findings.jsonl", "".join(json.dumps({
+            "block": "H1", "severity": sev, "confidence": "confirmed", "status": "open",
+            "file": "src/one.ts", "line": 6, "claim": claim, **({"root": root} if root else {}),
+            "scenario": "человек делает X — получает Y"}, ensure_ascii=False) + "\n"
+            for i, sev, root, claim in rows))
+        self.s.write("docs/review/reports/H1-demo.verify.md", "# отчёт\n")
+        self.s.commit()
+        self.assertEqual(self.s.run("init").returncode, 0)
+        self.assertEqual(self.s.run("import", "H1").returncode, 0)
+        sha = self.s.git("rev-parse", "HEAD").stdout.strip()
+        for argv in (("H1-002", "rejected", "--reason", "так и задумано"),
+                     ("H1-003", "deferred", "--reason", self.HOSTILE_REASON),
+                     ("H1-001", "fixed", "--commit", sha, "--rule", "tests/guard.test.ts"),
+                     ("H1-005", "duplicate", "--dup-of", "H1-003")):
+            out = self.s.run("set-finding", *argv)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        for role, text, _t, _c in self.RUNS:
+            self.assertEqual(self.s.run("log", "H1", f"{role} — {text}").returncode, 0)
+        self.s.run("log", "H2", "fix — решение без замера: блок отложен")
+
+    def _html(self) -> str:
+        out = self.s.run("summary", "--html", "--out", str(self.out / "итог.html"))
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return (self.out / "итог.html").read_text(encoding="utf-8")
+
+    def _markdown(self) -> str:
+        out = self.s.run("summary", "--out", str(self.out / "итог.md"))
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return (self.out / "итог.md").read_text(encoding="utf-8")
+
+    @staticmethod
+    def bound(values: list, fmt) -> str:
+        """Сумма по прогонам, часть которых числа не сообщила: известное — нижней границей
+        (`≥ N`), ни одного известного — «unknown»; всё известно — просто сумма."""
+        have = [v for v in values if v is not None]
+        if values and not have:
+            return "unknown"
+        text = fmt(sum(have))
+        return f"≥ {text}" if len(have) < len(values) else text
+
+    def _expected(self, md: str) -> dict[str, str]:
+        """Каждое число итога — посчитанное НЕ инструментом: из реестра на диске, из строк
+        журнала, которые записал сам тест, из git и из текстового итога."""
+        reg = [json.loads(ln) for ln in (self.s.root / "docs/review/findings.jsonl")
+               .read_text(encoding="utf-8").splitlines() if ln.strip()]
+        st = json.loads((self.s.root / "docs/review/state.json").read_text(encoding="utf-8"))
+        tracked_ = [p for p in self.s.git("ls-files", "-z").stdout.split("\0") if p]
+        excluded = [p for p in tracked_ if p.startswith(("docs/review/", "scripts/review/"))]
+        owned = {"H1": ["src/one.ts", "tests/guard.test.ts"], "H2": ["src/two.ts"]}
+        universe = [p for p in tracked_ if p not in excluded]
+        counted = {k: sum(1 for f in reg if f["status"] == k)
+                   for k in ("open", "fixed", "rejected", "duplicate", "deferred")}
+        # Текстовый итог — вторая сторона: те же числа HTML обязан показать и он.
+        base = re.search(r"(\d+) closed of (\d+); \*\*findings:\*\* (\d+) — fixed (\d+), rejected (\d+), "
+                         r"deferred (\d+), duplicates (\d+), still open (\d+)", md)
+        files = re.search(r"\*\*Files:\*\* (\d+) of (\d+) are in blocks, (\d+) without a block, "
+                          r"(\d+) excluded", md)
+        self.assertTrue(base and files, md[:800])
+        md_n = dict(zip(("blocks.closed", "blocks.total", "findings.total", "findings.fixed",
+                         "findings.rejected", "findings.deferred", "findings.duplicate",
+                         "findings.open"), base.groups()))
+        md_n.update(zip(("files.covered", "files.total", "files.unowned", "files.excluded"), files.groups()))
+        want = {"blocks.closed": sum(1 for b in st["blocks"].values() if b.get("status") == "closed"),
+                "blocks.total": 2, "findings.total": len(reg), "findings.fixed": counted["fixed"],
+                "findings.rejected": counted["rejected"], "findings.deferred": counted["deferred"],
+                "findings.duplicate": counted["duplicate"], "findings.open": counted["open"],
+                "files.covered": sum(len(v) for v in owned.values()), "files.total": len(universe),
+                "files.unowned": len(universe) - sum(len(v) for v in owned.values()),
+                "files.excluded": len(excluded)}
+        for k, v in md_n.items():
+            self.assertEqual(int(v), want[k], f"текстовый итог: {k}")
+        want = {k: str(v) for k, v in want.items() if k != "findings.duplicate"}
+        runs = [(r, t, c) for r, _x, t, c in self.RUNS]
+        cost = lambda rs: self.bound([c for _r, _t, c in rs], lambda v: f"${v:.2f}")  # noqa: E731
+        turns = lambda rs: self.bound([t for _r, t, _c in rs], str)  # noqa: E731
+        unknown = lambda rs: str(sum(1 for _r, t, c in rs if t is None or c is None))  # noqa: E731
+        want.update({"cost.total": cost(runs), "total.runs": str(len(runs)), "total.turns": turns(runs),
+                     "total.cost": cost(runs), "total.unknown": unknown(runs)})
+        for role in ("hunter", "verify", "fix"):
+            mine = [r for r in runs if r[0] == role]
+            want.update({f"role.{role}.runs": str(len(mine)), f"role.{role}.turns": turns(mine),
+                         f"role.{role}.cost": cost(mine), f"role.{role}.unknown": unknown(mine)})
+            # И текстовый итог несёт ту же строку роли.
+            self.assertIn(f"| {role} | {len(mine)} | {unknown(mine)} | {turns(mine)} | {cost(mine)} |", md)
+        self.assertIn(f"| {len(runs)} | {unknown(runs)} | {turns(runs)} | {cost(runs)} |", md)
+        for bid in ("H1", "H2"):
+            mine = [f for f in reg if f["block"] == bid]
+            defects = [f for f in mine if f["status"] not in ("rejected", "duplicate")]
+            for sev in ("critical", "high", "medium", "low"):
+                want[f"block.{bid}.sev.{sev}"] = str(sum(1 for f in defects if f["severity"] == sev))
+            for s_ in ("fixed", "open", "deferred", "rejected", "duplicate"):
+                want[f"block.{bid}.status.{s_}"] = str(sum(1 for f in mine if f["status"] == s_))
+            want[f"block.{bid}.files"] = str(len(owned[bid]))
+            brun = runs if bid == "H1" else []
+            want.update({f"block.{bid}.runs": str(len(brun)), f"block.{bid}.turns": turns(brun),
+                         f"block.{bid}.cost": cost(brun)})
+            want[f"chart.{bid}.sev"] = str(len(defects))
+            want[f"chart.{bid}.status"] = str(len(mine))
+        roots: dict[str, int] = {}
+        for f in reg:
+            if f.get("root") and f["status"] not in ("rejected", "duplicate"):
+                roots[f["root"]] = roots.get(f["root"], 0) + 1
+        want.update({f"root.{r}.findings": str(n) for r, n in roots.items()})
+        return want
+
+    def test_каждое_число_файла_совпадает_с_реестром_журналом_и_текстовым_итогом(self):
+        """Мутации: число взято из другого источника (открытые вместе с отложенными; цена
+        блока — из итога журнала целиком) — тест красный. Метка без ожидания — тоже красный:
+        новое число в файле обязано прийти сюда со своим независимым счётом."""
+        self._stand(lang="en")
+        md, text = self._markdown(), self._html()
+        want = self._expected(md)
+        got = html_shape(text).numbers
+        self.assertEqual(sorted(set(got) - set(want)), [],
+                         "в файле есть число, которое тест не сверяет — добавьте его счёт в _expected")
+        self.assertEqual(sorted(set(want) - set(got)), [], "в файле нет числа, которое обязан показать итог")
+        for key, values in got.items():
+            for v in values:
+                with self.subTest(число=key):
+                    self.assertEqual(v, want[key])
+        # Прогон с неизвестной ценой и ходами — прогон, но не ноль: 3 из 4 замерены.
+        self.assertEqual(want["total.runs"], "4")
+
+    def test_неизвестный_прогон_не_превращается_в_ноль(self):
+        """Прогон, чьи ходы и цену поток не сообщил (обрезанный, упавший), не показан как
+        бесплатный: сумма роли, где ни один прогон числа не сообщил, — «unknown», а сумма, куда
+        такой прогон вошёл, — нижняя граница «≥». Одинаково в Markdown и в HTML. Мутация:
+        `bounded` печатает голую сумму известного — тест красный (роль verify выходила
+        «0» ходов и «$0.00»)."""
+        self._stand(lang="en")
+        md, got = self._markdown(), html_shape(self._html()).numbers
+        self.assertIn("| verify | 1 | 1 | unknown | unknown |", md)
+        self.assertEqual(got["role.verify.cost"], ["unknown"])
+        self.assertEqual(got["role.verify.turns"], ["unknown"])
+        self.assertEqual(got["total.cost"], ["≥ $24.66"])
+        self.assertEqual(got["block.H1.cost"], ["≥ $24.66"])
+        self.assertIn("| **total** | 4 | 1 | ≥ 220 | ≥ $24.66 |", md)
+        self.assertNotIn("| verify | 1 | 1 | 0 |", md)
+
+    def test_строка_статусов_блока_сходится_с_числом_его_находок(self):
+        """Столбцы статусов в таблице блоков — все статусы, дубли тоже: сумма по строке равна
+        числу находок блока в реестре. Мутация: столбец дублей снят — дубль пропадал из
+        таблицы, и строка не сходилась с блоком."""
+        self._stand(lang="en")
+        got = html_shape(self._html()).numbers
+        reg = [json.loads(ln) for ln in (self.s.root / "docs/review/findings.jsonl")
+               .read_text(encoding="utf-8").splitlines() if ln.strip()]
+        self.assertTrue(any(f["status"] == "duplicate" for f in reg), "на стенде нет дубля")
+        for bid in ("H1", "H2"):
+            row = sum(int(v[0]) for k, v in got.items() if k.startswith(f"block.{bid}.status."))
+            with self.subTest(блок=bid):
+                self.assertEqual(row, sum(1 for f in reg if f["block"] == bid))
+
+    def test_текст_находки_не_ломает_файл_и_не_исполняется(self):
+        """Суть находки, причина и класс — чужой текст: `<script>` и `</td>` в нём остаются
+        текстом. Мутация: экранирование снято — тест красный."""
+        self._stand()
+        text = self._html()
+        shape = html_shape(text)
+        tags = {t for t, _a, _p in shape.tags}
+        self.assertNotIn("script", tags)
+        self.assertNotIn("img", tags)
+        self.assertNotIn("<script", text.lower())
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt; &amp; co &quot;q&quot;", text)
+        self.assertIn("&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;img", text)
+        # Таблицы целы: отложенная находка — одна строка таблицы рисков, а не обрывок.
+        self.assertEqual(text.count("<table"), text.count("</table>"))
+
+    def test_файл_ничего_не_грузит_по_сети(self):
+        """Ни шрифта, ни скрипта, ни картинки по сети: файл через год — тот же файл.
+        Мутация: `<link href="https://…">` в шапке — тест красный. Проверка сама проверена в
+        обе стороны: загрузчик ловится, ссылка-переход `<a href>` и текст с адресом — нет."""
+        self._stand()
+        text = self._html()
+        self.assertEqual(external_resources(text), [])
+        self.assertNotIn("<script", text.lower(), "итог обходится без скриптов")
+        bad = text.replace("</head>", '<link rel="stylesheet" href="https://fonts.example/x.css"></head>')
+        self.assertTrue(external_resources(bad))
+        self.assertTrue(external_resources(text.replace("</style>", "body{background:url(//x.example/a.png)}</style>")))
+        self.assertTrue(external_resources(text.replace("</main>", '<svg><image href="http://x/y.png"/></svg></main>')))
+        ok = text.replace("</main>", '<p>см. https://example.com <a href="https://example.com">тут</a></p></main>')
+        self.assertEqual(external_resources(ok), [])
+
+    def test_тёмная_и_светлая_тема_на_одних_переменных(self):
+        """Каждый цвет — переменная, и тёмная тема переопределяет КАЖДУЮ. Мутации: блок
+        `prefers-color-scheme: dark` удалён, одна переменная в нём пропущена — тест красный."""
+        self._stand()
+        style = html_shape(self._html()).style
+        light = re.search(r":root\{(.*?)\}", style, re.S)
+        dark = re.search(r"@media \(prefers-color-scheme: dark\)\{:root\{(.*?)\}\}", style, re.S)
+        self.assertTrue(light, "нет светлой темы в :root")
+        self.assertTrue(dark, "нет тёмной темы: @media (prefers-color-scheme: dark)")
+        self.assertEqual(css_vars(light.group(1)), css_vars(dark.group(1)),
+                         "тёмная тема переопределяет не все цвета светлой")
+        used = set(re.findall(r"var\((--[a-z0-9-]+)\)", self._html()))
+        self.assertEqual(used - css_vars(light.group(1)), set(), "цвет без определения")
+
+    def test_читается_на_телефоне(self):
+        """Страница не прокручивается вбок: у неё есть viewport, каждая таблица — в своём
+        контейнере с прокруткой, график масштабируется по viewBox, без ширины в пикселях."""
+        self._stand()
+        text = self._html()
+        shape = html_shape(text)
+        self.assertTrue(any(t == "meta" and a.get("name") == "viewport" for t, a, _p in shape.tags))
+        tables = [p for t, _a, p in shape.tags if t == "table"]
+        self.assertTrue(tables)
+        for parents in tables:
+            self.assertEqual(parents[-1], "div.scroll", "таблица вне контейнера с прокруткой")
+        self.assertRegex(shape.style, r"\.scroll\{overflow-x:auto")
+        svgs = [a for t, a, _p in shape.tags if t == "svg"]
+        self.assertTrue(svgs)
+        for a in svgs:
+            self.assertIn("viewBox", {k if k != "viewbox" else "viewBox" for k in a})
+            self.assertNotIn("width", a)
+
+    def test_язык_ревью_и_частичная_область_первой(self):
+        """Тексты — на языке ревью (`lang`), через MSG. Частичное ревью (#53) сказано первым
+        делом — до заголовка."""
+        self._stand(lang="ru", scope={"paths": ["src/one.ts", "tests/guard.test.ts"],
+                                       "reason": "только первый блок"})
+        text = self._html()
+        self.assertIn('<html lang="ru">', text)
+        self.assertIn("Открытые находки", text)
+        self.assertIn("Экономика", text)
+        body = text.split("<main>", 1)[1].lstrip()
+        self.assertTrue(body.startswith('<p class="scope"'), body[:200])
+        self.assertIn("только первый блок", body.split("\n", 1)[0])
+        en = Stand()
+        self.addCleanup(en.cleanup)
+        self.s, keep = en, self.s
+        self._stand(lang="en")
+        text = self._html()
+        self.s = keep
+        self.assertIn('<html lang="en">', text)
+        self.assertIn("Open findings", text)
+        self.assertNotIn('class="scope"', text)
+
+    def test_открытая_находка_с_текущей_строкой_и_отчётом_блока(self):
+        """Место — строка, на которой код находки стоит СЕЙЧАС (как в findings.md), и путь к
+        отчёту блока."""
+        self._stand()
+        one = self.s.root / "src/one.ts"
+        one.write_text("новая\nещё\n" + one.read_text(encoding="utf-8"), encoding="utf-8")
+        self.s.commit("строки сверху")
+        text = self._html()
+        findings_md = self.s.run("findings")
+        self.assertEqual(findings_md.returncode, 0)
+        md = (self.s.root / "docs/review/findings.md").read_text(encoding="utf-8")
+        m = re.search(r"H1-004.*?src/one\.ts:(\d+)", md)
+        self.assertTrue(m, md)
+        self.assertEqual(m.group(1), "8", "findings.md показывает текущую строку — стенд не сдвинул код")
+        self.assertIn("<code>src/one.ts:8</code>", text)
+        self.assertIn("<code>docs/review/reports/H1-demo.verify.md</code>", text)
+
+    def test_html_и_aged_вместе_отказ_с_выходом(self):
+        self._stand()
+        out = self.s.run("summary", "--html", "--aged", "x.md")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("--html", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
 
 
 if __name__ == "__main__":

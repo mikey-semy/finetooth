@@ -206,7 +206,10 @@ one — a deferral is an accepted risk that leaves the review with its reason, n
 unfinished fix. Then
 `review summary` writes the one file that outlives the directory (`docs/review-summary.md`
 by default): the date and the base commit, the blocks and their acceptance criteria, the
-rejected findings with reasons, the accepted risks, what closed each defect class. Only then
+rejected findings with reasons, the accepted risks, what closed each defect class, what the
+role runs cost. `review summary --html` writes the same summary as one self-contained HTML
+file (`docs/review-summary.html`; tables, SVG charts, no network) for a reader who never saw
+the review. Only then
 the `docs/review/` directory **is deleted whole in one change**, and what lasts moves out:
 rules into the root instructions file, decisions into ADRs, checks into tests. Later,
 `review summary --aged docs/review-summary.md` says how far each block has drifted since the
