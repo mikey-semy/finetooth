@@ -194,13 +194,20 @@ this block" are never in it — their verdicts are the table with commands above
 - your own new findings.
 
 **`claim` is a title, not a verification log.** One sentence about what is wrong, no longer
-than 220 characters: the summary table of findings is built from this field, with one line
+than {{CLAIM_MAX}} characters: the summary table of findings is built from this field, with one line
 per finding. Line numbers, proofs, the analysis of someone else's wording and the
 explanation of why the severity changed go into your report — that is what its text is for.
 The words "CONFIRMED", "VERIFIER FINDING" and other bookkeeping do not belong in `claim`:
-the verdict is already recorded in the `confidence` field, and `scenario` (up to 700
-characters) answers "how will it show up", not "how I checked it". The state check
-(`review.py check`) rejects a finding with a bloated title.
+the verdict is already recorded in the `confidence` field, and `scenario` (up to {{SCENARIO_MAX}}
+characters) answers "how will it show up", not "how I checked it". `import` refuses a draft
+with a longer field — the whole block at once — and `check` refuses a `rejected` row whose
+reason is recorded nowhere.
+
+**Check the file before you finish:** `{{CLI}} import {{BLOCK_ID}} --dry-run` reads it row by
+row as `import` and `check` will — the limits above, the vocabularies, the reason of every
+rejection and the `dup_of` of every duplicate — writes nothing, and names every row to fix. A
+field run lost a whole block's import to verifier rows past the limits, found only after the
+verifier was gone.
 
 ## 3. Reply to me
 

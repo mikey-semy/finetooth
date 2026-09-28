@@ -162,6 +162,14 @@ assumption you took on faith. Completeness is proven by listing what was not rea
 audit reports this is a separate chapter, and without it "no findings" cannot be told from
 "skimmed diagonally".
 
+## Acceptance criterion
+What the manifest's acceptance criterion asks for — a table, a list, a run of mutations —
+built here, in the form it names, as the report's own text. Whatever part of it you could
+not build is named with the reason, never left out; with no criterion in the manifest, say
+so in one line. The state check warns about a hunter report with no such section when the
+manifest has a criterion: in a field run the hunter skipped the tables and only the
+verifier noticed.
+
 ## Findings
 ### {{BLOCK_ID}}-001 · <severity> · <short title>
 **Location:** `path/to/file.go:123`
@@ -193,6 +201,13 @@ assigns it):
 grouped by it, and from the third instance the state check demands the class be closed by
 a guard. Write the **same string** into every instance of one class, and leave the field
 out where the defect is the only one of its kind — an empty `root` groups nothing.
+
+**The register's limits.** `claim` is a title of at most {{CLAIM_MAX}} characters and
+`scenario` at most {{SCENARIO_MAX}}: `import` refuses a draft with a longer field, and it
+refuses the whole block at once — proof and line numbers belong in the report. A hunter draft
+holds no `rejected` rows: rejecting is the verifier's, and a rejection needs its reason in
+`reject_reason`. **Check the draft before you finish:** `{{CLI}} import {{BLOCK_ID}} --dry-run`
+reads it row by row as `import` and `check` will, writes nothing, and names every row to fix.
 
 Severity scale:
 - **critical** — data leak or corruption, permission bypass, loss of the user's work, no way to recover.

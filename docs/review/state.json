@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-28T08:48:18Z",
+  "updated_at": "2026-09-28T10:15:43Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -8,10 +8,10 @@
       "finished": "2026-09-25T02:22:21Z",
       "reports": [],
       "note": "",
-      "reviewed_sha": "bca061a66d059e24",
-      "refs_sha": "81e8f40eef3f85a2",
+      "reviewed_sha": "658961c489d84e68",
+      "refs_sha": "d85f9c774d491a39",
       "hypotheses_sha": "4ab68e42761325b3",
-      "restamped_at": "2026-09-28T08:05:15Z",
+      "restamped_at": "2026-09-28T10:15:26Z",
       "read_lines": 5639
     },
     "T2": {
@@ -20,10 +20,10 @@
       "finished": "2026-09-25T18:55:37Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "f3259b673607f7e6",
-      "refs_sha": "0178544bca9f4581",
+      "reviewed_sha": "99601f4c4772d95e",
+      "refs_sha": "639beb4d707b7894",
       "hypotheses_sha": "1d5450e8e739f769",
-      "restamped_at": "2026-09-28T08:48:01Z",
+      "restamped_at": "2026-09-28T09:40:17Z",
       "read_lines": 3236
     },
     "T3": {
@@ -32,10 +32,10 @@
       "finished": "2026-09-25T18:55:37Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "aaf7dd72713c5e0f",
-      "refs_sha": "0178544bca9f4581",
+      "reviewed_sha": "8de24f4698470f09",
+      "refs_sha": "2f26d9b66f9fecfa",
       "hypotheses_sha": "fcbe3731d494ce45",
-      "restamped_at": "2026-09-28T08:05:15Z"
+      "restamped_at": "2026-09-28T10:15:27Z"
     },
     "T4": {
       "status": "closed",
@@ -43,10 +43,10 @@
       "finished": "2026-09-25T18:55:38Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "15c52d1b93de5d14",
-      "refs_sha": "250bca7129956009",
+      "reviewed_sha": "725887a93d781ce9",
+      "refs_sha": "976d0e9ff1e0f0a4",
       "hypotheses_sha": "779f2bec72a0a16a",
-      "restamped_at": "2026-09-28T08:48:18Z",
+      "restamped_at": "2026-09-28T10:15:43Z",
       "read_lines": 3463
     }
   }

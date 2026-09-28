@@ -115,7 +115,9 @@ one of your own:
    findings come as a table with one `set-finding` command per change (`--severity`,
    `--confidence`, `rejected --reason`, `duplicate --dup-of`) — run them. Rejected findings
    are not deleted — they stay with the reason. The draft then holds only the verifier's new
-   findings: `review import <ID> --append`. Then `review set-status <ID> verified`:
+   findings: `review import <ID> --append`. (Both roles check their draft first with
+   `review import <ID> --dry-run`: the limits, the vocabularies and the rejection reasons,
+   row by row, nothing written — their templates say so.) Then `review set-status <ID> verified`:
    `verified` and `closed` are refused while the draft holds rows the register does not, and
    `check` refuses the same for a block past verification — unimported findings are
    invisible to the summary and the fix gate. (Importing only after the verifier works too:
@@ -147,7 +149,10 @@ one of your own:
    refuses while findings at `fix_gate` severity or above (`high` by default, set in
    `blocks.json`; `"none"` switches it off) are open in the blocks already passed — the
    method finds faster than a project fixes, and a finding that never reaches a fix is debt.
-   `review status` shows this debt as its own line.
+   `review status` shows this debt as its own line. Hunting every block first and fixing
+   afterwards is a strategy, not a defect of the gate: `"fix_gate": "none"`, paid for by
+   findings whose code moves while they wait (restamps) and by a class found again in every
+   later block instead of being closed by a guard first.
 8. **Fix reviewer** — required once any finding of the block is `fixed`; a fresh agent that
    did not write the fixes:
    `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope <half>]`.
