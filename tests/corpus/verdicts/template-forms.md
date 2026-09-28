@@ -16,7 +16,7 @@ hypothesis verdicts unnoticed.
 intent: none — an unfilled skeleton gives no basis (issue #17)
 
 ~~~~report
-- `{{BLOCK_ID}}.1 — checked: <what exactly proves it>`
+- `{{BLOCK_ID}}.1 — confirmed: {{BLOCK_ID}}-NNN — <what exactly proves it>`
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -28,7 +28,7 @@ expect: {"T1.1": ["checked"]}
 intent: checked
 
 ~~~~report
-- `{{BLOCK_ID}}.1 — checked: ran the test; it goes red on the reverted fix`
+- `{{BLOCK_ID}}.1 — confirmed: {{BLOCK_ID}}-004 — ran the scenario; the second save drops the flag`
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -38,7 +38,7 @@ expect: {"T1.1": ["checked"]}
 intent: checked
 
 ~~~~report
-- {{BLOCK_ID}}.1 — checked: ran the test; it goes red on the reverted fix
+- {{BLOCK_ID}}.1 — confirmed: {{BLOCK_ID}}-004 — ran the scenario; the second save drops the flag
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -48,10 +48,10 @@ expect: {"T1.1": ["checked"]}
 intent: none — an unfilled skeleton gives no basis (issue #17)
 
 ~~~~report
-- `{{BLOCK_ID}}.2 — not checked: <what got in the way>`
+- `{{BLOCK_ID}}.3 — not checked: <what got in the way>`
 ~~~~
 
-expect: {"T1.2": ["not checked"]}
+expect: {"T1.3": ["not checked"]}
 
 **Differs from the intent** — today's parser reads this form differently.
 
@@ -60,30 +60,30 @@ expect: {"T1.2": ["not checked"]}
 intent: not checked
 
 ~~~~report
-- `{{BLOCK_ID}}.2 — not checked: no live database in the sandbox`
+- `{{BLOCK_ID}}.3 — not checked: no live database in the sandbox`
 ~~~~
 
-expect: {"T1.2": ["not checked"]}
+expect: {"T1.3": ["not checked"]}
 
 ## 6. hunter.md — ## Hypotheses — the line filled in, without the backticks
 
 intent: not checked
 
 ~~~~report
-- {{BLOCK_ID}}.2 — not checked: no live database in the sandbox
+- {{BLOCK_ID}}.3 — not checked: no live database in the sandbox
 ~~~~
 
-expect: {"T1.2": ["not checked"]}
+expect: {"T1.3": ["not checked"]}
 
 ## 7. hunter.md — ## Hypotheses — the verdict line exactly as printed (bullet, backticks, placeholder basis)
 
 intent: none — an unfilled skeleton gives no basis (issue #17)
 
 ~~~~report
-- `{{BLOCK_ID}}.3 — not applicable: <why the question is not about this code>`
+- `{{BLOCK_ID}}.4 — not applicable: <why the question is not about this code>`
 ~~~~
 
-expect: {"T1.3": ["not applicable"]}
+expect: {"T1.4": ["not applicable"]}
 
 **Differs from the intent** — today's parser reads this form differently.
 
@@ -92,20 +92,20 @@ expect: {"T1.3": ["not applicable"]}
 intent: not applicable
 
 ~~~~report
-- `{{BLOCK_ID}}.3 — not applicable: the block has no network code`
+- `{{BLOCK_ID}}.4 — not applicable: the block has no network code`
 ~~~~
 
-expect: {"T1.3": ["not applicable"]}
+expect: {"T1.4": ["not applicable"]}
 
 ## 9. hunter.md — ## Hypotheses — the line filled in, without the backticks
 
 intent: not applicable
 
 ~~~~report
-- {{BLOCK_ID}}.3 — not applicable: the block has no network code
+- {{BLOCK_ID}}.4 — not applicable: the block has no network code
 ~~~~
 
-expect: {"T1.3": ["not applicable"]}
+expect: {"T1.4": ["not applicable"]}
 
 ## 10. hunter.md — ## Hypotheses — a verdict word alone in backticks is a quotation of the word
 
@@ -201,7 +201,7 @@ expect: {}
 intent: none — an unfilled skeleton gives no basis (issue #17)
 
 ~~~~report
-- `{{BLOCK_ID}}.1 — проверена: <чем именно доказано>`
+- `{{BLOCK_ID}}.1 — подтверждена: {{BLOCK_ID}}-NNN — <чем именно доказано>`
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -213,7 +213,7 @@ expect: {"T1.1": ["checked"]}
 intent: checked
 
 ~~~~report
-- `{{BLOCK_ID}}.1 — проверена: прогнал тест, на откаченной правке он краснеет`
+- `{{BLOCK_ID}}.1 — подтверждена: {{BLOCK_ID}}-004 — прогнал сценарий, второе сохранение теряет флаг`
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -223,7 +223,7 @@ expect: {"T1.1": ["checked"]}
 intent: checked
 
 ~~~~report
-- {{BLOCK_ID}}.1 — проверена: прогнал тест, на откаченной правке он краснеет
+- {{BLOCK_ID}}.1 — подтверждена: {{BLOCK_ID}}-004 — прогнал сценарий, второе сохранение теряет флаг
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -233,10 +233,10 @@ expect: {"T1.1": ["checked"]}
 intent: none — an unfilled skeleton gives no basis (issue #17)
 
 ~~~~report
-- `{{BLOCK_ID}}.2 — не проверена: <что помешало>`
+- `{{BLOCK_ID}}.3 — не проверена: <что помешало>`
 ~~~~
 
-expect: {"T1.2": ["not checked"]}
+expect: {"T1.3": ["not checked"]}
 
 **Differs from the intent** — today's parser reads this form differently.
 
@@ -245,30 +245,30 @@ expect: {"T1.2": ["not checked"]}
 intent: not checked
 
 ~~~~report
-- `{{BLOCK_ID}}.2 — не проверена: в песочнице нет живой базы`
+- `{{BLOCK_ID}}.3 — не проверена: в песочнице нет живой базы`
 ~~~~
 
-expect: {"T1.2": ["not checked"]}
+expect: {"T1.3": ["not checked"]}
 
 ## 23. hunter.ru.md — ## Гипотезы — the line filled in, without the backticks
 
 intent: not checked
 
 ~~~~report
-- {{BLOCK_ID}}.2 — не проверена: в песочнице нет живой базы
+- {{BLOCK_ID}}.3 — не проверена: в песочнице нет живой базы
 ~~~~
 
-expect: {"T1.2": ["not checked"]}
+expect: {"T1.3": ["not checked"]}
 
 ## 24. hunter.ru.md — ## Гипотезы — the verdict line exactly as printed (bullet, backticks, placeholder basis)
 
 intent: none — an unfilled skeleton gives no basis (issue #17)
 
 ~~~~report
-- `{{BLOCK_ID}}.3 — неприменима: <почему вопрос не про этот код>`
+- `{{BLOCK_ID}}.4 — неприменима: <почему вопрос не про этот код>`
 ~~~~
 
-expect: {"T1.3": ["not applicable"]}
+expect: {"T1.4": ["not applicable"]}
 
 **Differs from the intent** — today's parser reads this form differently.
 
@@ -277,20 +277,20 @@ expect: {"T1.3": ["not applicable"]}
 intent: not applicable
 
 ~~~~report
-- `{{BLOCK_ID}}.3 — неприменима: в блоке нет сетевого кода`
+- `{{BLOCK_ID}}.4 — неприменима: в блоке нет сетевого кода`
 ~~~~
 
-expect: {"T1.3": ["not applicable"]}
+expect: {"T1.4": ["not applicable"]}
 
 ## 26. hunter.ru.md — ## Гипотезы — the line filled in, without the backticks
 
 intent: not applicable
 
 ~~~~report
-- {{BLOCK_ID}}.3 — неприменима: в блоке нет сетевого кода
+- {{BLOCK_ID}}.4 — неприменима: в блоке нет сетевого кода
 ~~~~
 
-expect: {"T1.3": ["not applicable"]}
+expect: {"T1.4": ["not applicable"]}
 
 ## 27. hunter.ru.md — ## Гипотезы — a verdict word alone in backticks is a quotation of the word
 
@@ -386,7 +386,7 @@ expect: {}
 intent: checked
 
 ~~~~report
-- {{BLOCK_ID}}.1 — checked: what proves it
+- {{BLOCK_ID}}.1 — confirmed: <finding id> — what proves it
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -458,7 +458,7 @@ expect: {}
 intent: checked
 
 ~~~~report
-- {{BLOCK_ID}}.1 — проверена: чем доказано
+- {{BLOCK_ID}}.1 — подтверждена: <номер находки> — чем доказано
 ~~~~
 
 expect: {"T1.1": ["checked"]}
@@ -596,3 +596,67 @@ intent: none — not a hypothesis verdict
 ~~~~
 
 expect: {}
+
+## 53. hunter.md — ## Hypotheses — the refutation line exactly as printed (bullet, backticks, placeholder basis)
+
+intent: none — an unfilled skeleton gives no basis (issue #17)
+
+~~~~report
+- `{{BLOCK_ID}}.2 — refuted: <what exactly proves the code is right>`
+~~~~
+
+expect: {"T1.2": ["checked"]}
+
+**Differs from the intent** — today's parser reads this form differently.
+
+## 54. hunter.md — ## Hypotheses — the refutation filled in, without the backticks
+
+intent: checked
+
+~~~~report
+- {{BLOCK_ID}}.2 — refuted: not a defect — the route gate rejects the call before the handler
+~~~~
+
+expect: {"T1.2": ["checked"]}
+
+## 55. hunter.ru.md — ## Гипотезы — the refutation line exactly as printed (bullet, backticks, placeholder basis)
+
+intent: none — an unfilled skeleton gives no basis (issue #17)
+
+~~~~report
+- `{{BLOCK_ID}}.2 — опровергнута: <чем именно доказано, что код прав>`
+~~~~
+
+expect: {"T1.2": ["checked"]}
+
+**Differs from the intent** — today's parser reads this form differently.
+
+## 56. hunter.ru.md — ## Гипотезы — the refutation filled in, without the backticks
+
+intent: checked
+
+~~~~report
+- {{BLOCK_ID}}.2 — опровергнута: не дефект — гейт маршрута отвергает вызов до обработчика
+~~~~
+
+expect: {"T1.2": ["checked"]}
+
+## 57. verify.md — section 3 — the refutation clause, on the hypothesis's id
+
+intent: checked
+
+~~~~report
+- {{BLOCK_ID}}.2 — refuted: what proves the code is right
+~~~~
+
+expect: {"T1.2": ["checked"]}
+
+## 58. verify.ru.md — section 3 — the refutation clause, on the hypothesis's id
+
+intent: checked
+
+~~~~report
+- {{BLOCK_ID}}.2 — опровергнута: чем доказано, что код прав
+~~~~
+
+expect: {"T1.2": ["checked"]}
