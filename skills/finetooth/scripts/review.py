@@ -308,6 +308,8 @@ MSG = {
   "loop_stop": "loop signal: the top finding lies in the code the previous round wrote — the human decides. {id} ({sev}, {file}:{line}) of fix review round {prev} sits on a line fix round {prev} changed ({diff}); another round would repeat that pattern. Record the decision — a different mechanism, a revert of the class, or closing the block — with `{cli} decide {block} \"<decision>\"`: it goes into the next fix and fix review prompts. If the decision is to close the block: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, after fix review round {round}: {text}",
   "draft_unimported": "{block}: the draft {draft} holds {n} row(s) the register does not — the findings the block's verification wrote are not in the review: `summary`, `findings.md`, `sarif` and the fix gate do not see them. Take them in: `{cli} import {block}` when the block has nothing recorded yet, `{cli} import {block} --append` on top of what is recorded; then `{cli} findings`.",
+  "confirmed_no_finding": "{block}: {report} confirms hypothesis {h} but names no finding — a confirmed hypothesis is a defect, and a defect that is not a finding reaches neither the register nor the fix gate. Write it up in the draft {draft} and put its id on the verdict line: `{h} — confirmed: {block}-NNN — <what proves it>`. If what was confirmed is not a defect, the verdict is `{h} — refuted: <why it is not a defect>`, without the word confirmed.",
+  "confirmed_unknown_finding": "{block}: {report} confirms hypothesis {h} with {ids}, which neither the draft {draft} nor the register holds — name the id the finding has (or will get on import, in the draft's order from the prompt's first new id), or write the finding up in the draft. If what was confirmed is not a defect, the verdict is `{h} — refuted: <why it is not a defect>`.",
   "draft_unreadable": "{block}: the draft {draft} cannot be read, so its findings are not in the register — {why}. Fix the line, then `{cli} import {block}` (or `--append` on top of what is recorded).",
   "f_where": "**Location:**", "f_claim": "**What is wrong:**", "f_scenario": "**Failure scenario:**", "f_invariant": "**Violated invariant:**", "f_conf": "confidence",
   "md_title": "# Review findings", "md_gen": "> This file is GENERATED from `findings.jsonl` by `{cli} findings`.", "md_noedit": "> Do not edit by hand — edit the jsonl and regenerate.",
@@ -387,6 +389,8 @@ MSG = {
   "loop_stop": "сигнал петли: главная находка лежит в коде, который написал прошлый круг, — решает человек. {id} ({sev}, {file}:{line}) из ревью правок круга {prev} стоит на строке, которую изменил круг починки {prev} ({diff}); ещё один круг повторит тот же узор. Запишите решение — другой механизм, откат класса или закрытие блока — командой `{cli} decide {block} \"<decision>\"`: оно попадёт в задания следующего круга починки и ревью правок. Если решено закрыть блок: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, после ревью правок круга {round}: {text}",
   "draft_unimported": "{block}: в черновике {draft} есть строки, которых нет в реестре (неимпортированных строк: {n}) — находки, записанные проверкой блока, в ревью не попали: их не видят `summary`, `findings.md`, `sarif` и ворота починки. Внесите их: `{cli} import {block}`, если по блоку ещё ничего не записано, `{cli} import {block} --append` — поверх записанного; затем `{cli} findings`.",
+  "confirmed_no_finding": "{block}: {report} подтверждает гипотезу {h}, но не называет ни одной находки — подтверждённая гипотеза есть дефект, а дефект, не оформленный находкой, не попадает ни в реестр, ни в ворота починки. Оформите его в черновике {draft} и поставьте номер на строку вердикта: `{h} — подтверждена: {block}-NNN — <чем доказано>`. Если подтверждённое — не дефект, вердикт `{h} — опровергнута: <почему это не дефект>`, без слова «подтверждена».",
+  "confirmed_unknown_finding": "{block}: {report} подтверждает гипотезу {h} находкой {ids}, которой нет ни в черновике {draft}, ни в реестре — назовите номер, который у находки есть (или будет при импорте: по порядку черновика от первого нового номера из промпта), либо оформите находку в черновике. Если подтверждённое — не дефект, вердикт `{h} — опровергнута: <почему это не дефект>`.",
   "draft_unreadable": "{block}: черновик {draft} не читается, и его находок нет в реестре — {why}. Исправьте строку, затем `{cli} import {block}` (или `--append` поверх записанного).",
   "f_where": "**Место:**", "f_claim": "**Что не так:**", "f_scenario": "**Сценарий отказа:**", "f_invariant": "**Нарушенный инвариант:**", "f_conf": "уверенность",
   "md_title": "# Находки ревью", "md_gen": "> Файл СГЕНЕРИРОВАН из `findings.jsonl` командой `{cli} findings`.", "md_noedit": "> Не редактируй его руками — правь jsonl и перегенерируй.",
@@ -4505,6 +4509,18 @@ def verdict_conflicts(text: str, block_id: str) -> dict[str, list[str]]:
 def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     """All verdicts on each hypothesis in order of appearance."""
     out: dict[str, list[str]] = {}
+    for h, verdict, _ in verdict_records(text, block_id):
+        out.setdefault(h, []).append(verdict)
+    return out
+
+
+def verdict_records(text: str, block_id: str = "") -> list[tuple[str, str, int]]:
+    """Every verdict the parser reads, as (hypothesis, verdict, index of its line in the
+    text), in order of appearance. `verdict_mentions` is this list folded by
+    hypothesis; the line index is what a gate needs to read what the verdict SAYS beyond
+    its word (see `confirmed_without_finding`). The rules are the parser's, unchanged
+    (issue #17): nothing here decides differently what a verdict is."""
+    out: list[tuple[str, str, int]] = []
     plain = re.compile(r"(?:гипотез\w*|hypothesis)\s*[№#]?\s*(\d+)", re.IGNORECASE)
     # The identifier is taken from the block's REAL name, not guessed by shape: more than
     # half of the blocks of the real review have a name with a letter suffix (`V1d`,
@@ -4516,7 +4532,7 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
     table_about_hypotheses = False
     prev_was_row = False
     lines = text.split("\n")
-    for line, fenced in zip(lines, quoted_lines(lines, "quoted")):
+    for at, (line, fenced) in enumerate(zip(lines, quoted_lines(lines, "quoted"))):
         # A fenced block is an EXAMPLE, not an answer. The role template hands the agent the
         # shape of a verdict line inside a ```markdown fence, with the block id already
         # substituted; a report that quotes that skeleton and answers nothing closed every
@@ -4545,13 +4561,13 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
             continue
         if tagged:
             for token in tagged.findall(line):
-                out.setdefault(token, []).append(verdict)
+                out.append((token, verdict, at))
         if not block_id:
             continue
         # The free form is bound to the block whose report we are reading: "hypothesis 2"
         # in the H15 report is H15.2, and there is no point demanding the author rewrite it as an ID.
         for n in plain.findall(line):
-            out.setdefault(f"{block_id}.{n}", []).append(verdict)
+            out.append((f"{block_id}.{n}", verdict, at))
         # The summary table "| # | hypothesis | outcome |" — the way a hypotheses report is
         # written most often: the number stands in the first cell, the verdict in the last,
         # and the word "hypothesis" is not in the line at all. Without parsing the table the
@@ -4560,8 +4576,96 @@ def verdict_mentions(text: str, block_id: str = "") -> dict[str, list[str]]:
         if is_row and (in_hypotheses or table_about_hypotheses):
             first = line.strip().strip("|").split("|")[0].strip()
             if first.isdigit():
-                out.setdefault(f"{block_id}.{first}", []).append(verdict)
+                out.append((f"{block_id}.{first}", verdict, at))
     return out
+
+
+# A confirmed hypothesis is a defect, and a defect the review knows of is a finding. The recall
+# measurement (finetooth-hq, experiments/2026-09-recall: P2 of the pilot and half the partial
+# hits of phases 2 and 3) lost found defects in one way above all: the hunter confirmed the
+# hypothesis — in the hypotheses section, in the acceptance table, in a live check — and never
+# wrote it up, so the register, the fix gate and the summary never saw it. The words are the
+# parser's own affirmative confirmations, taken from VERDICT_WORDS, not a second vocabulary.
+CONFIRM_WORDS = tuple(w for w, v in VERDICT_WORDS
+                      if v == CHECKED and ("подтвер" in w or "confirm" in w)
+                      and not w.startswith(("не ", "not ")))
+# Negated forms are masked before the search: "not confirmed" holds "confirmed", and a
+# refutation must not be read as a confirmation. "unconfirmed" and "не подтверждена" are not
+# in the parser's vocabulary (it reads both as "checked"), but here they say "no".
+CONFIRM_NEGATED = ("не подтвердилась", "не подтверждена", "not confirmed", "unconfirmed")
+FINDING_REF = re.compile(r"(?<![\w.-])([A-Za-z][A-Za-z0-9_]*-\d{3,})(?!\w)")
+
+
+def says_confirmed(line: str) -> bool:
+    """The verdict line CONFIRMS the hypothesis: an affirmative confirmation word anywhere in
+    it, negated forms masked. "проверена и подтверждена как дефект" confirms; "refuted: the
+    guard is there" and "not confirmed" do not. A word quoted alone in backticks is a
+    quotation, as for the parser."""
+    low = unquote_verdicts(line).lower()
+    for neg in CONFIRM_NEGATED:
+        low = low.replace(neg, " ")
+    return any(w in low for w in CONFIRM_WORDS)
+
+
+def verdict_passage(lines: list[str], at: int, starts: set[int]) -> str:
+    """The verdict line and what continues it: the rest of its paragraph (a hard-wrapped
+    verdict — a phase-3 hunter wrote "P1.1 — проверена: подтверждена …" over nine lines and
+    named P1-001…P1-006 on the last) and the sub-items under it (the templates say proof
+    written indented under the verdict belongs to it). It ends at a blank line, a quotation,
+    a heading, a table row, another verdict line (`starts`) or a list item no deeper than the
+    verdict's own line. What is quoted is asked of the one tracker, `quoted_lines`."""
+    fenced = quoted_lines(lines, "quoted")
+    own = len(lines[at]) - len(lines[at].lstrip())
+    out = [lines[at]]
+    for j in range(at + 1, len(lines)):
+        ln = lines[j]
+        if (fenced[j] or not ln.strip() or j in starts or ln.lstrip().startswith(("#", "|"))
+                or (LIST_ITEM.match(ln) and len(ln) - len(ln.lstrip()) <= own)):
+            break
+        out.append(ln)
+    return "\n".join(out)
+
+
+def confirmed_without_finding(text: str, block_id: str,
+                              known: set[str]) -> list[tuple[str, list[str]]]:
+    """Confirmed hypotheses whose verdict names no finding in `known`: (hypothesis, the ids
+    the verdict does name that `known` does not hold). Read on the parser's records — the
+    same verdicts `check` and `hypotheses` see — and only on "checked" ones: "not checked:
+    it would be confirmed only on a live system" confirms nothing."""
+    lines = text.split("\n")
+    out: list[tuple[str, list[str]]] = []
+    seen: set[tuple[str, int]] = set()
+    records = verdict_records(text, block_id)
+    starts = {at for _, _, at in records}
+    for h, verdict, at in records:
+        if verdict != CHECKED or (h, at) in seen or not says_confirmed(lines[at]):
+            continue
+        seen.add((h, at))
+        named = FINDING_REF.findall(verdict_passage(lines, at, starts))
+        if any(n in known for n in named):
+            continue
+        out.append((h, list(dict.fromkeys(n for n in named if n not in known))))
+    return out
+
+
+def finding_ids_for(b: dict, register: list[dict]) -> set[str]:
+    """The finding ids a verdict of block `b` may name: every id of the register, every id
+    its draft holds, and the ids the draft's unrecorded rows will get on `import` — numbered
+    as `import --append` numbers them, from the block's highest recorded number on, which is
+    the id the hunter's prompt told it to start from (`{{NEXT_ID}}`). An unreadable draft
+    adds nothing: `findings/draft-not-imported` names that one."""
+    known = {f["id"] for f in register if isinstance(f.get("id"), str)}
+    src = block_findings_path(b)
+    try:
+        rows = [r for _, r in read_draft(src)] if src.exists() else []
+    except ValueError:
+        return known
+    known |= {r["id"] for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
+    taken = [int(m.group(1)) for f in register
+             if (m := re.fullmatch(rf"{re.escape(b['id'])}-(\d+)", str(f.get("id", ""))))]
+    start = max(taken, default=0) + 1
+    known |= {f"{b['id']}-{start + k:03d}" for k in range(len(unimported_rows(rows, register)))}
+    return known
 
 
 def verdicts_for(b: dict) -> dict[str, str]:
@@ -5118,6 +5222,29 @@ def cmd_check(args) -> int:
                 f"({', '.join(missing[:5])}{'…' if len(missing) > 5 else ''}) — "
                 f"each is closed with the word 'checked', 'not checked' or 'not applicable'"
             )
+
+    # A confirmed hypothesis that no finding carries is a defect the review saw and lost (see
+    # CONFIRM_WORDS). From the hunt on: the hunter's draft is there, and the ids it will get
+    # on import are known, so the refusal comes while the hunter's work is still fresh. Every
+    # block, the closed ones of a review begun on an older kit included: on the kit's own
+    # review (T1–T4, eight hunter and verifier reports) the rule refuses nothing, and a closed
+    # block elsewhere that it does refuse holds exactly the defect the rule exists to recover.
+    for b in defn["blocks"]:
+        if st["blocks"].get(b["id"], {}).get("status") not in READ_STATUSES:
+            continue
+        known = finding_ids_for(b, rows)
+        draft = block_findings_path(b).relative_to(ROOT).as_posix()
+        for role in ("hunter", "verify"):
+            rp = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
+            if not rp.exists():
+                continue
+            for h, unknown in confirmed_without_finding(
+                    rp.read_text(encoding="utf-8"), b["id"], known):
+                gates.refuse(
+                    "report/confirmed-without-finding",
+                    T("confirmed_unknown_finding" if unknown else "confirmed_no_finding",
+                      block=b["id"], report=rp.name, h=h, ids=", ".join(unknown),
+                      draft=draft))
 
     # A block reviewed on another version of the files is closed only on paper. The
     # fingerprint is taken on the move to verified/closed; it can diverge in one way only —

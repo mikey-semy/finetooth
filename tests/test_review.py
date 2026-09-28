@@ -6626,6 +6626,7 @@ class GateRegistryTest(unittest.TestCase):
         ("manifest/no-hypotheses",              "test_манифест_без_гипотез_роняет_проверку"),
         ("report/verdicts-conflict",            "test_противоречивые_вердикты_в_одном_отчёте_роняют_проверку"),
         ("report/hypothesis-without-verdict",   "test_гипотеза_без_вердикта_роняет_проверку"),
+        ("report/confirmed-without-finding",    "test_подтверждённая_гипотеза_без_номера_находки_роняет_check"),
         ("state/no-reviewed-fingerprint",       "test_старые_записи_без_отпечатков_ловятся_и_дописываются"),
         ("state/files-changed",                 "test_блок_просмотренный_на_другой_версии_файлов_роняет_проверку"),
         ("state/no-refs-fingerprint",           "test_блок_без_отпечатка_контекста_предупреждает"),
@@ -9998,6 +9999,137 @@ class DraftNotImportedTest(unittest.TestCase):
         out = self.s.run("set-status", "H1", "verified")
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertIn("holds 1 row(s) the register does not", out.stderr)
+
+
+class ConfirmedIsFindingTest(unittest.TestCase):
+    """A confirmed hypothesis is a finding. The recall measurement (finetooth-hq,
+    experiments/2026-09-recall: P2 of the pilot and half the partial hits of phases 2 and 3)
+    lost found defects in one way above all: the hunter confirmed the hypothesis — in the
+    hypotheses section, in the acceptance table, in a live check — and wrote no finding.
+
+    `check` reads the parser's own verdict records (the rules of issue #17 untouched) and
+    refuses a confirmation whose verdict names no finding the draft or the register holds —
+    the draft's unrecorded rows by the ids `import` will give them. A refutation needs none."""
+
+    VERIFY = ("# отчёт проверяющего\n\n## Вердикты по находкам охотника\n"
+              "- дефект в one.ts — confirmed: воспроизведён вызовом.\n\n"
+              "## Состояние охвата блока\nОхват полный: файл прочитан, гипотезы прогнаны.\n")
+
+    def setUp(self):
+        self.new_stand()
+
+    def new_stand(self):
+        """A fresh stand — each case of a table gets its own repository."""
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "".join(f"строка {i}\n" for i in range(1, 21)))
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=2)
+        self.draft_path = Path(self.s.root, "docs/review/reports/H1-findings.jsonl")
+
+    def row(self, claim, **kw):
+        base = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "line": 5, "claim": claim, "scenario": "x does y"}
+        base.update(kw)
+        return base
+
+    def stand(self, h1: str, *rows, h2: str = "- H1.2 — опровергнута: предикат совпадает с каноном",
+              verify: str = "", status: str = "verified", lang: str = "ru"):
+        if lang != "ru":
+            self.s.blocks(paths=["src/one.ts"], lang=lang)
+        self.s.reports(hunter=f"# охотник\n## Гипотезы\n{h1}\n{h2}\n\n## Ограничения охвата\nнет\n",
+                       verify=verify or self.VERIFY)
+        self.draft_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                                   encoding="utf-8")
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+        if status == "verified" and rows:
+            self.assertEqual(self.s.run("import", "H1").returncode, 0)
+            self.s.run("findings")
+        out = self.s.run("set-status", "H1", status)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return self.s.run("check")
+
+    def test_подтверждённая_с_номером_записанной_находки_проходит(self):
+        check = self.stand("- H1.1 — подтверждена: H1-001 — прогнал сценарий, флаг теряется",
+                           self.row("флаг теряется"))
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_номер_из_черновика_до_импорта_засчитывается(self):
+        """До импорта у строк черновика номеров нет: засчитываются те, что даст `import` —
+        с первого нового номера, который охотнику назвал промпт, по порядку черновика."""
+        check = self.stand("- H1.1 — подтверждена: H1-002 — второй дефект черновика",
+                           self.row("первый"), self.row("второй", line=9), status="hunted")
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_подтверждённая_гипотеза_без_номера_находки_роняет_check(self):
+        check = self.stand("- H1.1 — проверена и подтверждена как дефект: флаг теряется",
+                           self.row("другой дефект"))
+        failed = refused(check)
+        self.assertIn("подтверждает гипотезу H1.1, но не называет ни одной находки", failed)
+        self.assertIn("H1.1 — подтверждена: H1-NNN", failed)
+        self.assertIn("H1.1 — опровергнута: <почему это не дефект>", failed)
+        self.assertNotIn("H1.2", failed)
+
+    def test_номер_которого_нет_ни_в_черновике_ни_в_реестре_роняет_check(self):
+        check = self.stand("- H1.1 — подтверждена: H1-007 — флаг теряется",
+                           self.row("единственный дефект"))
+        failed = refused(check)
+        self.assertIn("подтверждает гипотезу H1.1 находкой H1-007", failed)
+
+    def test_номер_сверх_черновика_до_импорта_роняет_check(self):
+        check = self.stand("- H1.1 — подтверждена: H1-002 — флаг теряется",
+                           self.row("единственный дефект"), status="hunted")
+        self.assertIn("находкой H1-002", refused(check))
+
+    def test_опровергнутая_и_отрицание_номера_не_требуют(self):
+        for line in ("- H1.1 — опровергнута: не дефект — гейт отсекает вызов раньше",
+                     "- H1.1 — не подтвердилась: предикат совпадает",
+                     "- H1.1 — refuted: the guard is there",
+                     "- H1.1 — checked: not confirmed, the code is right",
+                     "- H1.1 — не проверена: подтвердилась бы только на живой базе"):
+            with self.subTest(line=line):
+                self.new_stand()
+                check = self.stand(line)
+                self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_номер_на_продолжении_абзаца_и_во_вложенном_пункте_засчитывается(self):
+        for h1 in ("- H1.1 — подтверждена: флаг теряется на втором\n  сохранении — H1-001",
+                   "H1.1 — подтверждена: флаг теряется на втором\nсохранении, оформлено как H1-001",
+                   "- H1.1 — подтверждена: флаг теряется\n    - доказательство и находка H1-001"):
+            with self.subTest(h1=h1):
+                self.new_stand()
+                check = self.stand(h1, self.row("флаг теряется"))
+                self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_номер_после_пустой_строки_или_у_другой_гипотезы_не_засчитывается(self):
+        for h1, h2 in (("- H1.1 — подтверждена: флаг теряется\n\nсм. H1-001",
+                        "- H1.2 — опровергнута: совпадает"),
+                       ("- H1.1 — подтверждена: флаг теряется",
+                        "- H1.2 — опровергнута: не дефект, в отличие от H1-001"),
+                       # строки без маркеров списка: абзац один, но следующий вердикт — чужой
+                       ("H1.1 — подтверждена: флаг теряется",
+                        "H1.2 — опровергнута: не дефект, в отличие от H1-001")):
+            with self.subTest(h1=h1, h2=h2):
+                self.new_stand()
+                check = self.stand(h1, self.row("флаг теряется"), h2=h2)
+                self.assertIn("подтверждает гипотезу H1.1, но не называет", refused(check))
+
+    def test_подтверждение_проверяющего_тоже_называет_находку(self):
+        verify = self.VERIFY + "\n## Гипотезы\n- H1.2 — подтверждена: пропущено охотником\n"
+        check = self.stand("- H1.1 — подтверждена: H1-001 — флаг теряется",
+                           self.row("флаг теряется"), verify=verify)
+        failed = refused(check)
+        self.assertIn("H1-demo.verify.md подтверждает гипотезу H1.2", failed)
+        self.assertNotIn("H1.1", failed)
+
+    def test_отказ_по_английски_в_английском_ревью(self):
+        check = self.stand("- H1.1 — confirmed: the flag is lost", self.row("defect"),
+                           h2="- H1.2 — refuted: the predicate matches", lang="en")
+        failed = refused(check)
+        self.assertIn("confirms hypothesis H1.1 but names no finding", failed)
+        self.assertIn("H1.1 — refuted: <why it is not a defect>", failed)
 
 
 class TemplateContractTest(unittest.TestCase):

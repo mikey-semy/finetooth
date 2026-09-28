@@ -107,18 +107,31 @@ Report structure:
 The manifest's hypotheses are numbered in order: the first is `{{BLOCK_ID}}.1`, the second
 `{{BLOCK_ID}}.2` and so on. **Each must get exactly one verdict**, as a line:
 
-- `{{BLOCK_ID}}.1 — checked: <what exactly proves it>`
-- `{{BLOCK_ID}}.2 — not checked: <what got in the way>`
-- `{{BLOCK_ID}}.3 — not applicable: <why the question is not about this code>`
+- `{{BLOCK_ID}}.1 — confirmed: {{BLOCK_ID}}-NNN — <what exactly proves it>`
+- `{{BLOCK_ID}}.2 — refuted: <what exactly proves the code is right>`
+- `{{BLOCK_ID}}.3 — not checked: <what got in the way>`
+- `{{BLOCK_ID}}.4 — not applicable: <why the question is not about this code>`
 
 A hypothesis without a verdict fails the state check: this is the second denominator of
 coverage next to the file map. A file can be opened and nothing understood — but the
 question "can an organization member invite the owner" either has an answer or it does not.
 
+**A confirmed hypothesis is a finding.** "Confirmed" says the defect the hypothesis asks
+about is there, so the verdict names the finding that carries it: `{{BLOCK_ID}}-NNN` is its
+id — from your draft (your first new finding is {{NEXT_ID}}, the next ones follow in the
+draft's order) or one already recorded. The same holds wherever you confirm a hypothesis —
+here, in the acceptance-criterion table, in a live check: a defect confirmed only in a table
+or a run log and never written up reaches neither the register nor the fix gate, and that is
+how the recall measurement lost half of the defects it found only partly. If what you
+confirmed turns out not to be a defect — the behaviour is intended, the scenario is ruled out
+higher up — the verdict is not "confirmed" but `refuted: not a defect — <why>`, and the word
+"confirmed" does not appear on that line. The state check refuses a confirmation that names
+no finding, or names an id that neither the draft nor the register holds.
+
 **Write the verdict as an ordinary line of the report, outside code blocks and quotations.**
 Everything markdown treats as quoted is read as an example, not as an answer — a ``` or ~~~
 fence, a block indented by four spaces, a line behind `>`, an `<!-- html comment -->` —
-including the three lines above, if you copy them across as they stand. A verdict word
+including the four lines above, if you copy them across as they stand. A verdict word
 alone in backticks (`` `checked` ``) is a quotation of the word, not a verdict either; a
 whole verdict line in backticks is one. A sub-item under your own verdict is not a
 quotation: proof written indented under the line still belongs to it. The same holds for
