@@ -12874,6 +12874,43 @@ class FieldRun46Test(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertIn("1 row(s), nothing `import` or `check` would refuse", out.stdout)
 
+    def test_import_dry_run_проверяет_место_находки_как_check(self):
+        """Место правдоподобное, но неверное — файла нет, строка текстом, строка за концом
+        файла: пробный прогон обещал, что импорт пройдёт, а `check` сразу после импорта
+        отказывал (замечание Codex к PR #62). Правило места одно на оба пути."""
+        self._stand(status="hunted")
+        self.s.write("src/one.ts", "a\nb\nc\n")
+        self.s.commit("три строки")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        good = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "line": 2, "claim": "дефект", "scenario": "x делает y"}
+        cases = {"файла нет": (dict(good, file="src/missing.ts"),
+                               "file src/missing.ts is not in the repository",
+                               "is not in the repository"),
+                 "строка текстом": (dict(good, line="2"), "line='2' is not a number",
+                                    "is not a number"),
+                 "строка за концом": (dict(good, line=12), "line 12 is cited, but src/one.ts has 3",
+                                      "line 12 is cited")}
+        for why, (row, said, refusal) in cases.items():
+            with self.subTest(случай=why):
+                (self.s.root / "docs/review/findings.jsonl").write_text("", encoding="utf-8")
+                draft.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+                out = self.s.run("import", "H1", "--dry-run")
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn(f"line 1: {said}", out.stdout)
+                # Та же строка — отказ `check` после настоящего импорта: обещание сдержано.
+                self.assertEqual(self.s.run("import", "H1", "--force").returncode, 0)
+                self.s.run("findings")
+                self.assertIn(refusal, refused(self.s.run("check")))
+        # Строка без статуса импортируется открытой — и место у неё спрашивают как у открытой.
+        bare = {k: v for k, v in good.items() if k != "status"}
+        draft.write_text(json.dumps(dict(bare, file="src/missing.ts"), ensure_ascii=False) + "\n",
+                         encoding="utf-8")
+        self.assertIn("line 1: file src/missing.ts is not in the repository",
+                      self.s.run("import", "H1", "--dry-run").stdout)
+        draft.write_text(json.dumps(good, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(self.s.run("import", "H1", "--dry-run").returncode, 0)
+
     # ------------------------------------------------------ файлы итога — не «код»
 
     def test_файлы_итога_не_считаются_кодом_для_refs(self):

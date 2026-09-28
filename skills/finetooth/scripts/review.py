@@ -3821,15 +3821,47 @@ def reject_reason_of(f: dict) -> str:
         claim if re.match(r"отвергнут|отклонен|отклонён|не подтверд|rejected|not confirmed", claim, re.I) else "")
 
 
+def location_problems(f: dict, tracked: set[str]) -> dict[str, str]:
+    """What is wrong with where a finding points — ONE rule for `check` over the register and
+    for `import --dry-run` over a draft (a draft that the dry run passed was refused by
+    `check` right after the import for a file that is not there or a line given as text).
+    Keys: `file-missing`, `line-not-a-number`, `line-past-end`; the value is the message."""
+    out: dict[str, str] = {}
+    live = f.get("status") in ("open", "deferred")
+    # Only open and deferred findings must point at a live file: a fixed finding is
+    # history, and renaming the file after the fix does not make it false. The check
+    # used to demand the file for any status and stayed red on history forever.
+    if live and f.get("file") and f["file"] not in tracked and not f["file"].startswith("("):
+        out["file-missing"] = f"file {f['file']} is not in the repository"
+    # A line number the file does not have is the cheapest sign of fabrication — for a
+    # finding that is still open. A fixed one cites the file as it was before the fix;
+    # after it the file legitimately shrinks (the first migrated registry: three fixed
+    # findings, all flagged).
+    # The type is part of the vocabulary, like severity and status: a hand-written draft
+    # says `"line": "2137"` as easily as `2137`, `import` copies the field through
+    # untouched, findings.md renders both the same — and the gate used to skip the
+    # quoted one silently, which is worse than having no gate.
+    if f.get("line") is not None and (isinstance(f["line"], bool) or not isinstance(f["line"], int)):
+        out["line-not-a-number"] = (f"line={f['line']!r} is not a number — write the line as a "
+                                    f"number without quotes, or leave the field out")
+    elif live and f.get("line"):
+        n = file_lines(f.get("file", ""))
+        if n is not None and f["line"] > n:
+            out["line-past-end"] = f"line {f['line']} is cited, but {f.get('file')} has {n}"
+    return out
+
+
 def draft_problems(block: str, numbered: list) -> list[str]:
     """What `import` and then `check` would refuse in a block's draft, row by row — every
     row, not the first: the role that wrote the draft fixes it in one pass.
 
     The row-level rules only, and the same ones: the length limits `import` holds, the
-    vocabularies and required fields `check` holds, a rejection with no reason. What depends
+    vocabularies, required fields and the place (`location_problems`) `check` holds, a
+    rejection with no reason. What depends
     on the register (whether a plain import would overwrite a recorded decision) is the
     lead's question at import time, not the draft's."""
     out = []
+    tracked = all_files()
     for n, row in numbered:
         at = f"line {n}"
         if not isinstance(row, dict):
@@ -3857,6 +3889,10 @@ def draft_problems(block: str, numbered: list) -> list[str]:
             if not reject_reason_of(row):
                 out.append(f"{at}: rejected with no reason — write it into \"reject_reason\": "
                            f"what exactly rules the scenario out")
+        # Where the row points, by the rule `check` holds — with the status `import` gives a
+        # row that names none.
+        out += [f"{at}: {msg}" for msg in
+                location_problems({"status": "open", **row}, tracked).values()]
         if row.get("status") == "duplicate" and not row.get("dup_of"):
             out.append(f"{at}: duplicate with no \"dup_of\" — name the primary finding's id")
     return out
@@ -5681,13 +5717,9 @@ def cmd_check(args) -> int:
         if f.get("status") not in FINDING_STATUS:
             gates.refuse("finding/status-unknown",
                          f"finding {fid}: status={f.get('status')} is not in the vocabulary")
-        # Only open and deferred findings must point at a live file: a fixed finding is
-        # history, and renaming the file after the fix does not make it false. The check
-        # used to demand the file for any status and stayed red on history forever.
-        if (f.get("status") in ("open", "deferred") and f.get("file")
-                and f["file"] not in tracked and not f["file"].startswith("(")):
-            gates.refuse("finding/file-missing",
-                         f"finding {fid}: file {f['file']} is not in the repository")
+        place = location_problems(f, tracked)
+        if "file-missing" in place:
+            gates.refuse("finding/file-missing", f"finding {fid}: {place['file-missing']}")
         # A deferred finding does not count as open and therefore survives the whole
         # review unnoticed. The reason is what turns it from silence into a decision: the
         # summary publishes deferred findings as accepted risks, by that reason and no
@@ -5794,28 +5826,10 @@ def cmd_check(args) -> int:
                        "of the lines around it, which edits elsewhere in the file leave alone)"
                        if f.get("line") is not None else ")")
                 )
-        # A line number the file does not have is the cheapest sign of fabrication — for a
-        # finding that is still open. A fixed one cites the file as it was before the fix;
-        # after it the file legitimately shrinks (the first migrated registry: three fixed
-        # findings, all flagged).
-        # The type is part of the vocabulary, like severity and status: a hand-written draft
-        # says `"line": "2137"` as easily as `2137`, `import` copies the field through
-        # untouched, findings.md renders both the same — and the gate below used to skip the
-        # quoted one silently, which is worse than having no gate.
-        if f.get("line") is not None and (isinstance(f["line"], bool)
-                                          or not isinstance(f["line"], int)):
-            gates.refuse(
-                "finding/line-not-a-number",
-                f"finding {fid}: line={f['line']!r} is not a number — write the line as a "
-                f"number without quotes, or leave the field out"
-            )
-        elif f.get("status") in ("open", "deferred") and f.get("line"):
-            n = file_lines(f.get("file", ""))
-            if n is not None and f["line"] > n:
-                gates.refuse(
-                    "finding/line-past-end",
-                    f"finding {fid}: line {f['line']} is cited, but {f.get('file')} has {n}"
-                )
+        if "line-not-a-number" in place:
+            gates.refuse("finding/line-not-a-number", f"finding {fid}: {place['line-not-a-number']}")
+        if "line-past-end" in place:
+            gates.refuse("finding/line-past-end", f"finding {fid}: {place['line-past-end']}")
         # A rejected finding stays in the register for the sake of the reject reason —
         # without it the record is useless: the next review finds the same thing and
         # spends the time again. The review's completion condition demanded a reason for
