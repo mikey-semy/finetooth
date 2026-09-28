@@ -24,6 +24,15 @@ delete them before you finish: a verifier's draft test once stayed behind in `te
 next role started in a tree that was not the project's. At the end `git status` shows
 nothing but your files under `docs/review/`.
 
+**A refused command is reported, not worked around.** A command the project's permission
+settings deny, or one that waits for a confirmation nobody gives, is not yours to get
+around: no `dangerouslyDisableSandbox`, no rewording of the command to slip past the rule —
+another path to the same program, `sh -c`, a wrapper, a copy of the tool elsewhere. The
+settings are the operator's boundary for this role. Write the command into the report as
+"not run: denied by settings", word for word, and say which of your conclusions rest on
+reading because of it. In a field run a verifier tried to bypass a confirmation for
+`yarn build` with the sandbox switch.
+
 ## 1. Check every hunter finding
 
 Hunter report: `{{HUNTER_REPORT}}`

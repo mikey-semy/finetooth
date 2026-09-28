@@ -51,7 +51,9 @@ one of your own:
    own way, and `--lang ru` for Russian) — skeleton `blocks.json`, `invariants.md`, the entry
    point `docs/review/README.md`. The `lang` field in `blocks.json` (`en` by default, `ru`)
    selects the language of the prompt templates and assets; the Russian ones sit next to the
-   English with a `.ru.md` suffix.
+   English with a `.ru.md` suffix. When the project's own `.claude/settings*.json` deny a
+   gate command or one the roles run (`pytest`, `uv run` …), `setup` names the rule — put
+   the working form (`python3 -m pytest`) into the invariants, or lift the rule for the runs.
 2. `docs/review/invariants.md` — the rules of THIS project. It is pasted to every agent and
    decides what the agent will count as a defect. Generic words are useless — write what the
    project has already paid for.
