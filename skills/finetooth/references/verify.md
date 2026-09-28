@@ -65,9 +65,16 @@ closed and needs another pass.
 
 **The hypothesis verdicts are your responsibility as much as the findings.** The manifest's
 hypotheses are numbered in order (`{{BLOCK_ID}}.1`, `{{BLOCK_ID}}.2`, …), and each must have
-exactly one verdict in the block's reports: "checked: what proves it", "not checked: what got
-in the way", "not applicable: why". Someone else's verdict you disagree with is overridden by
-your own — with an explanation. The state check requires a verdict for all hypotheses of the block.
+exactly one verdict in the block's reports: "confirmed: <finding id> — what proves it",
+"refuted: what proves the code is right", "not checked: what got in the way", "not
+applicable: why". Someone else's verdict you disagree with is overridden by your own — with an
+explanation. The state check requires a verdict for all hypotheses of the block.
+**Your confirmation names its finding too**: the id of a finding already recorded, of the
+hunter's draft, or of your own new one in the final file (numbered on from the block's highest
+recorded id, in the file's order). A defect confirmed only in a verdict, a table or a live
+check and never written up is lost to the register; what you confirmed that is not a defect
+is `refuted: not a defect — <why>`, without the word "confirmed" on the line. The state check
+refuses a confirmation with no finding id, or with one neither the draft nor the register holds.
 Write it as an ordinary line, outside code blocks and quotations: a ``` or ~~~ fence, a
 block indented by four spaces, a line behind `>` and an `<!-- html comment -->` are all
 read as examples, and a verdict word alone in backticks is a quotation of the word. The

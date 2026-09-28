@@ -357,8 +357,9 @@ its message, because GitHub does not read suppressions. `security-severity` is n
 the register does not say which finding is a vulnerability. The ready jobs are
 `assets/github-actions-snippet.yml` (`check` as a required check plus the upload through
 `github/codeql-action/upload-sarif`, pinned to a commit) and `assets/gitlab-ci-snippet.yml`
-(`check` as a job; GitLab shows SARIF on the Ultimate tier only, and a Code Quality report is
-the next step).
+(`check` as a job; GitLab shows SARIF on the Ultimate tier only — the next step is to post the
+findings into merge request discussions through [reviewdog](https://github.com/reviewdog/reviewdog),
+which reads SARIF: `review.py sarif | reviewdog -f=sarif -reporter=gitlab-mr-discussion`).
 
 ## What it costs
 
@@ -442,7 +443,7 @@ maintainer's knowledge base; this is the short version.
   hypotheses; the diagram outlives the review directory.
 - **Token economy beyond the measurement:** cache TTL, output filtering.
 - A run manifest, two reviewers at once, a block spanning two repositories, portability to
-  another language, a Code Quality report for GitLab.
+  another language, findings in GitLab merge requests through reviewdog.
 
 What we will not do: turn the kit into a diff reviewer, add dependencies, build a web UI or a
 database, automate finding without a human accepting each one, reward being first. Each has
@@ -663,7 +664,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-517 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
+529 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -706,7 +707,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 517 scenarios
+tests/                            tests of the tool and the skill format: 529 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
