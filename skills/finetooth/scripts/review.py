@@ -5423,9 +5423,22 @@ SETTINGS_FILES = (".claude/settings.json", ".claude/settings.local.json")
 ROLE_RUNNER = SKILL_DIR / "assets" / "run-role.sh"
 # Wrappers Claude Code strips before matching a Bash rule (permissions docs, "Wrappers"):
 # `timeout 30 npm test` is matched as `npm test`. `xargs` only without flags, `command` not
-# in its `-v` / `-V` query form.
-BASH_WRAPPERS = ("timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", "noglob",
-                 "xargs")
+# in its `-v` / `-V` query form. For each: the options that take a SEPARATE argument and the
+# number of positional arguments before the command, from the man pages (GNU coreutils
+# timeout, nice, stdbuf; GNU time; bash for `command`, `builtin`; zsh for `noglob`). Taking
+# off only the option word left its argument behind as the command: `timeout -s KILL 5
+# pytest` read as `KILL 5 pytest`, and `Bash(pytest *)` did not hit it.
+BASH_WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
+    "timeout": (frozenset({"-s", "--signal", "-k", "--kill-after"}), 1),  # DURATION
+    "nice": (frozenset({"-n", "--adjustment"}), 0),
+    "stdbuf": (frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}), 0),
+    "time": (frozenset({"-f", "--format", "-o", "--output"}), 0),
+    "nohup": (frozenset(), 0),
+    "command": (frozenset(), 0),
+    "builtin": (frozenset(), 0),
+    "noglob": (frozenset(), 0),
+    "xargs": (frozenset(), 0),
+}
 # The separators Claude Code splits a compound command on (permissions docs, "Compound
 # commands"); a deny rule applies when any part matches. Longest first.
 BASH_SEPARATORS = re.compile(r"\|\||&&|\|&|[;|&\n]")
@@ -5480,11 +5493,14 @@ def simple_commands(command: str) -> list[str]:
                 break
             if words[0] == "xargs" and nxt.startswith("-"):
                 break
-            words.pop(0)
-            # The wrapper's own options, the duration of `timeout`, the niceness of `nice`.
-            while words and (words[0].startswith("-")
-                             or re.fullmatch(r"\d+(\.\d+)?[smhd]?", words[0])):
-                words.pop(0)
+            with_arg, positional = BASH_WRAPPERS[words.pop(0)]
+            # The wrapper's options: `-s KILL` takes two words; `-sKILL`, `--signal=KILL`, a
+            # flag like `-p`, the old `nice -10` and `--` take one.
+            while words and words[0].startswith("-"):
+                opt = words.pop(0)
+                if opt in with_arg and words:
+                    words.pop(0)
+            del words[:positional]
         if words:
             parts.append(" ".join(words))
     return parts

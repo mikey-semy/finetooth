@@ -1404,14 +1404,14 @@ class ReviewToolTest(unittest.TestCase):
     def test_шаблоны_запрещают_обходить_отказ_в_команде(self):
         """Проверяющий пытался обойти подтверждение `yarn build` через
         `dangerouslyDisableSandbox` (see #45). Отказ записывается в отчёт, а не обходится —
-        во всех шести шаблонах, что исполняют команды и правят."""
+        во всех восьми шаблонах: охотник тоже исполняет команды (`proof: measured`)."""
         refs = SKILL / "references"
         en = ("a refused command is reported, not worked around", "`dangerouslydisablesandbox`",
               "no rewording of the command", '"not run: denied by settings"')
         ru = ("отказанная команда записывается в отчёт, а не обходится",
               "`dangerouslydisablesandbox`", "никакой переформулировки команды",
               "«не исполнено: запрещено настройками»")
-        for role in ("verify", "fix", "fixreview"):
+        for role in ("hunter", "verify", "fix", "fixreview"):
             for name, rules in ((f"{role}.md", en), (f"{role}.ru.md", ru)):
                 text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8")).lower()
                 for rule in rules:
@@ -3795,6 +3795,29 @@ class ProjectDenyRulesTest(unittest.TestCase):
         # и то, что роли запускают по шаблону, — из списков run-role.sh
         self.assertIn("hits `pytest` (roles: hunter, verify, fix, fixreview)", text)
         self.assertIn("python3 -m pytest", text, "совет называет рабочую форму команды")
+
+    def test_обёртка_с_аргументами_опций_снимается_целиком(self):
+        """Обёртку Claude Code снимает до сравнения, и снимать её надо вместе с аргументами
+        её опций и позиционными: иначе `timeout -s KILL 5 pytest` читался как `KILL 5
+        pytest`, и `Bash(pytest *)` его не задевал. Опции — по man-страницам."""
+        self._settings("settings.json", json.dumps({"permissions": {"deny": ["Bash(pytest *)"]}}))
+        forms = ["timeout 30 pytest -q", "timeout -s KILL 5 pytest -q",
+                 "timeout --signal=KILL -k 2 5 pytest -q", "nice -n 10 pytest -q",
+                 "nice --adjustment=5 pytest -q", "stdbuf -o L pytest -q", "stdbuf -oL pytest -q",
+                 "time -f %e pytest -q", "nohup pytest -q", "command pytest -q",
+                 "timeout -- 5 pytest -q"]
+        out = self._setup(forms)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        for form in forms:
+            with self.subTest(форма=form):
+                self.assertIn(f"hits gate `{form}`", out.stdout)
+
+    def test_обёртка_не_съедает_чужую_команду(self):
+        """Обратная сторона: `command -v pytest` — поиск, а не запуск, и `xargs` с флагом
+        Claude Code не снимает; такие формы запрет на `pytest` не задевает."""
+        self._settings("settings.json", json.dumps({"permissions": {"deny": ["Bash(pytest *)"]}}))
+        out = self._setup(["command -v pytest", "xargs -n1 pytest"])
+        self.assertNotIn("hits gate", out.stdout)
 
     def test_правило_не_задевает_чужие_команды(self):
         """Обратная сторона: пробел перед `*` — граница слова (`Bash(ls *)` не задевает
