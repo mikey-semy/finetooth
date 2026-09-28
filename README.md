@@ -19,7 +19,9 @@ into work with a provable result. The repository is cut into blocks, every track
 owned by exactly one block, every block carries numbered hypotheses that must each get a
 verdict, and four roles — hunter, verifier, fixer, fix reviewer — work through it with all
 state kept on disk in `docs/review/`, not in the chat. The tool is a single Python file on the
-standard library, no dependencies.
+standard library, no dependencies. The name comes from the idiom *go through with a
+fine-tooth comb*: comb through without skipping a single file. Before 0.6.0 the kit was called
+review-kit.
 
 ```sh
 npx skills add mikey-semy/finetooth
@@ -51,18 +53,6 @@ merge.
 **Language.** Docs, prompts and reports are available in English and Russian; see
 [README.ru.md](README.ru.md).
 
-The kit turns the request "review the project" into work with a provable result: the code
-is cut into blocks, every file is assigned to a block, the state lives on disk rather than in
-the conversation, and one agent hunts for defects, a second verifies them, a third fixes them,
-and a fourth — one that did not write them — reads the fixes. The name comes from the idiom
-*go through with a fine-tooth comb*: comb through without skipping a single file. Before
-0.6.0 the kit was called review-kit.
-
-The kit is **a skill under the open [Agent Skills](https://agentskills.io) standard**: it is
-installed with one command, `npx skills add mikey-semy/finetooth`, and works in any agent that
-reads the standard. The tool inside is a single file on the Python standard library, no
-dependencies.
-
 ## Why it is needed
 
 The request "review the project" does not work for three reasons, and each kills the result in
@@ -86,6 +76,384 @@ thought they got wrong.
 and a rule: the fix diff is read by agents who did not write it, **before** the pull request
 opens, not after the merge. For the kit's author, the heaviest defect of the access block came
 on the third round of fix review and had been in the project from the very beginning.
+
+## How to install
+
+The kit is **a skill under the open [Agent Skills](https://agentskills.io) standard**: it is
+read by Claude Code, Codex, Gemini CLI, Cursor and other agents. It is installed with the
+standard installer:
+
+```sh
+npx skills add mikey-semy/finetooth                   # into the project: .claude/skills/finetooth/ and the like
+npx skills add mikey-semy/finetooth -g                # into the home directory, for all projects
+```
+
+The agent finds the skill on its own — by the description, when asked for a whole-repository
+review or when the repository already has `docs/review/`. The tool runs from the skill folder
+and reviews the repository it was started in.
+
+**Install into the project, not only into the home directory**, if CI runs the check: a copy
+of the skill in the repository pins the tool's version to the commit, and `check` in CI runs
+with exactly the version the review was done with. A skill installed into the project is
+committed along with it.
+
+Then, in the project root:
+
+```sh
+python3 .claude/skills/finetooth/scripts/review.py setup --project "Name"
+```
+
+`setup` creates a skeleton of the block definitions, the invariants and the entry point
+`docs/review/README.md`. The tool itself and the role templates are **not copied** into the
+project — they are in the skill. A project that calls the tool its own way passes
+`--cli "npm run review --"`: the string is written to the `cli` field in `blocks.json` and
+goes into all hints. Without it the hints name the real path to the tool. `--lang ru` sets
+`lang` in `blocks.json`, and the role templates and scaffolds come in Russian. When the
+project's own `.claude/settings*.json` deny a gate command or one the roles run (`pytest`,
+`uv run` …), `setup` names the rule. A repeated run adds what is missing and does not touch
+what was edited by hand.
+
+Next comes the work nobody will do for you:
+
+1. **`docs/review/invariants.md` — the rules of your project.** The most important file: it
+   is pasted to every agent and decides what the agent will count as a defect. The sample in
+   `assets/invariants.example.md` is someone else's — look at it for the structure, not the
+   content: it has a section "context that changes the assessment of findings" and a section
+   "what is NOT a finding".
+2. Lay out the blocks in `docs/review/blocks.json` — cross-cutting first, domain next,
+   live-system last (`assets/blocks.example.json`). Fill in `project` and `gates`.
+3. Write the first block's manifest: 10–15 hypotheses **about your project** and an acceptance
+   criterion that cannot be met without reading the code. The longest part, and it cannot be
+   cut short: a manifest without project-specific hypotheses gives a review "on general
+   considerations".
+4. `inventory` — the repository tree with sizes and ownership, to cut by; `init`, then
+   `coverage` — and deal with the unowned files until there are zero. This is where
+   everything forgotten surfaces: for the author — a whole microservice, for us — 89 route
+   files. `sizes` shows the blocks above the ceiling — split them by subject, not
+   alphabetically.
+
+   **Reviewing only a part on purpose** — a trial run of the kit, a release gate, one risky
+   area — declare it instead of excluding the rest:
+   `"scope": {"paths": ["src/billing/**"], "reason": "release gate: billing only"}` in
+   `blocks.json`. The paths are git pathspecs, like a block's `paths`; the reason is
+   required. Coverage is then counted inside the scope only (a file without a block there is
+   refused as before, a file outside is not), and `coverage`, `status`, `summary` and `sarif`
+   (the run's `properties`) say the review is partial, name the scope and the reason — so it
+   is never taken for a whole one. `check` refuses a scope without a reason and a scope
+   pattern that matches no tracked file. The first live run needed 183 exclusions for one
+   block; the scope is one line.
+5. Add the `make` targets (or `package.json` scripts) and the banner to the project's root
+   instructions file — without the banner a new session will not know the review is in
+   progress and will start its own in parallel.
+6. Run the first block all the way through and **do not be afraid to adjust the rig as you
+   go**. Put your own version of a role template in `docs/review/prompts/<role>.md` — it is
+   used instead of the skill's.
+
+## How a review goes
+
+The agent follows [`SKILL.md`](skills/finetooth/SKILL.md), and the project's entry point
+`docs/review/README.md` repeats it; this is the same path in brief. Below, `review` stands for
+the tool (`python3 <skill>/scripts/review.py`, or the project's `cli`).
+
+1. **Set up and cut.** `setup`, the invariants, `blocks.json` (`inventory`, `sizes`, an
+   optional `scope`), then `coupling` and `order` — the seams between blocks and the order
+   worth walking them — then `init` and `coverage` until no file is unowned.
+2. **Manifest.** Per block, before its hunt: `docs/review/blocks/<ID>-<slug>.md` with the
+   hypotheses and the acceptance criterion. `review seams <ID>` lists the pairs of the
+   block's own files that must be read together — a hypothesis for each of the top ones.
+3. **Hunter.** `review set-status <ID> running` first — this is where the fix gate stands: it
+   refuses while earlier blocks hold open findings at `fix_gate` severity, and the way on is
+   to fix, defer or reject those, not to skip the status. Then `review prompt <ID> --role
+   hunter` → a fresh agent writes its report and the draft findings; `review set-status <ID>
+   hunted`.
+4. **Import.** `review import <ID>` takes the draft into the register (`findings.jsonl`), so
+   the verifier sees the hunter's findings as recorded ones.
+5. **Verifier.** `review prompt <ID> --role verify` → a different agent checks each finding
+   by execution and makes its own pass. Its verdicts on recorded findings come as a table with
+   one `review set-finding` command per change (`--severity`, `--confidence`,
+   `rejected --reason`, `duplicate --dup-of`); its new findings go in with
+   `review import <ID> --append`. Then `review set-status <ID> verified`, `review findings`,
+   `review check`, and a line in the journal with `review log`.
+6. **Fix** — only when the block has confirmed findings to fix; a block with nothing to fix
+   goes from the verifier straight to closing, two agents in all. `review prompt <ID> --role
+   fix [--round N]` → another agent, at most three
+   findings a run, a commit per finding, under the project's own commit rules (DCO and the
+   like, looked up in its files). `review set-finding <ID…> fixed --commit <sha>`; the third
+   instance of a class needs a guard, `--rule <path>`.
+7. **Fix review** — required once any finding of the block is `fixed`: `check` refuses a
+   closed block with fixes and no fix reviewer's report. `review prompt <ID> --role fixreview --diff <base>...HEAD [--round N]` → a
+   fresh agent reads the whole diff; its findings go in with
+   `review import <ID> --append --round N --diff <base>..<tip>`. When a round's top finding
+   lands in the previous round's own code, the tool stops for a human: `review decide <ID>
+   "<decision>"`.
+8. **Close and leave.** `review set-status <ID> closed`. When every block is closed:
+   `review summary` (and `--html`) writes the file that outlives `docs/review/`, and the
+   directory is deleted in one change. In CI, `review check` is the required check and
+   `review sarif` puts the findings into code scanning.
+
+Block statuses: `todo → running → hunted → verified → triaged → fixing → closed` (plus
+`blocked`). Finding statuses: `open`, `fixed`, `rejected`, `duplicate`, `deferred`.
+
+## Commands
+
+Every command of `review.py`; `review <command> --help` has the flags.
+
+| command | what it does |
+|---|---|
+| `setup` | the skeleton in the project: `blocks.json`, `invariants.md`, the entry point; `--project`, `--lang`, `--cli` |
+| `version` | the version of the kit this project runs |
+| `init` | create or extend `state.json` from `blocks.json` |
+| `status` | where the review stands, block by block, with the fix debt as its own line |
+| `next` | the id of the next unclosed block |
+| `inventory` | the repository tree with sizes and ownership, to cut blocks by (`--under`, `--unassigned`) |
+| `sizes` | every block against the readability ceiling |
+| `coverage` | the file → block map; fails on an unowned file (`--no-write` for CI) |
+| `coupling` | pairs of files that change together but sit in different blocks (`--write`) |
+| `seams <ID>` | pairs of a block's own files linked by an import or by joint changes (`--top`) |
+| `order` | the blocks by cost of failure, then by change frequency |
+| `prompt <ID> --role …` | the ready prompt for `hunter`, `verify`, `fix`, `fixreview` (`--round`, `--diff`, `--scope`) |
+| `set-status <ID> <status>` | move a block; refuses what the phase does not allow (`--report`, `--note`) |
+| `import <ID>` | take a block's draft findings into the register (`--append`, `--round`, `--diff`, `--force`) |
+| `set-finding <ID…> <status>` | move findings: `fixed --commit`, `rejected --reason`, `duplicate --dup-of`, `deferred --reason`; `--rule` / `--clear-rule` for the class guard, `--severity` / `--confidence` for the verifier's verdict, `--fixed-in` when the fix is in another file |
+| `decide <ID> "<text>"` | record a human's decision on a block — the answer to the loop signal |
+| `hypotheses <ID>` | the block's hypotheses and where each got its verdict |
+| `roots [ID]` | defect classes: instances, and which guard each instance carries |
+| `restamp <ID>` | confirm that changes under a block or a finding were reviewed (`--line` for a finding that moved) |
+| `backfill` | stamp fingerprints on records written before fingerprints existed |
+| `refs` | finding ids of the register named in the code outside `docs/review/` |
+| `findings` | regenerate `findings.md` from `findings.jsonl` |
+| `log <ID> "<text>"` | append a line to the journal |
+| `check` | the whole state for consistency — the gate for CI |
+| `summary` | the one file that outlives `docs/review/` (`--html`, `--out`, `--aged <file>`) |
+| `sarif` | open and deferred findings as SARIF 2.1.0 for code scanning (`--out`) |
+
+Two scripts sit beside the tool: `assets/run-role.sh <ID> <role>` runs a role headless and
+measures it, `scripts/axes.py` breaks a run's spend down by axis — both under
+"What a run costs, measured" below.
+
+## How the mechanisms work
+
+### The fix gate
+
+The method finds faster than a project fixes (the first project: 77 findings
+on 5 blocks, 9 fixed), and a finding that never reaches a fix is debt — a month later the
+register describes code that no longer exists. So `set-status <ID> running` refuses while
+findings at `fix_gate` severity or above (`high` by default; `"fix_gate": "none"` in
+`blocks.json` switches it off) are open in the blocks already passed. The way out is to fix,
+defer with a reason or reject — never to ignore. `status` prints the debt as its own line, and
+`check` warns about open findings older than a week.
+
+### Seams between blocks
+
+A block is the unit inside which an agent sees everything; the seam
+between two blocks is seen by nobody. On the first project 76% of the file pairs that change
+together sit in different blocks. `review coupling` reads `git log`, drops mass commits and
+shared nodes, and prints the cross-block pairs with a ready `ref_paths` entry and a hypothesis
+for the manifest; clusters of pairs between the same two blocks are where a seam block is due.
+`--write` keeps the pairs in `docs/review/coupling.tsv`. Both cutoffs are derived from the
+repository rather than fixed, and the run prints the ones it used: a commit is a mass commit
+above the 95th percentile of files per commit **here** — or, on a history of fewer than twenty
+commits, where the percentile cannot separate anything, above Tukey's fence; a file is a
+shared node when it is coupled with a tenth of the review's blocks, never fewer than three
+(a seam runs between two, so a third means it no longer describes one seam).
+
+### Seams inside a block
+
+Reading every file of a block whole is not reading the pair: on
+blocks of real size, defects visible only when several files are joined were the weakest
+class of the recall measurement (of 7 such cases, 3 found in full). `review seams <ID>` lists
+the pairs of the block's own files linked by an import or by joint changes. Imports are read
+for TS/JS (`import … from`, `export … from`, `require`, `import()`; relative paths, and the
+`paths`/`baseUrl` aliases of the nearest `tsconfig.json`/`jsconfig.json` with its relative
+`extends` — an alias no config declares is not guessed) and for Python (`ast`: absolute and
+relative imports); a specifier that resolves to no tracked file is counted and skipped. Joint
+changes use the history reading and the thresholds of `coupling`. Pairs with both kinds of
+link come first, then by joint changes, then by the number of imported names; `--top` (10 by
+default). What one side assumes about the other is not generated — that is the manifest's
+hypothesis; the hunter prompt carries the same top pairs so the hunter knows where to join.
+
+### Order of walking
+
+`review order` ranks the blocks by the cost of failure first (`risk` on
+the block) and by change frequency second — measured on the first project as a prediction:
+the top 10% of files by change frequency collected 34% of the later fixes, by size 29%, at
+random 6% (Nagappan & Ball 2005; Moser et al. 2008). Frequency catches defects; the cost of
+failure catches irreversibility, so it stays the first key. The command reports; the order in
+`blocks.json` is the human's.
+
+### Which history `coupling`, `seams` and `order` read
+
+They count changes that landed on the
+first-parent line, and a merge on it is one change — the merged branch's diff against the
+first parent, the record a squash merge would leave. So a project gets the same numbers
+whether it squashes, rebases or merges its pull requests, and a history made of merge
+commits alone is no longer read as empty (a block once showed 0 of its 24 commits).
+All three print which it was: no merges on the line, or how many of the changes are merges.
+Reading every commit of every branch instead was measured and rejected: on eight
+repositories with merged branches, 6–60% of the pairs it lifts over `together ≥ 3` rest on
+fewer than three landed changes — one branch's work-in-progress commits clearing the floor
+alone.
+
+### A criterion that sweeps beyond the block
+
+An acceptance criterion that enumerates places across the program ("every place that
+changes data") is not proven by reading the block's files. Such a block declares `sweep` in
+`blocks.json` — the paths the criterion reaches — and the hunter enumerates the places with
+a script committed at `docs/review/sweeps/<ID>.<ext>`, then reads what it found: the script
+is the proof that the list is complete. `check` refuses an enumerating criterion without a
+declared sweep.
+
+### The loop signal
+
+The kit's own review showed where fix rounds stop converging: from round 2 on, the fix
+reviewer's top finding kept landing in the code the previous round had written — usually in
+the guard that round added — and only a human's decision ended it. So the stop is mechanical.
+`import --append --round N --diff <range>` records which review found a finding (`found_in`,
+the range pinned to commit ids); when the top finding of review N−1, medium or higher, lies on
+a line fix round N−1 wrote (by the lines of `git diff -U0`, not by file), `prompt --role fix
+--round N` refuses and `check` warns until `review decide <ID> "<decision>"` is recorded —
+and the decision goes into the next fix and fix-review prompts.
+
+### What a run costs, measured
+
+`assets/run-role.sh <ID> <role>` runs a role headless through
+`claude -p`, keeps the event stream and writes one line to the journal: turns, tool calls,
+input tokens and the share from cache, output, re-reads. `scripts/axes.py` breaks any such
+stream down by axis. The first measured block: the cost is **turns × context** — reading the
+block whole was 1% of the spend; the verifier's 118 shell calls were most of the rest. The role
+templates now say so (one file — one read; the stand is one script, run once), and the runner
+caps turns at twice what the measured run needed (`ROLE_MAX_TURNS` overrides the cap). A run
+cut off by that cap leaves its work uncommitted, so the fixer is handed at most three findings
+a run, commits each as it lands, and the runner will not start a fixer or a fix reviewer in a
+dirty tree (`ALLOW_DIRTY=1` to insist); the agent's PID sits in a `.pid` file next to the
+stream while it runs, so a stop reaches it, and stopping the script passes the stop on.
+
+The per-role tool lists the runner passes are pre-approvals, not limits: they add to what the
+operator's own permission settings allow. What a run must not reach goes into `ROLE_DENY`,
+passed to `claude -p` as `--disallowedTools` — details and a measured pitfall in
+[`SECURITY.md`](SECURITY.md).
+
+### What outlives the review directory
+
+The method ends by deleting its own directory — a
+register nobody updates describes fixed things as open. `review summary` writes one immutable
+file outside it: the date and the **base commit**, the blocks with their acceptance criteria and
+fingerprints, the rejected findings with reasons (so the next review does not find them again),
+the accepted risks, what closed each class (guards, commits), and what the review cost (the
+measured role runs of the journal, which dies with the directory). `review summary --aged <file>`
+answers, from `git log` alone, how far each block has drifted since that commit — an auditor's
+re-test starts from there, not from zero. `review summary --html` writes the same summary, the
+same numbers, as one self-contained HTML file for a reader who never saw the review
+(`docs/review-summary.html` by default, or `--out`): goal and coverage, the blocks table with
+findings by severity and status and the spend of each block, a chart of findings per block,
+the open findings at the line their code sits on now with the block report's path, the guards
+per defect class, the accepted risks with reasons, the economy by role, and what is left. SVG
+drawn by the tool, a light and a dark theme, wide tables scroll inside their own box on a
+phone; nothing is loaded over the network and there is no script — a file to attach to a PR.
+
+### Findings where the platform shows them
+
+`review sarif` prints the open and deferred
+findings of the register as SARIF 2.1.0 for GitHub code scanning: the rule is the finding's
+defect class (its block when it has none), the level comes from the severity (critical and
+high → error, medium → warning, low → note), the location is the file and line from the
+repository root, the fingerprint is the finding's id — an edited line does not open a second
+alert. A deferred finding carries an accepted SARIF suppression and says "accepted risk" in
+its message, because GitHub does not read suppressions. `security-severity` is not written:
+the register does not say which finding is a vulnerability. The ready jobs are
+`assets/github-actions-snippet.yml` (`check` as a required check plus the upload through
+`github/codeql-action/upload-sarif`, pinned to a commit) and `assets/gitlab-ci-snippet.yml`
+(`check` as a job; GitLab shows SARIF on the Ultimate tier only — the next step is to post the
+findings into merge request discussions through [reviewdog](https://github.com/reviewdog/reviewdog),
+which reads SARIF: `review.py sarif | reviewdog -f=sarif -reporter=gitlab-mr-discussion`).
+
+## What it costs
+
+Full measurements with the method and caveats are in `measurements` (in the knowledge base).
+In short, from the review journal:
+
+| block | outcome | spend |
+|---|---|---|
+| access and visibility, 58 files / 4017 lines | 12 findings | 2 agents, 576k tokens, ~35 min |
+| domain core, 13 files | 14 findings | 2 agents, 446k tokens, ~34 min |
+| writes and versions, 42 files | 17 findings | 2 agents, 679k tokens, ~48 min |
+
+A block with nothing to fix closes with two agents. What is expensive is not the search but
+the fix rounds: for the author, fixing one block went through three rounds of "fixed → the
+diff was read" — 26 findings, then 13, then 8, then four trifles and the verdict "safe to
+merge". By our estimate such a block costs about twelve agents against two for a survey one.
+Convergence is the only honest sign that it is time to stop — the stopping rule is set in
+advance, and not by the number of findings but by their kind; where convergence fails, the
+loop signal above stops the rounds for a human.
+
+## What not to do
+
+- do not start with domain blocks: until the cross-cutting ones have set the language, they
+  duplicate each other;
+- do not let one agent both hunt and fix;
+- do not close a block whose acceptance criterion is not met;
+- do not leave findings only in the conversation;
+- do not keep more than two or three agents at once if a build is running on the same
+  machine.
+
+The method's main blind spot is **how much it misses**. We know that what it finds is real
+(6 planted findings out of 6 rejected), and we do not know what share of what exists that is.
+
+## Where it is going
+
+The detailed roadmap — with measurements, sources and the order of work — lives in the
+maintainer's knowledge base; this is the short version.
+
+**Done in `dev`, shipping in 0.8.0:**
+
+- **the fix gate** — the next block does not start while earlier ones hold open findings at
+  `fix_gate` severity; deferring needs a reason;
+- **seams** — `coupling` between blocks, `seams` inside one, both reading merges as one change;
+- **order by risk, then by churn** — `order`;
+- **the summary that outlives the review directory** — `summary`, `summary --aged`, and
+  `summary --html` for a reader who never saw the review;
+- **findings on the platform** — `sarif` for GitHub code scanning, with ready CI jobs for
+  GitHub Actions (`check` as a required check plus the SARIF upload) and GitLab;
+- **a declared partial review** — `scope` in `blocks.json`, said everywhere the result is;
+- **the loop signal** — fix rounds stop for a human's `decide` when they start fixing their
+  own last fix;
+- **a finding's fingerprint is the lines around it**, not the whole file, and a finding is
+  shown at the line its code sits on now;
+- **spend measured** — `run-role.sh` and `axes.py`, turn caps, the one-read rule in the
+  templates, `ROLE_DENY` as the runner's one limit;
+- **sweeps** for acceptance criteria that reach beyond the block's files.
+
+**In work:**
+
+- a confirmed hypothesis must name the finding it produced
+  ([#60](https://github.com/mikey-semy/finetooth/pull/60));
+- the verdict parser derived from a corpus of real reports, not from the last defect
+  ([#17](https://github.com/mikey-semy/finetooth/issues/17));
+- splitting `review.py` into modules — the tool is near the kit's own readability ceiling
+  ([#56](https://github.com/mikey-semy/finetooth/issues/56));
+- what the first field runs asked for ([#46](https://github.com/mikey-semy/finetooth/issues/46))
+  and the guard gaps the kit's own review deferred
+  ([#29](https://github.com/mikey-semy/finetooth/issues/29),
+  [#30](https://github.com/mikey-semy/finetooth/issues/30),
+  [#31](https://github.com/mikey-semy/finetooth/issues/31)).
+
+**Next, roughly in order:**
+
+- **Measuring what is missed.** A corpus of real past defects with a known answer; cheap
+  sampling of closed blocks by a different model as an upper bound. A first recall
+  measurement has been run — `seams` came out of it.
+- **A lens bank.** Property question sets (access, money, privacy, data integrity,
+  reliability, tests, documentation truth) as sources of hypotheses for manifests — in the
+  form "what to check → how to prove it", never as a checklist.
+- **Threat model as a block kind.** A textual data-flow diagram per trust boundary with STRIDE
+  hypotheses; the diagram outlives the review directory.
+- **Token economy beyond the measurement:** cache TTL, output filtering.
+- A run manifest, two reviewers at once, a block spanning two repositories, portability to
+  another language, findings in GitLab merge requests through reviewdog.
+
+What we will not do: turn the kit into a diff reviewer, add dependencies, build a web UI or a
+database, automate finding without a human accepting each one, reward being first. Each has
+a reason in the knowledge base.
 
 ## Where it came from
 
@@ -137,7 +505,7 @@ The author's full description is `how-it-works` (in the knowledge base), Georgiy
 text, given as is. The numbers in it are the author's account; we have not verified them.
 Everything marked as verified below has been verified by running it here.
 
-## What was broken in the kit
+### What was broken in the kit
 
 The kit was sent as working, and it is — but installing it by its own instructions stumbles.
 Everything listed was reproduced on a clean repository, not spotted by eye.
@@ -165,13 +533,15 @@ another keyboard layout:
 - **`exclusions` is a list of objects** `{pattern, reason}`, not strings. A list of strings
   crashes `coverage` with `TypeError`.
 
-## What is fixed in this version
+### What changed since the archive
 
 Some changes were road-tested on a live review (67 blocks, 1691 files, three blocks
 completed), some were added here and proven by mutation — break the state and make sure the
-check goes red.
+check goes red. What each release added is in [`CHANGELOG.md`](CHANGELOG.md); this is the
+reasoning behind the core.
 
 **Road-tested on a live review:**
+
 - `check` requires a **verifier's** report for a block in status `verified`/`closed`;
 - `check` compares `coverage.tsv` with a recount — a stale map no longer stays silent;
 - a manifest is asked of only the block that has reached work, not all at once;
@@ -186,6 +556,7 @@ check goes red.
   once.
 
 **Taken from neighbours in the niche** (analysis in `comparison-with-practice` (in the knowledge base)):
+
 - **a fingerprint of what was reviewed** — from [doorstop](https://github.com/doorstop-dev/doorstop),
   where a requirement stores a hash of its text and an edit itself moves it to "unreviewed
   changes". Here: on moving to `verified`/`closed` a block remembers a fingerprint of the
@@ -193,7 +564,7 @@ check goes red.
   version of the code. To confirm that the changes were reviewed — `restamp <BLOCK>`, exactly
   like `doorstop review`. A block or finding without a fingerprint (recorded by a kit version
   that had none) is also a failure, not a skip: `backfill` stamps fingerprints from the current
-  code and writes to the journal from which commit changes are tracked;
+  code and writes to the journal from which commit changes are tracked.
   The same fingerprint is taken of the manifest's hypothesis text: verdicts are given by
   number, and reordering or replacing a question after verification would otherwise credit
   the old answers to the new one;
@@ -207,11 +578,11 @@ check goes red.
   `findings.md`, the SARIF export, the summary and the prompts show the line the window sits
   on now, and the register keeps the recorded one until `restamp`. An edit inside the window
   fails the check — either the defect has already been fixed, or the description is stale,
-  or it is still there and `restamp <finding-ID>` confirms it (`--line <N>` if it now sits elsewhere). A finding
-  without a line keeps the fingerprint of the whole file. The window size is measured on the
-  kit's own review, not chosen: the note next to `REGION_K` in `review.py` has the numbers.
-  Records stamped by an older version (`code_sha`, the whole file) are checked as before, and
-  `restamp` moves each one to the window;
+  or it is still there and `restamp <finding-ID>` confirms it (`--line <N>` if it now sits
+  elsewhere). A finding without a line keeps the fingerprint of the whole file. The window
+  size is measured on the kit's own review, not chosen: the note next to `REGION_K` in
+  `review.py` has the numbers. Records stamped by an older version (`code_sha`, the whole
+  file) are checked as before, and `restamp` moves each one to the window;
 - **a cheap fabrication filter** — from [mergejury](https://github.com/iamEtornam/mergejury):
   a reference to a line that does not exist in the file is caught without any model;
 - **a budget inside the assignment itself** — from [repomix](https://github.com/yamadashy/repomix)
@@ -225,7 +596,8 @@ check goes red.
   written from a finding and run across the whole codebase. Here: a finding carries a `root`
   (the class name), and from the **third** instance the check requires a guard —
   `set-finding <ID>... <status> --rule <path>`, recorded only on the findings named in the
-  command (a root string can carry defects that need different guards). A
+  command (a root string can carry defects that need different guards; `--clear-rule` takes
+  a guard off a finding it does not go red on). A
   guard is a path to a file in the repository (a test, a linter config, a CI gate) or
   `repository:path` for a neighbouring one; a non-existent path is a failure. The threshold
   comes from practice: a second recurrence can still be a coincidence, a third means the
@@ -237,6 +609,7 @@ check goes red.
   write a guard and the release gate needs `check` green right after verification.
 
 **Added after checking against world practice** (see `comparison-with-practice` (in the knowledge base)):
+
 - **a second coverage denominator — hypotheses.** The file map answers "the file was opened";
   a professional audit counts coverage in questions asked of the system, and OWASP ASVS
   requires every requirement to have a "pass or fail" outcome and a written justification of
@@ -257,13 +630,13 @@ check goes red.
   places.
 
 **Added during the transfer:**
+
 - the repository root is asked of git — the tool can be placed wherever convenient;
 - the project name and gates became the substitutions `{{PROJECT}}` and `{{GATES}}` from
   `blocks.json`: a template copied without proofreading greeted the agent in the name of
   someone else's project;
 - the command `set-finding <ID> <status>` — moves a finding and refuses `fixed` without a
-  commit, `rejected` without a reason, `duplicate` without a reference; `--severity` and
-  `--confidence` carry the verifier's verdict onto a finding already in the register;
+  commit, `rejected` without a reason, `duplicate` without a reference;
 - `check` requires a rejection reason for every rejected finding;
 - the hints in messages are gathered into one constant, `CLI` (in the original half of them
   called `make`, half `npm run` — the rig was carried between projects and never proofread);
@@ -273,6 +646,7 @@ check goes red.
 **Taken from the second version of the kit by its author** (handed over 23.09.2026, developed
 in parallel; the mechanisms were carried over, the texts rewritten, his project's data was not
 carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
+
 - **the fix reviewer role** — the diff is pasted into the prompt whole, rounds and halves of
   the diff get their own report names, and at the end an explicit verdict "is another round
   needed"; a block with fixed findings cannot be closed without such a report;
@@ -307,159 +681,13 @@ existing files, the version in the header equals the tool's version. In CI this 
 The tests are proven by mutation: for every check the tool makes there is a change that breaks
 it and a test that goes red on that change.
 
-## How to install
-
-The kit is **a skill under the open [Agent Skills](https://agentskills.io) standard**: it is
-read by Claude Code, Codex, Gemini CLI, Cursor and other agents. It is installed with the
-standard installer:
-
-```sh
-npx skills add mikey-semy/finetooth                   # into the project: .claude/skills/finetooth/ and the like
-npx skills add mikey-semy/finetooth -g                # into the home directory, for all projects
-```
-
-The agent finds the skill on its own — by the description, when asked for a whole-repository
-review or when the repository already has `docs/review/`. The tool runs from the skill folder
-and reviews the repository it was started in.
-
-**Install into the project, not only into the home directory**, if CI runs the check: a copy
-of the skill in the repository pins the tool's version to the commit, and `check` in CI runs
-with exactly the version the review was done with. A skill installed into the project is
-committed along with it.
-
-The project is maintained by one person, and PRs are looked at roughly once a week; how to
-contribute — [`CONTRIBUTING.md`](CONTRIBUTING.md), origin and rights — [`NOTICE.md`](NOTICE.md).
-
-Then, in the project root:
-
-```sh
-python3 .claude/skills/finetooth/scripts/review.py setup --project "Name"
-```
-
-`setup` creates a skeleton of the block definitions, the invariants and the entry point
-`docs/review/README.md`. The tool itself and the role templates are **not copied** into the
-project — they are in the skill. A project that calls the tool its own way passes
-`--cli "npm run review --"`: the string is written to the `cli` field in `blocks.json` and
-goes into all hints. Without it the hints name the real path to the tool. A repeated run adds
-what is missing and does not touch what was edited by hand.
-
-Next comes the work nobody will do for you:
-
-1. **`docs/review/invariants.md` — the rules of your project.** The most important file: it
-   is pasted to every agent and decides what the agent will count as a defect. The sample in
-   `assets/invariants.example.md` is someone else's — look at it for the structure, not the
-   content: it has a section "context that changes the assessment of findings" and a section
-   "what is NOT a finding".
-2. Lay out the blocks in `docs/review/blocks.json` — cross-cutting first, domain next,
-   live-system last (`assets/blocks.example.json`). Fill in `project` and `gates`.
-3. Write the first block's manifest: 10–15 hypotheses **about your project** and an acceptance
-   criterion that cannot be met without reading the code. The longest part, and it cannot be
-   cut short: a manifest without project-specific hypotheses gives a review "on general
-   considerations".
-4. `inventory` — the repository tree with sizes and ownership, to cut by; `init`, then
-   `coverage` — and deal with the unowned files until there are zero. This is where
-   everything forgotten surfaces: for the author — a whole microservice, for us — 89 route
-   files. `sizes` shows the blocks above the ceiling — split them by subject, not
-   alphabetically.
-
-   **Reviewing only a part on purpose** — a trial run of the kit, a release gate, one risky
-   area — declare it instead of excluding the rest:
-   `"scope": {"paths": ["src/billing/**"], "reason": "release gate: billing only"}` in
-   `blocks.json`. The paths are git pathspecs, like a block's `paths`; the reason is
-   required. Coverage is then counted inside the scope only (a file without a block there is
-   refused as before, a file outside is not), and `coverage`, `status`, `summary` and `sarif`
-   (the run's `properties`) say the review is partial, name the scope and the reason — so it
-   is never taken for a whole one. `check` refuses a scope without a reason and a scope
-   pattern that matches no tracked file. The first live run needed 183 exclusions for one
-   block; the scope is one line.
-5. Add the `make` targets (or `package.json` scripts) and the banner to the project's root
-   instructions file — without the banner a new session will not know the review is in
-   progress and will start its own in parallel.
-6. Run the first block all the way through and **do not be afraid to adjust the rig as you
-   go**. Put your own version of a role template in `docs/review/prompts/<role>.md` — it is
-   used instead of the skill's.
-
-## What it costs
-
-Full measurements with the method and caveats are in `measurements` (in the knowledge base).
-In short, from the review journal:
-
-| block | outcome | spend |
-|---|---|---|
-| access and visibility, 58 files / 4017 lines | 12 findings | 2 agents, 576k tokens, ~35 min |
-| domain core, 13 files | 14 findings | 2 agents, 446k tokens, ~34 min |
-| writes and versions, 42 files | 17 findings | 2 agents, 679k tokens, ~48 min |
-
-A block with nothing to fix closes with two agents. What is expensive is not the search but
-the fix rounds: for the author, fixing one block went through three rounds of "fixed → the
-diff was read" — 26 findings, then 13, then 8, then four trifles and the verdict "safe to
-merge". By our estimate such a block costs about twelve agents against two for a survey one.
-Convergence is the only honest sign that it is time to stop — the stopping rule is set in
-advance, and not by the number of findings but by their kind.
-
-The kit's own review showed where rounds stop converging: from round 2 on, the fix reviewer's
-top finding kept landing in the code the previous round had written — usually in the guard
-that round added — and only a human's decision ended it. So the stop is mechanical. `import
---append --round N --diff <range>` records which review found a finding (`found_in`, the
-range pinned to commit ids); when the top finding of review N−1, medium or higher, lies on a
-line fix round N−1 wrote (by the lines of `git diff -U0`, not by file), `prompt --role fix
---round N` refuses and `check` warns until `review decide <ID> "<decision>"` is recorded —
-and the decision goes into the next fix and fix-review prompts.
-
-## Where it is going
-
-The detailed roadmap — with measurements, sources and the order of work — lives in the
-maintainer's knowledge base; this is the short version. Directions, roughly in order:
-
-- **A fix-phase gate.** The next block does not start while the previous one has open
-  high-severity findings; deferring needs a reason. The method finds faster than a project
-  fixes — this is the lever.
-- **Seams between blocks.** A `coupling` command over `git log`: files that change together
-  but live in different blocks become `ref_paths` and hypotheses; clusters become a
-  cross-block slice.
-- **Order by risk, then by churn.** A command that ranks blocks by cost of failure first and
-  change frequency second.
-- **Measuring what is missed.** A corpus of real past defects with a known answer; cheap
-  sampling of closed blocks by a different model as an upper bound.
-- **A lens bank.** Property question sets (access, money, privacy, data integrity,
-  reliability, tests, documentation truth) as sources of hypotheses for manifests — in the
-  form "what to check → how to prove it", never as a checklist.
-- **Threat model as a block kind.** A textual data-flow diagram per trust boundary with STRIDE
-  hypotheses; the diagram outlives the review directory.
-- **Token economy.** The cost of a block does not depend on its size, so the spend goes to
-  tool output and re-reads: measure first, then cache TTL, output filtering, one-read rule.
-- **The summary that outlives the review directory**, a run manifest, two reviewers at once,
-  a block spanning two repositories, portability to another language.
-
-What we will not do: turn the kit into a diff reviewer, add dependencies, build a web UI or a
-database, automate finding without a human accepting each one, reward being first. Each has
-a reason in the knowledge base.
-
-## What not to do
-
-Briefly, on the near term: the method's main blind spot is **how much it misses**. We know
-that what it finds is real (6 planted findings out of 6 rejected), and we do not know what
-share of what exists that is.
-
-
-- do not start with domain blocks: until the cross-cutting ones have set the language, they
-  duplicate each other;
-- do not let one agent both hunt and fix;
-- do not close a block whose acceptance criterion is not met;
-- do not leave findings only in the conversation;
-- do not keep more than two or three agents at once if a build is running on the same
-  machine.
-
 ## What is inside
 
 ```
 skills/finetooth/                THE SKILL — this is what gets installed into the agent
   SKILL.md                        when to apply and the order of work (read by the agent)
   LICENSE                         terms — travel with the skill
-  scripts/review.py               the tool, 25 commands: version, setup, init, status, next,
-                                  inventory, sizes, coverage, coupling, seams, order, roots, prompt,
-                                  import, set-status, set-finding, hypotheses, restamp,
-                                  backfill, refs, findings, summary, sarif, check, log
+  scripts/review.py               the tool: every command in the table under "Commands"
   scripts/axes.py                 the spend of a headless run, broken down by axis
   references/hunter.md            hunter: reads the block's files and raises findings
   references/verify.md            verifier: its own independent pass, three verdicts
@@ -503,96 +731,5 @@ CHANGELOG.md                      version history (+ CHANGELOG.ru.md)
 .gitignore                        the tool's bytecode must not reach a commit
 ```
 
-Block statuses: `todo → running → hunted → verified → triaged → fixing → closed` (plus
-`blocked`). Finding statuses: `open`, `fixed`, `rejected`, `duplicate`, `deferred`.
-
-**Seams between blocks.** A block is the unit inside which an agent sees everything; the seam
-between two blocks is seen by nobody. On the first project 76% of the file pairs that change
-together sit in different blocks. `review coupling` reads `git log`, drops mass commits and
-shared nodes, and prints the cross-block pairs with a ready `ref_paths` entry and a hypothesis
-for the manifest; clusters of pairs between the same two blocks are where a seam block is due.
-`--write` keeps the pairs in `docs/review/coupling.tsv`. Both cutoffs are derived from the
-repository rather than fixed, and the run prints the ones it used: a commit is a mass commit
-above the 95th percentile of files per commit **here** — or, on a history of fewer than twenty
-commits, where the percentile cannot separate anything, above Tukey's fence; a file is a
-shared node when it is coupled with a tenth of the review's blocks, never fewer than three
-(a seam runs between two, so a third means it no longer describes one seam).
-
-**Seams inside a block.** Reading every file of a block whole is not reading the pair: on
-blocks of real size, defects visible only when several files are joined were the weakest
-class of the recall measurement (of 7 such cases, 3 found in full). `review seams <ID>` lists
-the pairs of the block's own files linked by an import or by joint changes. Imports are read
-for TS/JS (`import … from`, `export … from`, `require`, `import()`; relative paths, and the
-`paths`/`baseUrl` aliases of the nearest `tsconfig.json`/`jsconfig.json` with its relative
-`extends` — an alias no config declares is not guessed) and for Python (`ast`: absolute and
-relative imports); a specifier that resolves to no tracked file is counted and skipped. Joint
-changes use the history reading and the thresholds of `coupling`. Pairs with both kinds of
-link come first, then by joint changes, then by the number of imported names; `--top` (10 by
-default). What one side assumes about the other is not generated — that is the manifest's
-hypothesis; the hunter prompt carries the same top pairs so the hunter knows where to join.
-
-**What a run costs, measured.** `assets/run-role.sh <ID> <role>` runs a role headless through
-`claude -p`, keeps the event stream and writes one line to the journal: turns, tool calls,
-input tokens and the share from cache, output, re-reads. `scripts/axes.py` breaks any such
-stream down by axis. The first measured block: the cost is **turns × context** — reading the
-block whole was 1% of the spend; the verifier's 118 shell calls were most of the rest. The role
-templates now say so (one file — one read; the stand is one script, run once), and the runner
-caps turns at twice what the measured run needed. A run cut off by that cap leaves its work
-uncommitted, so the fixer is handed at most three findings a run, commits each as it lands,
-and the runner will not start a fixer or a fix reviewer in a dirty tree (`ALLOW_DIRTY=1` to
-insist); the agent's PID sits next to the stream while it runs, so a stop reaches it.
-
-**What outlives the review directory.** The method ends by deleting its own directory — a
-register nobody updates describes fixed things as open. `review summary` writes one immutable
-file outside it: the date and the **base commit**, the blocks with their acceptance criteria and
-fingerprints, the rejected findings with reasons (so the next review does not find them again),
-the accepted risks, what closed each class (guards, commits), and what the review cost (the
-measured role runs of the journal, which dies with the directory). `review summary --aged <file>`
-answers, from `git log` alone, how far each block has drifted since that commit — an auditor's
-re-test starts from there, not from zero. `review summary --html` writes the same summary, the
-same numbers, as one self-contained HTML file for a reader who never saw the review
-(`docs/review-summary.html` by default, or `--out`): goal and coverage, the blocks table with
-findings by severity and status and the spend of each block, a chart of findings per block,
-the open findings at the line their code sits on now with the block report's path, the guards
-per defect class, the accepted risks with reasons, the economy by role, and what is left. SVG
-drawn by the tool, a light and a dark theme, wide tables scroll inside their own box on a
-phone; nothing is loaded over the network and there is no script — a file to attach to a PR.
-
-**Findings where the platform shows them.** `review sarif` prints the open and deferred
-findings of the register as SARIF 2.1.0 for GitHub code scanning: the rule is the finding's
-defect class (its block when it has none), the level comes from the severity (critical and
-high → error, medium → warning, low → note), the location is the file and line from the
-repository root, the fingerprint is the finding's id — an edited line does not open a second
-alert. A deferred finding carries an accepted SARIF suppression and says "accepted risk" in
-its message, because GitHub does not read suppressions. `security-severity` is not written:
-the register does not say which finding is a vulnerability. The ready jobs are
-`assets/github-actions-snippet.yml` (`check` as a required check plus the upload through
-`github/codeql-action/upload-sarif`, pinned to a commit) and `assets/gitlab-ci-snippet.yml`
-(`check` as a job; GitLab shows SARIF on the Ultimate tier only, and a Code Quality report is
-the next step).
-
-**Order of walking.** `review order` ranks the blocks by the cost of failure first (`risk` on
-the block) and by change frequency second — measured on the first project as a prediction:
-the top 10% of files by change frequency collected 34% of the later fixes, by size 29%, at
-random 6% (Nagappan & Ball 2005; Moser et al. 2008). Frequency catches defects; the cost of
-failure catches irreversibility, so it stays the first key. The command reports; the order in
-`blocks.json` is the human's.
-
-**Which history both of them read.** `coupling` and `order` count changes that landed on the
-first-parent line, and a merge on it is one change — the merged branch's diff against the
-first parent, the record a squash merge would leave. So a project gets the same numbers
-whether it squashes, rebases or merges its pull requests, and a history made of merge
-commits alone is no longer read as empty (a block once showed 0 of its 24 commits). Both
-commands print which it was: no merges on the line, or how many of the changes are merges.
-Reading every commit of every branch instead was measured and rejected: on eight
-repositories with merged branches, 6–60% of the pairs it lifts over `together ≥ 3` rest on
-fewer than three landed changes — one branch's work-in-progress commits clearing the floor
-alone.
-
-**The fix gate.** The method finds faster than a project fixes (the first project: 77 findings
-on 5 blocks, 9 fixed), and a finding that never reaches a fix is debt — a month later the
-register describes code that no longer exists. So `set-status <ID> running` refuses while
-findings at `fix_gate` severity or above (`high` by default; `"fix_gate": "none"` in
-`blocks.json` switches it off) are open in the blocks already passed. The way out is to fix,
-defer with a reason or reject — never to ignore. `status` prints the debt as its own line, and
-`check` warns about open findings older than a week.
+The project is maintained by one person, and PRs are looked at roughly once a week; how to
+contribute — [`CONTRIBUTING.md`](CONTRIBUTING.md), origin and rights — [`NOTICE.md`](NOTICE.md).
