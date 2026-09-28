@@ -10500,7 +10500,7 @@ class NamedExitTest(unittest.TestCase):
     # исчезнувший образец роняет прогон отдельной строкой, а не молча делает раздел
     # «нечитаемым». Отчёт исполнителя и отчёт ревьюера правок проверка не разбирает: она
     # смотрит, что файл есть, — и раздела в них не называет никто.
-    REPORT_GATES = {"hunter": ("LIMITS_HEADING", "HYPOTHESIS_HEADING"),
+    REPORT_GATES = {"hunter": ("LIMITS_HEADING", "HYPOTHESIS_HEADING", "ACCEPTANCE_HEADING"),
                     "verify": ("COVERAGE_VERDICT", "FINDING_VERDICT")}
     # Название раздела ищется рядом со словом «раздел»: заголовки отчёта — обычные слова
     # («Находки», «Охват»), и без этой пометки правило ловило бы прозу.

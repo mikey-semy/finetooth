@@ -2524,7 +2524,7 @@ def cmd_order(args) -> int:
 
 # ------------------------------------------------------------------------- summary
 
-ACCEPTANCE_HEADING = re.compile(r"^#{1,6}\s*.*(критери\w* приёмки|acceptance criteri)", re.I)
+ACCEPTANCE_HEADING = re.compile(r"^#{1,6}\s*.*(критери\w* приёмки|acceptance criteri)", re.IGNORECASE)
 SUMMARY_MARK = "<!-- finetooth-summary "
 SUMMARY_DEFAULT = "docs/review-summary.md"
 
