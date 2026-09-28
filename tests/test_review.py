@@ -8055,6 +8055,27 @@ jobs:
             with self.subTest(файл=rel):
                 self.assertEqual(missing, [], f"{rel} не называет команды: {missing}")
 
+    def test_поле_размера_при_чтении_названо_в_ломающем_своего_выпуска(self):
+        """R10-002: выпуск, заведший `read_lines` и отказ `set-status` блоку выше потолка,
+        рассказал о них только в «Изменено», а вступление журнала велит идущему ревью читать
+        сперва «Ломающее». Выпуск, где поле появилось впервые (самый старый раздел, который
+        его называет), обязан назвать в «Ломающем» и поле, и команду, которой ревью его
+        получает, и `sizes`, которым ищут блок под отказ, — на обоих языках."""
+        field = re.search(r'^READ_LINES_KEY = "(\w+)"$', TOOL.read_text(encoding="utf-8"), re.M)
+        self.assertTrue(field, "в инструменте нет READ_LINES_KEY — правило смотрит не туда")
+        for rel, heading in (("CHANGELOG.md", "Breaking"), ("CHANGELOG.ru.md", "Ломающее")):
+            text = (KIT / rel).read_text(encoding="utf-8")
+            versions = re.split(r"^## \[", text, flags=re.M)[1:]
+            born = [v for v in versions if f"`{field.group(1)}`" in v]
+            with self.subTest(файл=rel):
+                self.assertTrue(born, f"{rel} не называет `{field.group(1)}` ни в одном выпуске")
+                part = re.search(rf"^### {heading}\b.*?(?=^### |\Z)", born[-1], re.M | re.S)
+                self.assertTrue(part, f"{rel}: у выпуска, где появился `{field.group(1)}`, нет "
+                                      f"раздела «{heading}»")
+                for said in (f"`{field.group(1)}`", "`set-status <ID> ", "`sizes`"):
+                    self.assertIn(said, part.group(0),
+                                  f"{rel}: «{heading}» выпуска с `{field.group(1)}` не называет {said}")
+
     def test_у_каждой_версии_в_истории_есть_ссылка_на_сравнение(self):
         """RELEASING, ворота 4: ссылка на сравнение ставится до тега. У 0.5.1, 0.5.0 и
         0.4.1 её не было, и заголовки этих версий печатались как текст в квадратных
