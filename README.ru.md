@@ -151,8 +151,10 @@ python3 .claude/skills/finetooth/scripts/review.py setup --project "Имя"
 2. **Манифест.** Для каждого блока, перед его охотой: `docs/review/blocks/<ID>-<slug>.md` с
    гипотезами и критерием приёмки. `review seams <ID>` перечисляет пары собственных файлов
    блока, которые надо читать вместе, — на каждую из верхних по гипотезе.
-3. **Охотник.** `review prompt <ID> --role hunter` → свежий агент пишет отчёт и черновик
-   находок; `review set-status <ID> hunted`.
+3. **Охотник.** Сначала `review set-status <ID> running` — здесь стоит гейт починки: он
+   отказывает, пока в прежних блоках открыты находки уровня `fix_gate`, и дальше идут, починив,
+   отложив или отвергнув их, а не пропустив статус. Затем `review prompt <ID> --role hunter` →
+   свежий агент пишет отчёт и черновик находок; `review set-status <ID> hunted`.
 4. **Импорт.** `review import <ID>` забирает черновик в реестр (`findings.jsonl`), и
    проверяющий видит находки охотника как уже записанные.
 5. **Проверяющий.** `review prompt <ID> --role verify` → другой агент проверяет каждую
@@ -161,11 +163,15 @@ python3 .claude/skills/finetooth/scripts/review.py setup --project "Имя"
    `--confidence`, `rejected --reason`, `duplicate --dup-of`); его новые находки заходят
    через `review import <ID> --append`. Затем `review set-status <ID> verified`,
    `review findings`, `review check` и строка в журнал через `review log`.
-6. **Починка.** `review prompt <ID> --role fix [--round N]` → ещё один агент, не больше трёх
+6. **Починка** — только если у блока есть подтверждённые находки, которые надо чинить; блок,
+   где чинить нечего, от проверяющего идёт прямо к закрытию, всего два агента.
+   `review prompt <ID> --role fix [--round N]` → ещё один агент, не больше трёх
    находок за прогон, коммит на каждую, по правилам коммитов самого проекта (DCO и подобное —
    ищется в его файлах). `review set-finding <ID…> fixed --commit <sha>`; третьему экземпляру
    класса нужна узда, `--rule <путь>`.
-7. **Ревью правок.** `review prompt <ID> --role fixreview --diff <база>...HEAD [--round N]` →
+7. **Ревью правок** — обязательно, как только хоть одна находка блока `fixed`: `check`
+   отказывает закрытому блоку с починками без отчёта ревьюера правок.
+   `review prompt <ID> --role fixreview --diff <база>...HEAD [--round N]` →
    свежий агент читает дифф целиком; его находки заходят через
    `review import <ID> --append --round N --diff <база>..<верх>`. Когда главная находка круга
    ложится в код, написанный прошлым кругом, инструмент останавливается ради человека:

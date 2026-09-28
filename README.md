@@ -161,8 +161,11 @@ the tool (`python3 <skill>/scripts/review.py`, or the project's `cli`).
 2. **Manifest.** Per block, before its hunt: `docs/review/blocks/<ID>-<slug>.md` with the
    hypotheses and the acceptance criterion. `review seams <ID>` lists the pairs of the
    block's own files that must be read together — a hypothesis for each of the top ones.
-3. **Hunter.** `review prompt <ID> --role hunter` → a fresh agent writes its report and the
-   draft findings; `review set-status <ID> hunted`.
+3. **Hunter.** `review set-status <ID> running` first — this is where the fix gate stands: it
+   refuses while earlier blocks hold open findings at `fix_gate` severity, and the way on is
+   to fix, defer or reject those, not to skip the status. Then `review prompt <ID> --role
+   hunter` → a fresh agent writes its report and the draft findings; `review set-status <ID>
+   hunted`.
 4. **Import.** `review import <ID>` takes the draft into the register (`findings.jsonl`), so
    the verifier sees the hunter's findings as recorded ones.
 5. **Verifier.** `review prompt <ID> --role verify` → a different agent checks each finding
@@ -171,11 +174,14 @@ the tool (`python3 <skill>/scripts/review.py`, or the project's `cli`).
    `rejected --reason`, `duplicate --dup-of`); its new findings go in with
    `review import <ID> --append`. Then `review set-status <ID> verified`, `review findings`,
    `review check`, and a line in the journal with `review log`.
-6. **Fix.** `review prompt <ID> --role fix [--round N]` → another agent, at most three
+6. **Fix** — only when the block has confirmed findings to fix; a block with nothing to fix
+   goes from the verifier straight to closing, two agents in all. `review prompt <ID> --role
+   fix [--round N]` → another agent, at most three
    findings a run, a commit per finding, under the project's own commit rules (DCO and the
    like, looked up in its files). `review set-finding <ID…> fixed --commit <sha>`; the third
    instance of a class needs a guard, `--rule <path>`.
-7. **Fix review.** `review prompt <ID> --role fixreview --diff <base>...HEAD [--round N]` → a
+7. **Fix review** — required once any finding of the block is `fixed`: `check` refuses a
+   closed block with fixes and no fix reviewer's report. `review prompt <ID> --role fixreview --diff <base>...HEAD [--round N]` → a
    fresh agent reads the whole diff; its findings go in with
    `review import <ID> --append --round N --diff <base>..<tip>`. When a round's top finding
    lands in the previous round's own code, the tool stops for a human: `review decide <ID>

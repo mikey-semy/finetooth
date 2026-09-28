@@ -12,8 +12,10 @@ metadata:
 # Whole-repository review
 
 A review of all the code, not of a diff: the repository is cut into blocks, every block goes
-through four roles — hunter, verifier, fixer, fix reviewer — and completeness is proven by the
-coverage map: not one file without a block. Sessions change, context runs out, so **all state
+through a hunter and a verifier, a block with findings to fix also through a fixer, and a
+block with any finding `fixed` also through a fix reviewer (`check` refuses to close it
+without that report); completeness is proven by the coverage map: not one file without a
+block. Sessions change, context runs out, so **all state
 lives on disk** in the project's `docs/review/` and is read back by the tool. Keep nothing in
 the memory of the conversation.
 
@@ -98,7 +100,9 @@ one of your own:
    with the `paths` aliases of `tsconfig.json`/`jsconfig.json`, Python) or by joint changes
    (the thresholds of `coupling`): for each of the top ones write a hypothesis on what one side
    assumes about the other. The hunter prompt carries the same top pairs.
-2. **Hunter.** `review set-status <ID> running` (the fix gate below may refuse), then
+2. **Hunter.** `review set-status <ID> running` first — the fix gate (step 7) stands there:
+   while earlier blocks hold open findings at `fix_gate` severity it refuses, and the way on
+   is to fix, defer with a reason or reject them, never to skip the status. Then
    `review prompt <ID> --role hunter` prints a ready prompt — hand it to a subagent **whole
    and unedited**. The agent writes the report and the draft findings to disk itself. Then
    `review set-status <ID> hunted`.
@@ -123,7 +127,8 @@ one of your own:
    A class with a third instance is a warning until the fix phase (`root/guard-due`): the
    guard is the fixer's, and `check` refuses once an instance is fixed or its block is `fixing`.
 6. **Journal.** `review log <ID> "what was decided and why"` — right away: this cannot be recovered.
-7. **Fixing** — yet another agent: `review prompt <ID> --role fix [--round N]`. The prompt
+7. **Fixing** — only when the block has confirmed findings to fix (none — go to step 9 after
+   acceptance); yet another agent: `review prompt <ID> --role fix [--round N]`. The prompt
    hands the fixer at most three findings a run, one commit per finding, under the project's
    own commit rules (DCO and the like, found in its files). Cut assignments by related areas,
    not one finding at a time. A repeat round needs `--round N`: without it the second fixer
@@ -143,7 +148,8 @@ one of your own:
    `blocks.json`; `"none"` switches it off) are open in the blocks already passed — the
    method finds faster than a project fixes, and a finding that never reaches a fix is debt.
    `review status` shows this debt as its own line.
-8. **Fix reviewer** — a fresh agent that did not write the fixes:
+8. **Fix reviewer** — required once any finding of the block is `fixed`; a fresh agent that
+   did not write the fixes:
    `review prompt <ID> --role fixreview --diff main...HEAD [--round N] [--scope <half>]`.
    The diff is pasted into the prompt whole, and `--scope` names a reviewer's half in its
    report without shrinking it: a diff too large for one agent is split by giving each a
