@@ -8176,6 +8176,43 @@ jobs:
                     loose.append(f"{wf.name}:{n} {m.group(1)}")
         self.assertEqual(loose, [], "действие CI не закреплено коммитом")
 
+    def test_версия_reviewdog_в_образцах_названа_явно(self):
+        """Правило выше видит только `uses:`, а reviewdog ставится двумя путями мимо него:
+        `reviewdog/action-setup` по умолчанию берёт `latest` — закреплённый коммит действия
+        ставит какой угодно бинарник, — а в GitLab архив релиза качает `curl`. Версия
+        названа в каждом образце, одна на оба, а скачанный архив сверяется с дайджестом,
+        записанным в самом образце: `checksums.txt` того же релиза подмену релиза не
+        ловит."""
+        runs = {p.name: p.read_text(encoding="utf-8")
+                for p in sorted((SKILL / "assets").glob("*.yml"))}
+        runs = {name: text for name, text in runs.items() if "reviewdog -f=" in text}
+        self.assertEqual(sorted(runs), ["github-actions-snippet.yml", "gitlab-ci-snippet.yml"],
+                         "образцы с reviewdog — не те два, которые правило знает")
+        versions = {}
+        for name, text in runs.items():
+            named = re.findall(r"(?im)^\s*reviewdog_version:\s*\"?([^\s\"#]+)", text)
+            self.assertTrue(named, f"{name}: версия reviewdog не названа — `reviewdog_version: "
+                                   "vX.Y.Z` у action-setup, REVIEWDOG_VERSION в GitLab")
+            for v in named:
+                self.assertRegex(v, r"^v?\d+\.\d+\.\d+$",
+                                 f"{name}: версия reviewdog {v!r} — не номер выпуска")
+            versions[name] = {v.lstrip("v") for v in named}
+            if "reviewdog/action-setup@" not in text:
+                # Не через действие — значит, архив скачан сам: его сверяют с дайджестом.
+                self.assertTrue(
+                    re.search(r"(?m)^\s*REVIEWDOG_SHA256:\s*\"?[0-9a-f]{64}\"?\s*$", text),
+                    f"{name}: дайджест архива reviewdog не записан — впишите в REVIEWDOG_SHA256 "
+                    "строку Linux_x86_64 из checksums.txt релиза")
+                self.assertTrue(
+                    'echo "${REVIEWDOG_SHA256}  reviewdog.tar.gz" | sha256sum -c -' in text,
+                    f"{name}: скачанный архив reviewdog не сверяется с REVIEWDOG_SHA256")
+                self.assertFalse(re.search(r"install\.sh|latest", text),
+                                 f"{name}: reviewdog ставится подвижным путём (install.sh или "
+                                 "latest) — ставьте архив релиза по версии и дайджесту")
+        self.assertEqual(len(set().union(*versions.values())), 1,
+                         f"образцы ставят разные версии reviewdog: {versions} — обновляйте "
+                         "оба образца разом")
+
     def test_версии_python_из_шапки_скилла_прогоняются_в_ci(self):
         """`compatibility` в SKILL.md — то, на что смотрит команда, решая, ставить ли набор.
         Пока в рабочем процессе не было `setup-python`, обе названные версии держались на

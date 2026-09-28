@@ -355,9 +355,13 @@ note), место — файл и строка от корня репозито�
 `security-severity` не пишется: реестр не говорит, какая находка — уязвимость. Готовые задачи —
 `assets/github-actions-snippet.yml` (`check` обязательной проверкой и выгрузка через
 `github/codeql-action/upload-sarif`, закреплённый коммитом) и `assets/gitlab-ci-snippet.yml`
-(`check` задачей; SARIF GitLab показывает только на тарифе Ultimate — следующий шаг: выводить
-находки в обсуждения merge request через [reviewdog](https://github.com/reviewdog/reviewdog),
-который читает SARIF: `review.py sarif | reviewdog -f=sarif -reporter=gitlab-mr-discussion`).
+(`check` задачей). SARIF GitLab показывает только на тарифе Ultimate, поэтому на merge request
+образец для GitLab отдаёт тот же SARIF [reviewdog](https://github.com/reviewdog/reviewdog), и
+тот выводит открытые находки на строках, которые меняет merge request, обсуждениями — на любом
+тарифе (`reviewdog -f=sarif -reporter=gitlab-mr-discussion -filter-mode=added`, закреплённый
+выпуск, сверенный по SHA-256). В образце для GitHub то же — необязательной задачей,
+`-reporter=github-pr-review`: замечания ревью в самом pull request рядом с предупреждениями во
+вкладке Security или вместо них. Отложенную находку пропускают оба — её подавление принято.
 
 ## Сколько это стоит
 
@@ -404,7 +408,9 @@ note), место — файл и строка от корня репозито�
 - **итог, переживающий снос каталога** — `summary`, `summary --aged` и `summary --html` для
   того, кто ревью не видел;
 - **находки на платформе** — `sarif` для GitHub Code Scanning, готовые задачи CI для GitHub
-  Actions (`check` обязательной проверкой и выгрузка SARIF) и GitLab;
+  Actions (`check` обязательной проверкой и выгрузка SARIF) и GitLab, а через reviewdog —
+  находки в обсуждениях merge request GitLab (на любом тарифе) и в замечаниях ревью pull
+  request;
 - **объявленное частичное ревью** — `scope` в `blocks.json`, названный везде, где виден
   результат;
 - **сигнал петли** — круги починки останавливаются ради `decide` человека, когда начинают
@@ -441,7 +447,7 @@ note), место — файл и строка от корня репозито�
   гипотезами STRIDE; диаграмма переживает снос каталога ревью.
 - **Экономика токенов сверх замера:** TTL кэша, фильтр вывода.
 - Манифест прогона, двое ведут ревью одновременно, блок на два репозитория, перенос на другой
-  язык, находки в merge request GitLab через reviewdog.
+  язык.
 
 Чего не будем делать: превращать набор в ревьюер диффов, добавлять зависимости, строить
 веб-интерфейс и базу, автоматизировать поиск без приёмки человеком, награждать первенство.
@@ -648,7 +654,7 @@ note), место — файл и строка от корня репозито�
 python3 -m unittest discover -s tests
 ```
 
-537 сценариев, около четверти часа, никаких зависимостей кроме `git`. Каждый заводит свежий временный
+538 сценариев, около четверти часа, никаких зависимостей кроме `git`. Каждый заводит свежий временный
 репозиторий и зовёт инструмент **из папки скилла**, с рабочим каталогом в этом репозитории, —
 так, как его зовёт агент. Поведение проверяется через командную строку, а не импортом
 внутренностей. Отдельный класс проверяет сам скилл по спецификации: имя равно каталогу,
@@ -686,12 +692,12 @@ skills/finetooth/                СКИЛЛ — это и ставится аг�
                                   journal.example.ru.md, agent-banner.ru.md
   assets/makefile-snippet.mk      цели make
   assets/package-json-snippet.json то же для проекта на npm
-  assets/github-actions-snippet.yml CI для GitHub: `check` обязательной проверкой + выгрузка SARIF
-  assets/gitlab-ci-snippet.yml    CI для GitLab: `check` отдельной задачей
+  assets/github-actions-snippet.yml CI для GitHub: `check` обязательной проверкой + выгрузка SARIF + reviewdog
+  assets/gitlab-ci-snippet.yml    CI для GitLab: `check` отдельной задачей + находки в обсуждениях MR
   assets/guard-grep.sh            движок греп-ворот: разрешение по номеру строки
   assets/run-role.sh              гонит роль безголово через `claude -p` и пишет расход в
                                   дневник — единственная часть, уходящая с машины
-tests/                            тесты инструмента и формата скилла: 537 сценариев
+tests/                            тесты инструмента и формата скилла: 538 сценариев
   test_verdict_corpus.py          разборщик вердиктов на настоящих отчётах (tests/corpus/verdicts)
 examples/toy                      настоящее docs/review/ после одного блока, на игрушечном приложении
 .github/                          CI (тесты на 3.12 и 3.14, skills-ref validate, проверка
