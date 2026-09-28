@@ -12685,7 +12685,7 @@ class SummaryHtmlTest(unittest.TestCase):
         self.out = Path(tempfile.mkdtemp(prefix="finetooth-html-"))
         self.addCleanup(shutil.rmtree, self.out, True)
 
-    def _stand(self, lang: str = "ru", scope: dict | None = None) -> None:
+    def _stand(self, lang: str = "ru", scope: dict | None = None, runs: tuple | None = None) -> None:
         self.s.write("src/one.ts", "".join(f"строка {i}\n" for i in range(1, 13)))
         self.s.write("src/two.ts", "x\n")
         self.s.write("tests/guard.test.ts", "g\n")
@@ -12713,7 +12713,7 @@ class SummaryHtmlTest(unittest.TestCase):
                      ("H1-005", "duplicate", "--dup-of", "H1-003")):
             out = self.s.run("set-finding", *argv)
             self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        for role, text, _t, _c in self.RUNS:
+        for role, text, _t, _c in (self.RUNS if runs is None else runs):
             self.assertEqual(self.s.run("log", "H1", f"{role} — {text}").returncode, 0)
         self.s.run("log", "H2", "fix — решение без замера: блок отложен")
 
@@ -12835,6 +12835,73 @@ class SummaryHtmlTest(unittest.TestCase):
         self.assertEqual(got["block.H1.cost"], ["≥ $24.66"])
         self.assertIn("| **total** | 4 | 1 | ≥ 220 | ≥ $24.66 |", md)
         self.assertNotIn("| verify | 1 | 1 | 0 |", md)
+
+    @staticmethod
+    def _cost_bars(text: str) -> dict[str, dict] | None:
+        """График цены по ролям так, как его увидит человек: роль → ширина полосы (None, если
+        полосы нет), подсказка полосы и подпись у её конца. None — графика в файле нет.
+
+        У полосы и подписи нет метки `data-k`, и сверка чисел по меткам их не видит."""
+        class Chart(__import__("html.parser").parser.HTMLParser):
+            # Без своего `__init__`: состояние заводится ниже, после создания разборщика
+            # (конструктор по умолчанию и так сворачивает ссылки на символы).
+            found = inside = False
+            into = role = None
+
+            def handle_starttag(self, tag, attrs) -> None:
+                a = dict(attrs)
+                if tag == "svg" and a.get("aria-label") == "Measured cost by role":
+                    self.found = self.inside = True
+                elif self.inside and tag == "text":
+                    self.into = "label" if a.get("class") == "muted" else "role"
+                elif self.inside and tag == "rect":
+                    self.rows[self.role]["width"] = float(a["width"])
+                elif self.inside and tag == "title":
+                    self.into = "title"
+
+            def handle_endtag(self, tag) -> None:
+                if tag == "svg":
+                    self.inside = False
+                self.into = None
+
+            def handle_data(self, data) -> None:
+                if self.into == "role":
+                    self.role = data.strip()
+                    self.rows[self.role] = {"width": None, "title": None, "label": None}
+                elif self.into in ("title", "label"):
+                    self.rows[self.role][self.into] = data.strip()
+        p = Chart()
+        p.rows = {}
+        p.feed(text)
+        p.close()
+        return p.rows if p.found else None
+
+    def test_график_цены_не_рисует_неизвестное_нулём(self):
+        """R11-001: прогон, чья цена не пришла, в таблице — «unknown» и «≥», и это держат
+        метки `data-k`; но то же правило обязано дойти до графика цены, у которого меток нет.
+        Роль без единой известной цены — без полосы и с подписью «unknown», а не полоса
+        «$0.00»: такой график говорит «обрезанный прогон был бесплатным». Полосы известных
+        ролей — в пропорции их цен, а если не известна ни одна — графика нет вовсе, а не
+        ряд нулей. Мутация: график возвращён к виду до починки (ширина из `cost` без
+        `cost_known`, подпись и подсказка `money(cost)`, строка «ни одной известной — графика
+        нет» снята) — тест красный."""
+        self._stand(lang="en")
+        bars = self._cost_bars(self._html())
+        known = {role: round(sum(c for r, _x, _t, c in self.RUNS if r == role), 2)
+                 for role in ("hunter", "fix")}
+        self.assertEqual(set(bars), {"hunter", "verify", "fix"}, bars)
+        self.assertEqual(bars["verify"], {"width": None, "title": None, "label": "unknown"})
+        for role, cost in known.items():
+            with self.subTest(роль=role):
+                self.assertEqual(bars[role]["label"], f"${cost:.2f}")
+                self.assertEqual(bars[role]["title"], f"{role}: ${cost:.2f}")
+        self.assertAlmostEqual(bars["hunter"]["width"] / bars["fix"]["width"],
+                               known["hunter"] / known["fix"], places=2)
+        # Ни одной известной цены: таблица скажет «unknown», графику нечего показать.
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self._stand(lang="en", runs=tuple(r for r in self.RUNS if r[0] == "verify"))
+        self.assertIsNone(self._cost_bars(self._html()))
 
     def test_строка_статусов_блока_сходится_с_числом_его_находок(self):
         """Столбцы статусов в таблице блоков — все статусы, дубли тоже: сумма по строке равна
