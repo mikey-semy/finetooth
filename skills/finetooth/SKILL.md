@@ -12,9 +12,10 @@ metadata:
 # Whole-repository review
 
 A review of all the code, not of a diff: the repository is cut into blocks, every block goes
-through three roles, and completeness is proven by the coverage map — not one file without a
-block. Sessions change, context runs out, so **all state lives on disk** in the project's
-`docs/review/` and is read back by the tool. Keep nothing in the memory of the conversation.
+through four roles — hunter, verifier, fixer, fix reviewer — and completeness is proven by the
+coverage map: not one file without a block. Sessions change, context runs out, so **all state
+lives on disk** in the project's `docs/review/` and is read back by the tool. Keep nothing in
+the memory of the conversation.
 
 ## The tool
 
@@ -34,7 +35,7 @@ own. `make` is not one of them — it reads `--role` as its own option — so a 
 `make` leaves `cli` unset and gets hints with the real path to the tool
 ([assets/makefile-snippet.mk](assets/makefile-snippet.mk) has the targets for the everyday
 commands). Every refusal from the tool names the command that fixes it: read the refusal,
-do not guess.
+do not guess. Each command's own help lists its flags.
 
 ## Getting started
 
@@ -63,26 +64,29 @@ one of your own:
    sitting (the `readable_lines` ceiling, 6000 lines by default; `review sizes` shows who is
    above it). `set-status <ID> hunted` records the size the block was read at and
    refuses a block above the ceiling; one read within it that grows later is a `check`
-   warning, and the next review splits it first. A block that reading cannot prove (test quality, performance, scanners) gets
-   `"proof": "measured"`: the proof is the artifacts from the manifest, and the ceiling does
-   not apply. A criterion that enumerates across the program ("every place that changes
-   data") is a sweep, not reading: declare it in `sweep`, and the hunter enumerates by a
-   script at `docs/review/sweeps/<ID>.<ext>`, then reads the hits. A block without `paths` is a live system. Sample —
+   warning, and the next review splits it first. A block that reading cannot prove (test
+   quality, performance, scanners) gets `"proof": "measured"`: the proof is the artifacts
+   from the manifest, and the ceiling does not apply. A criterion that enumerates across the
+   program ("every place that changes data") is a sweep, not reading: declare it in `sweep`,
+   and the hunter enumerates by a script at `docs/review/sweeps/<ID>.<ext>`, then reads the
+   hits. A block without `paths` is a live system. Sample —
    [assets/blocks.example.json](assets/blocks.example.json).
-4. `review init`, then `review coverage` — work through the unowned files until there are
-   zero. **A human assigns a file to a block**: a file caught by a pattern match will be
-   counted as read without having been read.
    Only a part on purpose — a trial run, a release gate, one risky area: declare
-   `"scope": {"paths": ["src/api/**"], "reason": "why"}` in `blocks.json` instead of excluding the rest.
-5. `review coupling` — files that change together (from `git log`) but sit in different
+   `"scope": {"paths": ["src/api/**"], "reason": "why"}` in `blocks.json` instead of
+   excluding the rest; coverage is then counted inside the scope, and every report says the
+   review is partial.
+4. `review coupling` — files that change together (from `git log`) but sit in different
    blocks: the seams nobody reads. For each pair it names the `ref_paths` entry and the
    hypothesis to add to the manifest; several pairs between the same two blocks are a seam
    block waiting to be cut. Shared nodes (a schema, a dictionary) are listed apart.
-6. `review order` — the blocks in the order worth walking them: the cost of failure first
+5. `review order` — the blocks in the order worth walking them: the cost of failure first
    (`risk` on the block: `critical|high|medium|low`; without it the declared order speaks),
    change frequency from `git log` second. A report, not a rewrite: reorder `blocks.json`
    yourself if you agree. Both commands count what landed on the first-parent line, a merge
    as one change (its branch's diff), and print which history they read.
+6. `review init`, then `review coverage` — work through the unowned files until there are
+   zero. **A human assigns a file to a block**: a file caught by a pattern match will be
+   counted as read without having been read.
 
 ## Working through a block
 
@@ -94,39 +98,44 @@ one of your own:
    with the `paths` aliases of `tsconfig.json`/`jsconfig.json`, Python) or by joint changes
    (the thresholds of `coupling`): for each of the top ones write a hypothesis on what one side
    assumes about the other. The hunter prompt carries the same top pairs.
-2. **Hunter.** `review prompt <ID> --role hunter` prints a ready prompt — hand it to a subagent
-   **whole and unedited**. The agent writes the report and the draft findings to disk itself.
-   Then `review set-status <ID> hunted`. Headless, with the spend measured and written to the
-   journal: `assets/run-role.sh <ID> hunter` (the same for `verify`, `fix`, `fixreview`;
-   the turn cap is twice what the first measured run of the role needed).
-3. **Verifier** — a different agent: `review prompt <ID> --role verify`. Checks every finding
-   by execution, does its own pass over the most dangerous places, rewrites the findings file.
-   Rejected findings are not deleted — they stay with the reason. Then `review import <ID>`
-   (step 5) and `review set-status <ID> verified`: `verified` and `closed` are refused while the
-   draft holds rows the register does not, and `check` refuses the same for a block past
-   verification — unimported findings are invisible to the summary and the fix gate.
-4. **Acceptance.** Read both reports yourself and check them against the acceptance criterion.
+2. **Hunter.** `review set-status <ID> running` (the fix gate below may refuse), then
+   `review prompt <ID> --role hunter` prints a ready prompt — hand it to a subagent **whole
+   and unedited**. The agent writes the report and the draft findings to disk itself. Then
+   `review set-status <ID> hunted`.
+3. **Import.** `review import <ID>` takes the draft into the register, so the verifier gets
+   the hunter's findings as recorded ones. The plain import refuses when the file would erase
+   a finding already recorded against the block or overturn a recorded decision — then
+   `import <ID> --append` (or `--force`, deliberately).
+4. **Verifier** — a different agent: `review prompt <ID> --role verify`. Checks every finding
+   by execution, does its own pass over the most dangerous places. Its verdicts on recorded
+   findings come as a table with one `set-finding` command per change (`--severity`,
+   `--confidence`, `rejected --reason`, `duplicate --dup-of`) — run them. Rejected findings
+   are not deleted — they stay with the reason. The draft then holds only the verifier's new
+   findings: `review import <ID> --append`. Then `review set-status <ID> verified`:
+   `verified` and `closed` are refused while the draft holds rows the register does not, and
+   `check` refuses the same for a block past verification — unimported findings are
+   invisible to the summary and the fix gate. (Importing only after the verifier works too:
+   then its file is final, and a plain `import` takes it.)
+5. **Acceptance.** Read both reports yourself and check them against the acceptance criterion.
    `review hypotheses <ID>` shows which of the block's hypotheses got a verdict and where.
    Coverage incomplete — the block goes back for another pass, not to closure.
-5. **Register.** `review import <ID>`, `review findings`, `review check`. The plain import
-   refuses when the file would erase a finding already recorded against the block or overturn
-   a recorded decision — then `import <ID> --append` (or `--force`, deliberately). If the
-   hunter's findings were imported before the verifier ran, its verdicts on them come as a
-   table with one `set-finding` command per change (`--severity`, `--confidence`, `rejected
-   --reason`, `duplicate --dup-of`) — run them; the draft then holds only new findings.
+   `review findings` regenerates `findings.md`, `review check` must be green.
    A class with a third instance is a warning until the fix phase (`root/guard-due`): the
    guard is the fixer's, and `check` refuses once an instance is fixed or its block is `fixing`.
 6. **Journal.** `review log <ID> "what was decided and why"` — right away: this cannot be recovered.
-7. **Fixing** — yet another agent: `review prompt <ID> --role fix [--round N]`. Cut assignments
-   by related areas, not one finding at a time. A repeat round needs `--round N`: without it
-   the second fixer writes over the first one's report, and the fix reviewer of round N is
-   pointed at `<ID>-<slug>.fix-N.md`, which nothing would have written. Run the gates and the
-   revert check yourself after the fixer. Findings are moved with
-   `review set-finding <ID…> fixed --commit <sha>` (several ids at once); a defect class with
-   a third instance is closed by a guard (`--rule <path to the test or rule>`), not by a list
-   of fixes. The guard is recorded only on the findings named in the command — name the
-   instances it goes red on; `review roots` lists the classes, their instances and which
-   guard each instance carries, and flags a root whose instances disagree.
+7. **Fixing** — yet another agent: `review prompt <ID> --role fix [--round N]`. The prompt
+   hands the fixer at most three findings a run, one commit per finding, under the project's
+   own commit rules (DCO and the like, found in its files). Cut assignments by related areas,
+   not one finding at a time. A repeat round needs `--round N`: without it the second fixer
+   writes over the first one's report, and the fix reviewer of round N is pointed at
+   `<ID>-<slug>.fix-N.md`, which nothing would have written. Run the gates and the revert
+   check yourself after the fixer. Findings are moved with
+   `review set-finding <ID…> fixed --commit <sha>` (several ids at once; `--fixed-in <path>`
+   when the fix is in another file); a defect class with a third instance is closed by a
+   guard (`--rule <path to the test or rule>`), not by a list of fixes. The guard is recorded
+   only on the findings named in the command — name the instances it goes red on,
+   `--clear-rule` takes it off one it does not; `review roots` lists the classes, their
+   instances and which guard each instance carries, and flags a root whose instances disagree.
    Deferring is allowed only with a reason (`deferred --reason`), and a deferred finding
    leaves the review as an accepted risk, published in the summary with that reason.
    **The fix gate:** `review set-status <next ID> running`
@@ -153,6 +162,14 @@ one of your own:
    Give each round its own `--diff` range and the signal means "this round".
 9. Only after that `review set-status <ID> closed`: without a fix reviewer's report a block
    with fixes cannot be closed.
+
+**Headless, with the spend measured:** `assets/run-role.sh <ID> <role>` (`hunter`, `verify`,
+`fix`, `fixreview`) runs the role through `claude -p` and writes the spend to the journal; the
+turn cap is twice what the first measured run of the role needed (`ROLE_MAX_TURNS`
+overrides it). Its per-role tool lists pre-approve, they do not restrict — what a run must not
+touch goes into `ROLE_DENY`, which the script hands to `claude -p` as its deny list. It will not start `fix` or
+`fixreview` on a dirty tree (`ALLOW_DIRTY=1` to insist), and the agent's PID sits in
+`<stream>.pid` while it runs, so a stop reaches it.
 
 ## Rules not to break
 
@@ -182,9 +199,11 @@ without a fix review; a block and a finding closed on a different version of the
 older than the fingerprints; a finding's fingerprint is the lines around its line, so only an
 edit there fails; an edit above it that only moved it is not reported — findings.md, SARIF,
 the summary and the prompts show the line it sits on now, `review restamp <ID>` records it,
-`--line <N>` re-anchors a defect that now sits elsewhere); a finding without a rejection reason, a fix commit that does not
-touch the file, a duplicate of a nonexistent finding, a guard at a nonexistent path; a tree
-more than a week behind the server; the loop signal without a recorded decision (a warning).
+`--line <N>` re-anchors a defect that now sits elsewhere); a finding without a rejection
+reason, a fix commit that does not touch the file, a duplicate of a nonexistent finding, a
+guard at a nonexistent path; a draft left outside the register; a scope without a reason; a
+tree more than a week behind the server; the loop signal without a recorded decision (a
+warning).
 
 ## In CI and on the platform
 
@@ -203,11 +222,11 @@ All blocks `closed`, no open findings, every rejected one has a reason and every
 one — a deferral is an accepted risk that leaves the review with its reason, not an
 unfinished fix. Then
 `review summary` writes the one file that outlives the directory (`docs/review-summary.md`
-by default): the date and the base commit, the blocks and their acceptance criteria, the
-rejected findings with reasons, the accepted risks, what closed each defect class, what the
-role runs cost. `review summary --html` writes the same summary as one self-contained HTML
-file (`docs/review-summary.html`; tables, SVG charts, no network) for a reader who never saw
-the review. Only then
+by default, `--out` elsewhere): the date and the base commit, the blocks and their acceptance
+criteria, the rejected findings with reasons, the accepted risks, what closed each defect
+class, what the role runs cost. `review summary --html` writes the same summary as one
+self-contained HTML file (`docs/review-summary.html`; tables, SVG charts, no network) for a
+reader who never saw the review. Only then
 the `docs/review/` directory **is deleted whole in one change**, and what lasts moves out:
 rules into the root instructions file, decisions into ADRs, checks into tests. Later,
 `review summary --aged docs/review-summary.md` says how far each block has drifted since the

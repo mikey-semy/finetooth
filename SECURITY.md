@@ -18,7 +18,8 @@ read the prompt before handing it to an agent.
 - **`review.py` sends nothing over the network** and runs no command but `git`.
 - **`assets/run-role.sh` is the exception, and it is opt-in.** It is a convenience runner,
   not part of the tool: it writes the assembled prompt and the run's whole event stream to
-  `$TMPDIR/finetooth-runs` (they are the measurement, and they are kept), and it **sends the
+  `$TMPDIR/finetooth-runs` (they are the measurement, and they are kept; while the agent runs,
+  its PID sits there too, in a `.pid` file next to the stream), and it **sends the
   prompt to the model over the network** by piping it into `claude -p`. The prompt carries
   the block's files. If that is not acceptable in your environment, do not run the script —
   `review.py prompt` prints the same prompt and sends nothing.

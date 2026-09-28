@@ -26,7 +26,10 @@ The tool is a single file on the standard library, no dependencies. The skill li
 the repository under review — in its `.claude/skills/`, in the home directory, anywhere — so
 everything the tool can do must work in someone else's tree, with someone else's branch names
 and directory layout, and the project root is taken from the working directory, not from the
-file's location.
+file's location. The tool writes under `docs/review/` only, apart from the files a user asks
+for by name — `summary` (Markdown or `--html`, `--out` anywhere) and `sarif --out`:
+`SECURITY.md` lists them, `WriteBoundaryTest` holds the list, and a command that writes
+anywhere else is a vulnerability by that document.
 
 The design and intent are in [`README.md`](README.md), the check against world practice in
 `comparison-with-practice` in the knowledge base (private repository `finetooth-hq`), the history in
@@ -91,5 +94,6 @@ skills-ref validate skills/finetooth
   pinned to the repository together with the state, not updated underneath it.
 - **Configuration beyond `blocks.json`.** Everything the tool needs to know lies in the block
   definitions; a second source of truth will drift from the first.
-- **A history of runs.** State is "where we are now", not a journal; what happened is told by
-  `git log` on the review directory.
+- **A database of runs.** State is "where we are now"; what happened is told by the journal
+  (`docs/review/journal.md`: a line per decision and per measured role run) and by `git log`
+  on the review directory.

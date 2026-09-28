@@ -86,7 +86,8 @@ and names the way out if a commit is missing the line. To run the same check loc
 
 ## What we will not accept
 
-- Dependencies, a web interface, a database — see "What not to do" in the roadmap in the knowledge base (private repository `finetooth-hq`).
+- Dependencies, a web interface, a database — see "What we will not do" under "Where it is
+  going" in [`README.md`](README.md); the reasons are in the maintainer's knowledge base.
 - Turning the kit into a diff reviewer: that is a different class of tools, and it is taken.
 - Changes without a test and a CHANGELOG entry.
 
