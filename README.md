@@ -367,9 +367,14 @@ its message, because GitHub does not read suppressions. `security-severity` is n
 the register does not say which finding is a vulnerability. The ready jobs are
 `assets/github-actions-snippet.yml` (`check` as a required check plus the upload through
 `github/codeql-action/upload-sarif`, pinned to a commit) and `assets/gitlab-ci-snippet.yml`
-(`check` as a job; GitLab shows SARIF on the Ultimate tier only — the next step is to post the
-findings into merge request discussions through [reviewdog](https://github.com/reviewdog/reviewdog),
-which reads SARIF: `review.py sarif | reviewdog -f=sarif -reporter=gitlab-mr-discussion`).
+(`check` as a job). GitLab shows SARIF on the Ultimate tier only, so on a merge request the
+GitLab snippet hands the same SARIF to [reviewdog](https://github.com/reviewdog/reviewdog),
+which posts the open findings on the lines the merge request changes as discussions — on any
+tier (`reviewdog -f=sarif -reporter=gitlab-mr-discussion -filter-mode=added`, a pinned release
+checked by its SHA-256). The GitHub snippet has the same as an optional job,
+`-reporter=github-pr-review`: review comments in the pull request next to, or instead of,
+alerts in the Security tab. A deferred finding is skipped by both — its suppression is
+accepted.
 
 ## What it costs
 
@@ -417,7 +422,9 @@ maintainer's knowledge base; this is the short version.
 - **the summary that outlives the review directory** — `summary`, `summary --aged`, and
   `summary --html` for a reader who never saw the review;
 - **findings on the platform** — `sarif` for GitHub code scanning, with ready CI jobs for
-  GitHub Actions (`check` as a required check plus the SARIF upload) and GitLab;
+  GitHub Actions (`check` as a required check plus the SARIF upload) and GitLab, and the
+  findings in GitLab merge request discussions (any tier) and in pull request review comments
+  through reviewdog;
 - **a declared partial review** — `scope` in `blocks.json`, said everywhere the result is;
 - **the loop signal** — fix rounds stop for a human's `decide` when they start fixing their
   own last fix;
@@ -453,7 +460,7 @@ maintainer's knowledge base; this is the short version.
   hypotheses; the diagram outlives the review directory.
 - **Token economy beyond the measurement:** cache TTL, output filtering.
 - A run manifest, two reviewers at once, a block spanning two repositories, portability to
-  another language, findings in GitLab merge requests through reviewdog.
+  another language.
 
 What we will not do: turn the kit into a diff reviewer, add dependencies, build a web UI or a
 database, automate finding without a human accepting each one, reward being first. Each has
@@ -674,7 +681,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-537 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
+538 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -712,12 +719,12 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
                                   journal.example.ru.md, agent-banner.ru.md
   assets/makefile-snippet.mk      make targets
   assets/package-json-snippet.json the same for an npm project
-  assets/github-actions-snippet.yml CI for GitHub: `check` as a required check + SARIF upload
-  assets/gitlab-ci-snippet.yml    CI for GitLab: `check` as a job
+  assets/github-actions-snippet.yml CI for GitHub: `check` as a required check + SARIF upload + reviewdog
+  assets/gitlab-ci-snippet.yml    CI for GitLab: `check` as a job + findings in MR discussions
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 537 scenarios
+tests/                            tests of the tool and the skill format: 538 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO

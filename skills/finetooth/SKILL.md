@@ -226,8 +226,10 @@ under an open finding, or leaves the register contradicting the tree, stays red.
 it instead) for GitHub code scanning — the findings show in the Security tab and on the
 lines of a pull request; a deferred one is marked as an accepted risk. Ready jobs:
 [assets/github-actions-snippet.yml](assets/github-actions-snippet.yml) (`check` plus the
-SARIF upload) and [assets/gitlab-ci-snippet.yml](assets/gitlab-ci-snippet.yml) (`check`;
-it says what GitLab shows and on which tier).
+SARIF upload, and optionally the findings as pull request review comments through
+reviewdog) and [assets/gitlab-ci-snippet.yml](assets/gitlab-ci-snippet.yml) (`check`, and
+the findings as merge request discussions through reviewdog on any tier — GitLab shows SARIF
+on Ultimate only).
 
 ## When the review is finished
 
