@@ -59,7 +59,9 @@ one of your own:
    cross-cutting first, domain next, live-system last. `review inventory` prints the
    repository tree with sizes and ownership — cut by it. A block is what can be read in one
    sitting (the `readable_lines` ceiling, 6000 lines by default; `review sizes` shows who is
-   above it). A block that reading cannot prove (test quality, performance, scanners) gets
+   above it). `set-status <ID> hunted` records the size the block was read at and
+   refuses a block above the ceiling; one read within it that grows later is a `check`
+   warning, and the next review splits it first. A block that reading cannot prove (test quality, performance, scanners) gets
    `"proof": "measured"`: the proof is the artifacts from the manifest, and the ceiling does
    not apply. A criterion that enumerates across the program ("every place that changes
    data") is a sweep, not reading: declare it in `sweep`, and the hunter enumerates by a
