@@ -6316,7 +6316,8 @@ class GateCoverageTest(unittest.TestCase):
         на обоих путях."""
         self._green()
         draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
-        for value, said, refusal in ((None, "`file` is empty", "field file is empty"),
+        # Пробный прогон печатает сообщения самого `check` (одни ворота на оба пути).
+        for value, said, refusal in ((None, "field file is empty", "field file is empty"),
                                      (12, "file=12 is not a path", "file=12 is not a path")):
             with self.subTest(file=value):
                 row = {"block": "H1", "severity": "low", "confidence": "confirmed",
@@ -13015,8 +13016,8 @@ class FieldRun46Test(unittest.TestCase):
         self.assertIn("4 problem(s)", out.stdout, out.stdout)
         self.assertIn("line 2: claim is 221 characters", out.stdout)
         self.assertIn("line 3: scenario is 701 characters", out.stdout)
-        self.assertIn("line 4: rejected with no reason", out.stdout)
-        self.assertIn("line 5: severity='огромная'", out.stdout)
+        self.assertIn("line 4: rejected, but the reject reason is not recorded", out.stdout)
+        self.assertIn("line 5: severity=огромная is not in the vocabulary (critical, high", out.stdout)
         self.assertNotIn("line 1", out.stdout, "верная строка названа плохой")
         self.assertEqual(register.read_bytes() if register.exists() else None, before, "реестр записан")
         self.assertEqual(draft.read_text(encoding="utf-8"), text, "черновик переписан")
@@ -13068,6 +13069,81 @@ class FieldRun46Test(unittest.TestCase):
                       self.s.run("import", "H1", "--dry-run").stdout)
         draft.write_text(json.dumps(good, ensure_ascii=False) + "\n", encoding="utf-8")
         self.assertEqual(self.s.run("import", "H1", "--dry-run").returncode, 0)
+
+    def test_import_dry_run_спрашивает_строки_такими_какими_их_запишет_import(self):
+        """Пробный прогон спрашивал строку такой, какой её написали, а `import` дописывает
+        умолчания и превращает `confidence: rejected` в статус: `"confidence": null`,
+        отвергнутая без причины, отложенная без причины, исправленная без коммита, два
+        одинаковых номера — всё это пробный прогон называл чистым, а `import` или `check`
+        отказывали минутой позже (ревью кандидата 0.8.0). Теперь строки идут через тот же
+        план, что пишет `import`, и спрашиваются воротами самого `check`."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        register = self.s.root / "docs/review/findings.jsonl"
+        good = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"}
+        no_status = {k: v for k, v in good.items() if k != "status"}
+        # (строки черновика, ключ импорта, что называет пробный прогон и затем check)
+        cases = {
+            "confidence null": ([dict(good, confidence=None)], (), "field confidence is empty"),
+            "confidence пустая": ([dict(good, confidence="")], (), "field confidence is empty"),
+            "status null": ([dict(good, status=None)], (), "field status is empty"),
+            "status пустой": ([dict(good, status="")], (), "field status is empty"),
+            "block null": ([dict(good, block=None)], (), "field block is empty"),
+            "отвергнута уверенностью, открыта": (
+                [dict(good, confidence="rejected")], (),
+                "rejected, but the reject reason is not recorded"),
+            "отвергнута уверенностью, без статуса": (
+                [dict(no_status, confidence="rejected")], (),
+                "rejected, but the reject reason is not recorded"),
+            "отвергнута уверенностью, дозапись": (
+                [dict(good, confidence="rejected")], ("--append",),
+                "rejected by the verifier, but still open"),
+            "отложена без причины": ([dict(good, status="deferred")], (),
+                                     "deferred without a reason"),
+            "исправлена без коммита": ([dict(good, status="fixed")], (),
+                                       "marked fixed, but no fix commit is given"),
+        }
+        for why, (rows, flags, said) in cases.items():
+            with self.subTest(случай=why):
+                register.write_text("", encoding="utf-8")
+                draft.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                                 encoding="utf-8")
+                out = self.s.run("import", "H1", "--dry-run", *flags)
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn(f"line 1: {said}", out.stdout)
+                self.assertNotIn("nothing `import` or `check` would refuse", out.stdout)
+                # Обещание в обе стороны: то же самое `check` отказывает после импорта.
+                self.assertEqual(self.s.run("import", "H1", *flags).returncode, 0)
+                self.s.run("findings")
+                self.assertIn(said, refused(self.s.run("check")))
+        with self.subTest(случай="два одинаковых номера"):
+            register.write_text("", encoding="utf-8")
+            draft.write_text("".join(json.dumps(dict(good, id="H1-001"), ensure_ascii=False) + "\n"
+                                     for _ in range(2)), encoding="utf-8")
+            out = self.s.run("import", "H1", "--dry-run")
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("two rows carry the id H1-001", out.stdout)
+            real = self.s.run("import", "H1")
+            self.assertEqual(real.returncode, 2, real.stdout + real.stderr)
+            self.assertIn("two rows carry the id H1-001", real.stderr)
+        # Обратная сторона: заменит ли простой импорт записанное — решение ведущего, не
+        # черновика. Оно названо заметкой, строки спрошены, чистый черновик проходит.
+        with self.subTest(случай="в реестре уже есть строки блока"):
+            register.write_text("", encoding="utf-8")
+            draft.write_text(json.dumps(good, ensure_ascii=False) + "\n", encoding="utf-8")
+            self.assertEqual(self.s.run("import", "H1").returncode, 0)
+            draft.write_text(json.dumps(dict(good, claim="другой"), ensure_ascii=False) + "\n",
+                             encoding="utf-8")
+            out = self.s.run("import", "H1", "--dry-run")
+            self.assertEqual(out.returncode, 0, out.stdout)
+            self.assertIn("note, the lead's call at import time", out.stdout)
+            self.assertIn("nothing `import` or `check` would refuse in the rows", out.stdout)
+            draft.write_text(json.dumps(dict(good, claim="другой", status="fixed"),
+                                        ensure_ascii=False) + "\n", encoding="utf-8")
+            out = self.s.run("import", "H1", "--dry-run")
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("line 1: marked fixed, but no fix commit is given", out.stdout)
 
     # ------------------------------------------------------ файлы итога — не «код»
 
