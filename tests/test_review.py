@@ -2643,6 +2643,35 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertIn("grew past the ceiling", warned(out))
 
+    def test_повторный_статус_записывает_размер_но_не_отпечаток(self):
+        """R10-001: `set-status <ID> <тот же статус>` — запись размера для ревью, начатого до
+        неё, а не новое ревью. Раньше повтор `closed`/`verified` молча перебирал отпечаток
+        блока на сегодняшнем коде: отказ «файлы изменились после ревью» пропадал без
+        `restamp`, без `restamped_at` и без строки в журнале — закрытый блок начинал
+        заверять другой код."""
+        for status in ("verified", "closed"):
+            with self.subTest(статус=status):
+                self.s = Stand()
+                self.addCleanup(self.s.cleanup)
+                self._read_block(100)
+                self.s.run("set-status", "H1", "hunted")
+                self.s.run("set-status", "H1", status)
+                self._forget_read_size()
+                self._grow(90)
+                before = self._state_block()
+                self.assertIn("block files changed after the review",
+                              refused(self.s.run("check")))
+                out = self.s.run("set-status", "H1", status)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                after = self._state_block()
+                self.assertEqual(after.get("read_lines"), 90, "размер обязан записаться")
+                for key in ("reviewed_sha", "refs_sha", "hypotheses_sha"):
+                    self.assertEqual(after.get(key), before.get(key),
+                                     f"{key} перебран повтором статуса")
+                self.assertNotIn("restamped_at", after)
+                self.assertIn("block files changed after the review",
+                              refused(self.s.run("check")))
+
     def test_новое_чтение_перезаписывает_размер(self):
         """Возврат в работу и новая охота — новое чтение: размер берётся заново, и
         блок, выросший за потолок, обязан сначала разрезаться."""
@@ -6279,6 +6308,32 @@ class GateCoverageTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("is not a number", refused(out), out.stdout)
 
+    def test_файл_находки_не_строкой(self):
+        """R13-002: `"file": null` и `"file": 12` — обычные описки рукописного черновика.
+        `f.get("file", "")` отдаёт умолчание только на ОТСУТСТВУЮЩИЙ ключ, и оба значения
+        доходили до пути: трейсбек из `import --dry-run` и из `check`, выход 1 без слова —
+        а сообщение, которое починило бы черновик, так и не печаталось. Отказ называет поле
+        на обоих путях."""
+        self._green()
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        for value, said, refusal in ((None, "`file` is empty", "field file is empty"),
+                                     (12, "file=12 is not a path", "file=12 is not a path")):
+            with self.subTest(file=value):
+                row = {"block": "H1", "severity": "low", "confidence": "confirmed",
+                       "status": "open", "file": value, "line": 2, "claim": "дефект",
+                       "scenario": "сценарий"}
+                draft.write_text(json.dumps(row) + "\n", encoding="utf-8")
+                out = self.s.run("import", "H1", "--dry-run")
+                self.assertNotIn("Traceback", out.stderr, out.stderr)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(f"line 1: {said}", out.stdout)
+                draft.unlink()
+                self._register(file=value, line=2)
+                out = self.s.run("check")
+                self.assertNotIn("Traceback", out.stderr, out.stderr)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(refusal, refused(out), out.stdout)
+
     def test_число_в_пределах_файла_по_прежнему_проходит(self):
         self._green()
         self._register(line=1)
@@ -6615,6 +6670,7 @@ class GateRegistryTest(unittest.TestCase):
         ("finding/severity-unknown",            "test_severity_вне_словаря"),
         ("finding/confidence-unknown",          "test_confidence_вне_словаря"),
         ("finding/status-unknown",              "test_статус_находки_вне_словаря"),
+        ("finding/file-not-a-string",           "test_файл_находки_не_строкой"),
         ("finding/file-missing",                "test_починенная_находка_на_удалённом_файле_не_роняет_проверку"),
         ("finding/deferred-without-reason",     "test_отложенная_находка_требует_причину"),
         ("finding/external-fix-malformed",      "test_внешний_коммит_починки_написан_не_по_форме"),
@@ -7998,6 +8054,27 @@ jobs:
             missing = [c for c in commands if not re.search(rf"(?<![\w-]){re.escape(c)}(?![\w-])", text)]
             with self.subTest(файл=rel):
                 self.assertEqual(missing, [], f"{rel} не называет команды: {missing}")
+
+    def test_поле_размера_при_чтении_названо_в_ломающем_своего_выпуска(self):
+        """R10-002: выпуск, заведший `read_lines` и отказ `set-status` блоку выше потолка,
+        рассказал о них только в «Изменено», а вступление журнала велит идущему ревью читать
+        сперва «Ломающее». Выпуск, где поле появилось впервые (самый старый раздел, который
+        его называет), обязан назвать в «Ломающем» и поле, и команду, которой ревью его
+        получает, и `sizes`, которым ищут блок под отказ, — на обоих языках."""
+        field = re.search(r'^READ_LINES_KEY = "(\w+)"$', TOOL.read_text(encoding="utf-8"), re.M)
+        self.assertTrue(field, "в инструменте нет READ_LINES_KEY — правило смотрит не туда")
+        for rel, heading in (("CHANGELOG.md", "Breaking"), ("CHANGELOG.ru.md", "Ломающее")):
+            text = (KIT / rel).read_text(encoding="utf-8")
+            versions = re.split(r"^## \[", text, flags=re.M)[1:]
+            born = [v for v in versions if f"`{field.group(1)}`" in v]
+            with self.subTest(файл=rel):
+                self.assertTrue(born, f"{rel} не называет `{field.group(1)}` ни в одном выпуске")
+                part = re.search(rf"^### {heading}\b.*?(?=^### |\Z)", born[-1], re.M | re.S)
+                self.assertTrue(part, f"{rel}: у выпуска, где появился `{field.group(1)}`, нет "
+                                      f"раздела «{heading}»")
+                for said in (f"`{field.group(1)}`", "`set-status <ID> ", "`sizes`"):
+                    self.assertIn(said, part.group(0),
+                                  f"{rel}: «{heading}» выпуска с `{field.group(1)}` не называет {said}")
 
     def test_у_каждой_версии_в_истории_есть_ссылка_на_сравнение(self):
         """RELEASING, ворота 4: ссылка на сравнение ставится до тега. У 0.5.1, 0.5.0 и
