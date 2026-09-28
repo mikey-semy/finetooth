@@ -2489,6 +2489,190 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("check")
         self.assertIn("cannot be read in one session", refused(out), out.stdout)
 
+    HUNTER_STUB = "# охотник\n## Гипотезы\n- H1.1 — проверена: да\n## Ограничения охвата\nнет\n"
+
+    def _read_block(self, lines: int) -> None:
+        """Стенд, на котором `check` иначе зелёный: блок с отчётами обеих ролей и картой
+        покрытия, потолок 100 строк, в блоке `lines` строк. Статус ставит тест."""
+        self.s.write("src/big.ts", "x\n" * lines)
+        self.s.blocks(paths=["src/big.ts"], readable_lines=100)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter=self.HUNTER_STUB, verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+
+    def _grow(self, lines: int) -> None:
+        """Код блока вырос после ревью — коммитом, как растёт в жизни."""
+        self.s.write("src/big.ts", "x\n" * lines)
+        self.s.commit("рост")
+        self.s.run("coverage")
+
+    def _state_block(self) -> dict:
+        return json.loads((self.s.root / "docs/review/state.json").read_text(
+            encoding="utf-8"))["blocks"]["H1"]
+
+    def _forget_read_size(self) -> None:
+        """Ревью, начатое до записи размера при чтении: поля в состоянии нет, а блок
+        закрыт давно — дата, которую запись размера обязана сохранить."""
+        path = self.s.root / "docs/review/state.json"
+        st = json.loads(path.read_text(encoding="utf-8"))
+        st["blocks"]["H1"].pop("read_lines", None)
+        if st["blocks"]["H1"].get("finished"):
+            st["blocks"]["H1"]["finished"] = self.OLD_STAMP
+        path.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
+    def test_непрочитанный_блок_выше_потолка_роняет_проверку_в_любом_статусе_до_охоты(self):
+        """Резать блок надо ДО чтения: `running` и `blocked` — тоже ещё не прочитанный блок
+        (отчёта охотника за ними нет), и отказ на них тот же, что на `todo`."""
+        self._read_block(150)
+        for status in ("running", "blocked"):
+            with self.subTest(статус=status):
+                self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
+                out = self.s.run("check")
+                self.assertIn("cannot be read in one session", refused(out), out.stdout)
+                self.assertNotIn("grew past the ceiling", out.stdout)
+
+    def test_блок_выше_потолка_не_переходит_в_прочитанный_статус(self):
+        """Лазейка из замечания Codex к #57: `set-status hunted` на блоке выше потолка
+        превращал отказ в предупреждение, ничего не разрезав. Переход в прочитанный статус
+        и есть чтение — блок обязан влезать в потолок, иначе отказ, и статус не меняется."""
+        self._read_block(150)
+        for status in ("hunted", "verified", "closed"):
+            with self.subTest(статус=status):
+                out = self.s.run("set-status", "H1", status)
+                self.assertNotEqual(out.returncode, 0, out.stdout)
+                self.assertIn("150 lines against a ceiling of 100", out.stderr)
+                self.assertIn(" sizes`", out.stderr, "отказ обязан сказать, что делать")
+                self.assertEqual(self._state_block()["status"], "todo")
+        # Правило 8: механизм сменился — шаблон говорит. Охотнику, получившему блок выше
+        # порога, промпт велит не только назвать непрочитанное, но и сказать, что резать:
+        # прочитанным такой блок не примут.
+        for lang, said in (("ru", "`set-status` откажет"), ("en", "`set-status` refuses it")):
+            with self.subTest(язык=lang):
+                self.s.blocks(paths=["src/big.ts"], readable_lines=100, lang=lang)
+                self.assertIn(said, self.s.run("prompt", "H1", "--role", "hunter").stdout)
+
+    def test_блок_выросший_за_потолок_после_охоты_предупреждает(self):
+        """Потолок — обещание о чтении, которое ещё впереди. Блок, прочитанный В ПРЕДЕЛАХ
+        потолка (размер записан при чтении), отчёт отвечает за объём того дня, рост кода
+        после ревью ловит отпечаток блока, а отказ ронял `check` на закрытом блоке за код,
+        добавленный позже: каждый PR в review.py краснел. Теперь это долг следующего ревью
+        — вслух, с командой, и прогон зелёный."""
+        self._read_block(100)
+        self.assertEqual(self.s.run("set-status", "H1", "hunted").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 100)
+        self._grow(150)
+        for status in ("hunted", "verified", "triaged", "fixing", "closed"):
+            with self.subTest(статус=status):
+                self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
+                self.assertEqual(self._state_block().get("read_lines"), 100,
+                                 "переход между прочитанными статусами — не новое чтение")
+                out = self.s.run("check")
+                self.assertEqual(out.returncode, 0, out.stdout)
+                said = warned(out)
+                self.assertIn("150 lines — grew past the ceiling (100) after the review", said,
+                              out.stdout)
+                self.assertIn(f"(read at 100, status {status})", said)
+                self.assertIn(" sizes`", said, "предупреждение обязано назвать команду")
+                self.assertNotIn("cannot be read in one session", out.stdout)
+
+    def test_прочитанный_блок_без_записи_размера_выше_потолка_роняет_проверку(self):
+        """Старое ревью: размер при чтении не записан. Статус не доказывает, что блок читали
+        в пределах потолка, — отказ, как у непрочитанного, с причиной; и задним числом
+        записать размер переходом статуса нельзя, пока блок выше потолка."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        self._forget_read_size()
+        self._grow(150)
+        out = self.s.run("check")
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
+        self.assertIn("size at reading was never recorded", out.stdout)
+        self.assertNotIn("grew past the ceiling", out.stdout)
+        again = self.s.run("set-status", "H1", "closed")
+        self.assertNotEqual(again.returncode, 0, again.stdout)
+        self.assertIn("was never recorded", again.stderr)
+        self.assertNotIn("read_lines", self._state_block())
+
+    def test_размер_при_чтении_выше_нынешнего_потолка_не_прощает_блок(self):
+        """Запись размера — не пропуск сама по себе: проект снизил потолок (число — замер
+        на своём языке), и блок, прочитанный на 100 строках, при потолке 90 прочитан выше
+        него. Такой блок не «вырос после ревью» — его отчёт на непосильном объёме."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.blocks(paths=["src/big.ts"], readable_lines=90)
+        self.s.commit("потолок проекта ниже")
+        out = self.s.run("check")
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
+        self.assertIn("the block was read at 100 lines", out.stdout)
+        self.assertNotIn("grew past the ceiling", out.stdout)
+
+    def test_размер_старого_блока_записывается_переходом_пока_он_в_пределах_потолка(self):
+        """Честный путь для ревью без записи: пока блок влезает в потолок, `set-status` в
+        его же прочитанный статус записывает размер — и позже рост даёт предупреждение."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        self._forget_read_size()
+        finished = self._state_block()["finished"]
+        self.assertEqual(self.s.run("set-status", "H1", "closed").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 100)
+        self.assertEqual(self._state_block()["finished"], finished,
+                         "запись размера не переписывает дату закрытия")
+        self._grow(150)
+        self.s.run("restamp", "H1")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("grew past the ceiling", warned(out))
+
+    def test_новое_чтение_перезаписывает_размер(self):
+        """Возврат в работу и новая охота — новое чтение: размер берётся заново, и
+        блок, выросший за потолок, обязан сначала разрезаться."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self._grow(150)
+        self.s.run("set-status", "H1", "running")
+        out = self.s.run("set-status", "H1", "hunted")
+        self.assertNotEqual(out.returncode, 0, out.stdout)
+        self._grow(80)
+        self.assertEqual(self.s.run("set-status", "H1", "hunted").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 80)
+
+    def test_sizes_и_status_различают_непрочитанный_и_выросший_блок(self):
+        """`sizes` и `status` говорят то же, что `check`: до охоты — резать сейчас (и
+        `sizes` краснеет), после чтения в пределах потолка — долг следующего ревью (и
+        `sizes` зелёный)."""
+        self._read_block(150)
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("above the ceiling by 50 — split by subject", out.stdout)
+        self.assertIn("above the ceiling by 50", self.s.run("status").stdout)
+        self._grow(100)
+        self.s.run("set-status", "H1", "hunted")
+        self._grow(150)
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("grew past the ceiling by 50 after the review", out.stdout)
+        self.assertIn("blocks grown past the ceiling after their review: 1", out.stdout)
+        self.assertNotIn("split by subject", out.stdout)
+        self.assertIn("grew past the ceiling by 50", self.s.run("status").stdout)
+        self._forget_read_size()
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 1, "без записи размера блок не прощён и в sizes")
+        self.assertIn("split by subject", out.stdout)
+
+    def test_прочитанный_блок_в_пределах_потолка_молчит(self):
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        for said in (out.stdout, self.s.run("status").stdout, self.s.run("sizes").stdout):
+            self.assertNotIn("grew past", said)
+            self.assertNotIn("above the ceiling", said)
+            self.assertNotIn("cannot be read", said)
+
     def test_порог_размера_не_считает_исключённое(self):
         """Исключённый кодоген не должен требовать резать блок."""
         self.s.write("src/one.ts", "a\n")
@@ -2984,8 +3168,13 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertIn(named, self.COVERAGE_SECTIONS,
                       f"предупреждение не называет ни одного раздела отчёта: {warning}")
         self.s.reports(hunter=self._hunter_naming_unread_in(named), verify=FULL_VERIFY)
-        self.s.run("set-status", "H1", "hunted")
-        self.s.run("set-status", "H1", "verified")
+        # Предупреждение взято из промпта; дальше тест о воротах отчёта, а не о пороге:
+        # блок выше порога `set-status hunted` не пропустит (#57), и стенд, где статус не
+        # сменился, проверял бы ворота, которые на `todo` не работают вовсе.
+        self.s.write("src/one.ts", "a\n" * 50)
+        self.s.commit("блок в пределах порога")
+        for status in ("hunted", "verified"):
+            self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
         self.s.commit("отчёты")
         out = self.s.run("check")
         self.assertNotIn(self.LIMITS_REFUSAL, refused(out),
@@ -3035,8 +3224,11 @@ class ParallelKitLessonsTest(unittest.TestCase):
                               f"- src/one.ts\n")
                 s.reports(hunter=hunter, verify=paths_only.replace(
                     f"## {section}\n", f"## {section}\n{said[-1]}.\n"))
-                s.run("set-status", "H1", "hunted")
-                s.run("set-status", "H1", "verified")
+                # Как в тесте охотника выше: блок до порога, иначе статус не сменится (#57).
+                s.write("src/one.ts", "a\n" * 50)
+                s.commit("блок в пределах порога")
+                for status in ("hunted", "verified"):
+                    self.assertEqual(s.run("set-status", "H1", status).returncode, 0)
                 s.commit("отчёт по предупреждению")
                 self.assertNotIn("no coverage verdict", refused(s.run("check")),
                                  f"проверяющий написал ровно то, что велело предупреждение "
@@ -6095,6 +6287,7 @@ class GateRegistryTest(unittest.TestCase):
         ("freshness/tree-behind",               "test_отставшее_от_сервера_дерево_роняет_проверку"),
         ("blocks/proof-unknown",                "test_род_доказательства_вне_словаря"),
         ("blocks/too-big-to-read",              "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
+        ("blocks/grew-past-ceiling",            "test_блок_выросший_за_потолок_после_охоты_предупреждает"),
         ("refs/findings-named-in-code",         "test_refs_находит_номер_находки_в_коде_и_только_его"),
         ("findings/fix-debt-age",               "test_check_предупреждает_о_находке_старше_недели"),
         ("sweep/undeclared",                    "test_перечисление_без_sweep_краснеет"),

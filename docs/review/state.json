@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-28T02:54:16Z",
+  "updated_at": "2026-09-28T04:32:02Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -8,10 +8,11 @@
       "finished": "2026-09-25T02:22:21Z",
       "reports": [],
       "note": "",
-      "reviewed_sha": "8f364f2b0fe4728c",
-      "refs_sha": "5c8cc49cb9933727",
+      "reviewed_sha": "1e4f6c0b82fdf7ff",
+      "refs_sha": "7cd439d2832b3f4f",
       "hypotheses_sha": "4ab68e42761325b3",
-      "restamped_at": "2026-09-28T02:54:15Z"
+      "restamped_at": "2026-09-28T04:32:01Z",
+      "read_lines": 5639
     },
     "T2": {
       "status": "closed",
@@ -19,10 +20,11 @@
       "finished": "2026-09-25T18:55:37Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "06ece403cf54551d",
-      "refs_sha": "41f5e4f21d095f25",
+      "reviewed_sha": "d0c14c999cb108cc",
+      "refs_sha": "6348fe08d5c70d84",
       "hypotheses_sha": "1d5450e8e739f769",
-      "restamped_at": "2026-09-28T02:54:16Z"
+      "restamped_at": "2026-09-28T04:32:01Z",
+      "read_lines": 3236
     },
     "T3": {
       "status": "closed",
@@ -30,10 +32,10 @@
       "finished": "2026-09-25T18:55:37Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "13fd6d506949ca1c",
-      "refs_sha": "41f5e4f21d095f25",
+      "reviewed_sha": "ca29bc1767615ff7",
+      "refs_sha": "6348fe08d5c70d84",
       "hypotheses_sha": "fcbe3731d494ce45",
-      "restamped_at": "2026-09-28T02:54:16Z"
+      "restamped_at": "2026-09-28T04:32:02Z"
     },
     "T4": {
       "status": "closed",
@@ -41,10 +43,11 @@
       "finished": "2026-09-25T18:55:38Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "05d0e6ef27384b79",
-      "refs_sha": "bf56ba5ce3a5d3d8",
+      "reviewed_sha": "2121e29ab5dc740e",
+      "refs_sha": "d8f2fa2bfb7e26c3",
       "hypotheses_sha": "779f2bec72a0a16a",
-      "restamped_at": "2026-09-28T02:54:16Z"
+      "restamped_at": "2026-09-28T04:32:02Z",
+      "read_lines": 3463
     }
   }
 }

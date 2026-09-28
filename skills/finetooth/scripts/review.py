@@ -274,7 +274,7 @@ MSG = {
   "vol_head": "Files: {n}. Lines: {lines}. Order of magnitude: ~{k}k tokens just to read, before any reasoning or tool calls.",
   "vol_fits": "This fits what can be read in one session (ceiling {limit} lines).",
   "vol_sweep": "\n**The acceptance criterion sweeps beyond the block:** {n} more files, {lines} lines (`sweep` in blocks.json). Do not read them one by one — attention falls off at the end of a long list. Enumerate the places mechanically: a script at `docs/review/sweeps/{id}.<ext>` (grep, a parser) that prints every place with its path and line; commit it, then read the places it found. The script is the proof that the list is complete.",
-  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage-limits section of your report. Do not pretend you read it.",
+  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage-limits section of your report. Do not pretend you read it. The block will not be accepted as hunted until it is split (`set-status` refuses it), so open the report by saying it must be split and along which subjects.",
   "vol_over_verify": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the block-coverage-status section of your report, opening it with the words \"Coverage is incomplete\". Do not pretend you read it.",
   "vol_border": "\nWhere the budget line runs (largest first, cumulative):",
   "vol_more": "  … and {n} more file(s)",
@@ -350,7 +350,7 @@ MSG = {
   "vol_head": "Файлов: {n}. Строк: {lines}. Порядок величины: ~{k}k токенов только на чтение, без рассуждений и вызовов инструментов.",
   "vol_fits": "Это укладывается в то, что читается за сеанс (порог {limit} строк).",
   "vol_sweep": "\n**Критерий приёмки обходит больше, чем блок:** ещё {n} файлов, {lines} строк (`sweep` в blocks.json). Не читай их по одному — к концу длинного списка внимание падает. Перечисли места механически: скрипт `docs/review/sweeps/{id}.<расширение>` (grep, разбор кода) печатает каждое место с путём и строкой; закоммить его и читай найденные места. Скрипт — доказательство, что список полон.",
-  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта об ограничениях охвата. Не делайте вид, что прочитали.",
+  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта об ограничениях охвата. Не делайте вид, что прочитали. Прочитанным блок не примут, пока его не разрежут (`set-status` откажет), поэтому начните отчёт с того, что блок надо разрезать и по каким предметам.",
   "vol_over_verify": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта о состоянии охвата блока, открыв его словами «Охват неполный». Не делайте вид, что прочитали.",
   "vol_border": "\nГде проходит граница бюджета (по убыванию размера, накопительно):",
   "vol_more": "  … и ещё {n} файл(ов)",
@@ -450,6 +450,30 @@ POST_VERIFY = ("verified", "triaged", "fixing", "closed")
 # The statuses in which fixes are being made or have been accepted. `triaged` is not one of
 # them: triage decides WHAT to fix, and a guard is recorded when the fix is made.
 FIX_PHASE = ("fixing", "closed")
+
+# The statuses in which the block has been read: a hunter report stands behind each of them
+# (gate 4 of `check`). `todo`, `running` and `blocked` are not — "a blocked block is not a
+# read one" (`status`). The readability ceiling is a promise about a reading still to come:
+# once the reading happened, the report was written on the volume of that day, and growth
+# of the code afterwards is caught by the block fingerprint, not by the ceiling.
+READ_STATUSES = ("hunted", *POST_VERIFY)
+# ⚠️ The status alone does not say the block was read UNDER the ceiling: `set-status hunted`
+# on a block above it turned the refusal into a warning without splitting anything (Codex on
+# #57). So the reading records its size — `read_lines`, counted as `sizes` counts — and only a
+# block read within the ceiling earns the warning. A block without the record (a review
+# started before it existed) is not presumed to have been.
+READ_LINES_KEY = "read_lines"
+
+
+def ceiling_block(b: dict) -> bool:
+    """Does the readability ceiling apply to the block: readable, with files."""
+    return bool(b.get("paths")) and b.get("proof", "read") == "read"
+
+
+def read_under_ceiling(s: dict, limit: int) -> bool:
+    """Was the block read, and read at a size within the ceiling?"""
+    n = s.get(READ_LINES_KEY)
+    return s.get("status") in READ_STATUSES and isinstance(n, int) and n <= limit
 
 
 def now() -> str:
@@ -1055,6 +1079,7 @@ def cmd_status(args) -> int:
         if f.get("status") == "open":
             open_by_block[f.get("block", "?")] = open_by_block.get(f.get("block", "?"), 0) + 1
 
+    limit = readable_lines()
     mark = {
         "todo": "·", "running": "»", "hunted": "h", "verified": "v",
         "triaged": "t", "fixing": "f", "closed": "✓", "blocked": "!",
@@ -1068,6 +1093,8 @@ def cmd_status(args) -> int:
         status = s.get("status", "todo")
         opened = open_by_block.get(b["id"], 0)
         tail = f"  open findings: {opened}" if opened else ""
+        if size := ceiling_mark(b, s, limit)[0]:
+            tail += f"  {size}"
         print(f"  {mark.get(status,'?')} {b['id']:<4} {status:<9} {b['title']}{tail}")
 
     total = len(defn["blocks"])
@@ -1377,11 +1404,30 @@ def enumerates_beyond(b: dict) -> bool:
     return bool(ENUMERATION.search("\n".join(unquoted(body, "text"))))
 
 
+def ceiling_mark(b: dict, s: dict, limit: int) -> tuple[str, bool]:
+    """What the ceiling says of a readable block: the mark and whether it blocks the reading.
+
+    Shared by `sizes` and `status`, so they say what `check` says: above the ceiling before
+    the reading — split now; above it after — the report stands, the next review splits.
+    """
+    if not ceiling_block(b):
+        return "", False
+    _, lines = block_lines(b["paths"])
+    if lines <= limit:
+        return "", False
+    if read_under_ceiling(s, limit):
+        return (f"grew past the ceiling by {lines - limit} after the review — the next "
+                f"review splits it", False)
+    return f"⚠ above the ceiling by {lines - limit} — split by subject", True
+
+
 def cmd_sizes(args) -> int:
     """Size of every block against the readability ceiling: what to split before it is too late."""
     defn = blocks()
+    # `sizes` is a cutting tool and runs before `init`; without a state every block is unread.
+    st = state() if STATE_FILE.exists() else {"blocks": {}}
     limit = readable_lines()
-    over = 0
+    over = grown = 0
     print(f"{'block':<6} {'proof':<9} {'files':>6} {'lines':>8}  {'ceiling ' + str(limit)}")
     for b in defn["blocks"]:
         if not b.get("paths"):
@@ -1389,20 +1435,25 @@ def cmd_sizes(args) -> int:
             continue
         n, lines = block_lines(b["paths"])
         proof = b.get("proof", "read")
-        mark = ""
-        if proof == "read" and lines > limit:
-            mark = f"⚠ above the ceiling by {lines - limit} — split by subject"
+        mark, blocking = ceiling_mark(b, st["blocks"].get(b["id"], {}), limit)
+        if blocking:
             over += 1
-        elif proof == "measured":
+        elif mark:
+            grown += 1
+        if proof == "measured":
             mark = "measured, the ceiling does not apply"
         sn, sl = sweep_lines(b)
         if sn:
             mark = (mark + "; " if mark else "") + f"+ sweep {sn} files / {sl} lines (mechanical, not read)"
         print(f"{b['id']:<6} {proof:<9} {n:>6} {lines:>8}  {mark}")
+    if grown:
+        print(f"\nblocks grown past the ceiling after their review: {grown} — the report "
+              f"stands; split them before the next review of this code")
     if over:
         print(f"\nblocks above the ceiling: {over}")
         return 1
-    print("\nall readable blocks are within the ceiling")
+    if not grown:
+        print("\nall readable blocks are within the ceiling")
     return 0
 
 
@@ -3136,18 +3187,24 @@ def cmd_set_status(args) -> int:
                 f"serious findings: fix them (`{CLI} set-finding <id> fixed --commit <sha>`), defer "
                 f"with a reason (`deferred --reason \"…\"`) or reject (`rejected --reason \"…\"`). "
                 f"To switch the gate off for this project: `\"fix_gate\": \"none\"` in blocks.json")
+    b = block_index(defn)[args.block]
+    if args.status in READ_STATUSES and ceiling_block(b):
+        record_reading(args.block, b, s, args.status)
     if args.status in ("verified", "closed"):
         # A block passed with its draft outside the register passes with findings nobody
         # will see: the summary, findings.md and the fix gate read the register only (#42).
         if why := draft_not_imported(block_index(defn)[args.block], findings()):
             die(why)
+    closing = args.status == "closed" and s.get("status") != "closed"
     s["status"] = args.status
     # The timestamp is set on EVERY entry into running, not only the first: a block
     # returned to work three weeks later would otherwise count as stuck at once, and the
     # check advised restarting exactly what was being worked on.
     if args.status == "running":
         s["started"] = now()
-    if args.status == "closed":
+    # Only a real closing: `set-status <ID> closed` on a closed block is how a review older
+    # than `read_lines` records the size (record_reading), and it must not rewrite the date.
+    if closing:
         s["finished"] = now()
     # Fingerprint of WHAT exactly was reviewed. A "passed" status without it holds forever:
     # the block's files get rewritten, and the block still counts as closed — what was
@@ -3170,6 +3227,31 @@ def cmd_set_status(args) -> int:
     save_json(STATE_FILE, st)
     print(f"{args.block}: {args.status}")
     return 0
+
+
+def record_reading(bid: str, b: dict, s: dict, to: str) -> None:
+    """Record the size a block is read at, or refuse a reading the ceiling does not allow.
+
+    Entry into a read status from an unread one IS the reading: the block must fit the
+    ceiling now, and its size is written, replacing a record of an earlier reading. A move
+    between read statuses keeps the record; a block without one (a review older than the
+    record) gets it only while it fits — so the honest backfill for such a block is
+    `set-status <ID> <its current status>` while it is within the ceiling, and a block that
+    has already grown past it without a record is split, not excused.
+    """
+    limit = readable_lines()
+    _, lines = block_lines(b["paths"])
+    fresh = s.get("status", "todo") not in READ_STATUSES
+    if not fresh and isinstance(s.get(READ_LINES_KEY), int):
+        return
+    if lines > limit:
+        how = ("a report on this volume would lie about coverage"
+               if fresh else "the size it was read at was never recorded, and now it is "
+                             "above the ceiling, so no reading within it can be vouched for")
+        die(f"{bid}: {lines} lines against a ceiling of {limit} — cannot move to `{to}`: {how}. "
+            f"Split the block by subject in blocks.json (`{CLI} sizes` shows the size), then "
+            f"review the parts")
+    s[READ_LINES_KEY] = lines
 
 
 # -------------------------------------------------------------------- set-finding
@@ -4766,12 +4848,36 @@ def cmd_check(args) -> int:
             continue
         n, lines = block_lines(b["paths"])
         limit = readable_lines()
-        if lines > limit:
-            gates.refuse(
-                "blocks/too-big-to-read",
-                f"{bid}: {n} files, {lines} lines — cannot be read in one session "
-                f"(ceiling {limit}). Split the block, or the report will lie about coverage"
-            )
+        if lines <= limit:
+            continue
+        # The split must come BEFORE the reading: after it the report already says what was
+        # read, and refusing then made a closed block red for code added later (this kit's
+        # own T1 grew past the ceiling with new commands, and every PR into review.py failed
+        # `check`). What is left is a debt of the next review, said aloud.
+        s = st["blocks"].get(bid, {})
+        status = s.get("status", "todo")
+        if read_under_ceiling(s, limit):
+            gates.warn(
+                "blocks/grew-past-ceiling",
+                f"{bid}: {n} files, {lines} lines — grew past the ceiling ({limit}) after the "
+                f"review (read at {s[READ_LINES_KEY]}, status {status}); the report stands for "
+                f"what was read then, but the "
+                f"next review of this code must split the block first: `{CLI} sizes`")
+            continue
+        # A status past the hunt without a reading recorded within the ceiling is no excuse:
+        # the report of such a block was written on a volume nobody can read in one session.
+        read = s.get(READ_LINES_KEY)
+        why = ("" if status not in READ_STATUSES else
+               f" Status {status} does not excuse it: the block was read at {read} lines."
+               if isinstance(read, int) else
+               f" Status {status} does not excuse it: the size at reading was never recorded "
+               f"(a review older than the record), and only a block read within the ceiling "
+               f"is let through.")
+        gates.refuse(
+            "blocks/too-big-to-read",
+            f"{bid}: {n} files, {lines} lines — cannot be read in one session "
+            f"(ceiling {limit}).{why} Split the block, or the report will lie about coverage"
+        )
 
     # The loop signal, as `prompt --role fix` will refuse it: said here too, because the lead
     # reads `check` after every import, and the stop belongs before the next round is cut, not
