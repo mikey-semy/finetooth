@@ -333,9 +333,11 @@ MSG = {
   "sum_machine": "## For the tool — do not edit",
   "sum_coverage": "**Files:** {covered} of {total} are in blocks, {unowned} without a block, {excluded} excluded from review",
   "sum_economy": "## Economy (measured role runs from the journal)",
-  "sum_economy_head": "| role | runs | turns | cost |",
+  "sum_economy_head": "| role | runs | of them unmeasured | turns | cost |",
+  "sum_at_least": "≥ {v}",
+  "sum_not_known": "unknown",
   "sum_economy_total": "total",
-  "sum_economy_unknown": "Runs whose turns or cost the stream did not report: {n} — counted as runs, their unknown numbers are not counted as zero.",
+  "sum_economy_unknown": "Runs whose turns or cost the stream did not report: {n}. They are counted as runs, never as zero: a sum they are part of is a lower bound (≥), and \"unknown\" when no run in it reported the number.",
   "sum_economy_none": "No measured role runs in the journal (`assets/run-role.sh` writes them).",
   "h_title": "{project} — review summary",
   "h_meta": "Date {date} · base commit {sha} ({branch}) · finetooth {version}",
@@ -352,8 +354,8 @@ MSG = {
   "h_coverage": "{covered} of {total} files are in blocks; {unowned} without a block; {excluded} excluded from review with a stated reason.",
   "h_goals": "What each block set out to check:",
   "h_blocks": "Blocks",
-  "h_blocks_cols": "block|title|status|files|critical|high|medium|low|fixed|open|deferred|rejected|runs|turns|cost",
-  "h_blocks_note": "Severity columns count defects (rejected findings and duplicates left out); status columns count every record. Runs, turns and cost are the measured role runs in the journal.",
+  "h_blocks_cols": "block|title|status|files|critical|high|medium|low|fixed|open|deferred|rejected|duplicate|runs|turns|cost",
+  "h_blocks_note": "Severity columns count defects (rejected findings and duplicates left out); status columns count every record, so they add up to the block's findings. Runs, turns and cost are the measured role runs in the journal; ≥ marks a sum that a run with an unreported number is part of.",
   "h_chart": "Findings by severity and status, per block",
   "h_chart_note": "Upper bar of each block: defects by severity; lower bar: every record by status. The same numbers are in the table above.",
   "h_sev": "severity",
@@ -377,7 +379,7 @@ MSG = {
   "h_risks_none": "Nothing deferred.",
   "h_rejected": "Rejected findings — do not find them again ({n})",
   "h_economy": "Economy",
-  "h_economy_cols": "role|runs|turns|cost",
+  "h_economy_cols": "role|runs|of them unmeasured|turns|cost",
   "h_economy_chart": "Measured cost by role",
   "h_remains": "What is left",
   "h_r_open": "{n} open findings",
@@ -468,9 +470,11 @@ MSG = {
   "sum_machine": "## Для инструмента — не править",
   "sum_coverage": "**Файлы:** в блоках {covered} из {total}, без блока {unowned}, исключено из ревью {excluded}",
   "sum_economy": "## Экономика (замеренные прогоны ролей из журнала)",
-  "sum_economy_head": "| роль | прогонов | ходов | цена |",
+  "sum_economy_head": "| роль | прогонов | из них без замера | ходов | цена |",
+  "sum_at_least": "≥ {v}",
+  "sum_not_known": "неизвестно",
   "sum_economy_total": "всего",
-  "sum_economy_unknown": "Прогонов, чьи ходы или цену поток не сообщил: {n} — они посчитаны как прогоны, их неизвестные числа за ноль не взяты.",
+  "sum_economy_unknown": "Прогонов, чьи ходы или цену поток не сообщил: {n}. Они посчитаны как прогоны и никогда как ноль: сумма, в которую они входят, — нижняя граница (≥), а «неизвестно» — когда ни один прогон в ней числа не сообщил.",
   "sum_economy_none": "Замеренных прогонов ролей в журнале нет (их пишет `assets/run-role.sh`).",
   "h_title": "{project} — итог ревью",
   "h_meta": "Дата {date} · коммит-база {sha} ({branch}) · finetooth {version}",
@@ -487,8 +491,8 @@ MSG = {
   "h_coverage": "В блоках {covered} из {total} файлов; без блока {unowned}; исключено из ревью с названной причиной {excluded}.",
   "h_goals": "Что проверял каждый блок:",
   "h_blocks": "Блоки",
-  "h_blocks_cols": "блок|название|статус|файлов|критич.|высокая|средняя|низкая|починено|открыто|отложено|отвергнуто|прогонов|ходов|цена",
-  "h_blocks_note": "Столбцы серьёзности считают дефекты (отвергнутые находки и дубли не входят); столбцы статусов — все записи. Прогоны, ходы и цена — замеренные прогоны ролей из журнала.",
+  "h_blocks_cols": "блок|название|статус|файлов|критич.|высокая|средняя|низкая|починено|открыто|отложено|отвергнуто|дублей|прогонов|ходов|цена",
+  "h_blocks_note": "Столбцы серьёзности считают дефекты (отвергнутые находки и дубли не входят); столбцы статусов — все записи, и в сумме дают число находок блока. Прогоны, ходы и цена — замеренные прогоны ролей из журнала; ≥ — сумма, в которую вошёл прогон с несообщённым числом.",
   "h_chart": "Находки по серьёзности и статусу, по блокам",
   "h_chart_note": "Верхняя полоса блока — дефекты по серьёзности, нижняя — все записи по статусу. Те же числа — в таблице выше.",
   "h_sev": "серьёзность",
@@ -512,7 +516,7 @@ MSG = {
   "h_risks_none": "Отложенного нет.",
   "h_rejected": "Отвергнутые находки — не искать заново ({n})",
   "h_economy": "Экономика",
-  "h_economy_cols": "роль|прогонов|ходов|цена",
+  "h_economy_cols": "роль|прогонов|из них без замера|ходов|цена",
   "h_economy_chart": "Замеренная цена по ролям",
   "h_remains": "Что осталось",
   "h_r_open": "открытых находок: {n}",
@@ -2479,16 +2483,33 @@ def journal_spend() -> list[dict]:
     return out
 
 
-def spend_sum(runs: list[dict]) -> dict:
-    """Runs, turns and cost of a set of runs; `unknown` counts the runs a number is missing in."""
-    return {"runs": len(runs),
-            "turns": sum(r["turns"] for r in runs if r["turns"] is not None),
-            "cost": round(sum(r["cost"] for r in runs if r["cost"] is not None), 2),
-            "unknown": sum(1 for r in runs if r["turns"] is None or r["cost"] is None)}
-
-
 def money(x: float) -> str:
     return f"${x:.2f}"
+
+
+def bounded(known: list, fmt: Callable[[float], str]) -> str:
+    """A sum over runs some of which did not report the number (`None`): the known part as a
+    lower bound, `≥ N`, or "unknown" when none reported it. A plain sum of the known values
+    printed 0 for a run cut off before its result — "free" to the reader — and a bare total
+    under-reported by exactly the runs that went wrong."""
+    have = [v for v in known if v is not None]
+    if not have and known:
+        return T("sum_not_known")
+    text = fmt(sum(have))
+    return T("sum_at_least", v=text) if len(have) < len(known) else text
+
+
+def spend_sum(runs: list[dict]) -> dict:
+    """Runs, turns and cost of a set of runs. `unknown` counts the runs a number is missing
+    in; `turns_text` and `cost_text` are what every summary shows — see `bounded`."""
+    costs = [r["cost"] for r in runs]
+    return {"runs": len(runs),
+            "turns": sum(r["turns"] for r in runs if r["turns"] is not None),
+            "cost": round(sum(c for c in costs if c is not None), 2),
+            "unknown": sum(1 for r in runs if r["turns"] is None or r["cost"] is None),
+            "cost_known": any(c is not None for c in costs),
+            "turns_text": bounded([r["turns"] for r in runs], lambda v: str(v)),
+            "cost_text": bounded(costs, lambda v: money(round(v, 2)))}
 
 
 def summary_facts(defn: dict, st: dict, rows: list[dict]) -> dict:
@@ -2614,11 +2635,11 @@ def render_summary(defn: dict, st: dict, rows: list[dict], facts: dict | None = 
     out += [T("sum_economy"), ""]
     total = fx["spend_total"]
     if total["runs"]:
-        out += [T("sum_economy_head"), "|---|---|---|---|"]
-        out += [f"| {role} | {s['runs']} | {s['turns']} | {money(s['cost'])} |"
+        out += [T("sum_economy_head"), "|---|---|---|---|---|"]
+        out += [f"| {role} | {s['runs']} | {s['unknown']} | {s['turns_text']} | {s['cost_text']} |"
                 for role, s in fx["spend_roles"].items() if s["runs"]]
-        out.append(f"| **{T('sum_economy_total')}** | {total['runs']} | {total['turns']} | "
-                   f"{money(total['cost'])} |")
+        out.append(f"| **{T('sum_economy_total')}** | {total['runs']} | {total['unknown']} | "
+                   f"{total['turns_text']} | {total['cost_text']} |")
         if total["unknown"]:
             out += ["", T("sum_economy_unknown", n=total["unknown"])]
     else:
@@ -2765,17 +2786,21 @@ def stacked_chart(blocks_: list[dict]) -> str:
 def cost_chart(roles: dict[str, dict]) -> str:
     """One bar per role, its measured cost. A single series: the heading names it."""
     live = [(r, s) for r, s in roles.items() if s["runs"]]
+    if not any(s["cost_known"] for _, s in live):
+        return ""
     if not live:
         return ""
     width, label_w, bar_h, gap = 400, 70, 18, 8
     most = max(s["cost"] for _, s in live) or 1
     parts, y = [], 4
     for role, s in live:
-        w = max(s["cost"] / most * (width - label_w - 64), 1)
-        parts.append(f'<text x="0" y="{y + bar_h - 5}">{h(role)}</text>'
-                     f'<rect x="{label_w}" y="{y}" width="{w:.1f}" height="{bar_h}" rx="3" '
-                     f'style="fill:var(--bar)"><title>{h(role)}: {money(s["cost"])}</title></rect>'
-                     f'<text class="muted" x="{label_w + w + 6:.1f}" y="{y + bar_h - 5}">{money(s["cost"])}</text>')
+        # A role no run of which reported its cost gets no bar: a bar of zero would say "free".
+        w = s["cost"] / most * (width - label_w - 64) if s["cost_known"] else 0
+        bar = (f'<rect x="{label_w}" y="{y}" width="{max(w, 1):.1f}" height="{bar_h}" rx="3" '
+               f'style="fill:var(--bar)"><title>{h(role)}: {h(s["cost_text"])}</title></rect>'
+               if s["cost_known"] else "")
+        parts.append(f'<text x="0" y="{y + bar_h - 5}">{h(role)}</text>{bar}'
+                     f'<text class="muted" x="{label_w + w + 6:.1f}" y="{y + bar_h - 5}">{h(s["cost_text"])}</text>')
         y += bar_h + gap
     return (f'<svg viewBox="0 0 {width} {y}" role="img" aria-label="{H("h_economy_chart")}">'
             + "".join(parts) + "</svg>")
@@ -2813,7 +2838,7 @@ def render_summary_html(facts: dict) -> str:
              (num("findings.deferred", bs["deferred"]), "h_t_deferred"),
              (H("h_of", a=num("files.covered", cov["covered"]), b=num("files.total", cov["total"])), "h_t_files")]
     if total["runs"]:
-        tiles.append((num("cost.total", money(total["cost"])), "h_t_cost"))
+        tiles.append((num("cost.total", total["cost_text"]), "h_t_cost"))
     out += [f'<h2 id="goal">{H("h_goal")}</h2>', '<div class="tiles">']
     out += [f'<div class="tile"><b>{v}</b><span>{H(k)}</span></div>' for v, k in tiles]
     out += ['</div>', '<p>' + H("h_coverage", covered=num("files.covered", cov["covered"]),
@@ -2830,11 +2855,13 @@ def render_summary_html(facts: dict) -> str:
         k, sp = f"block.{b['id']}", b["spend"]
         rows.append([f"<b>{h(b['id'])}</b>", h(b["title"]), h(b["status"]), num(f"{k}.files", b["files"])]
                     + [num(f"{k}.sev.{s}", b["by_severity"][s]) for s in SEVERITIES]
-                    + [num(f"{k}.status.{s}", b["statuses"][s]) for s in ("fixed", "open", "deferred", "rejected")]
-                    + [num(f"{k}.runs", sp["runs"]), num(f"{k}.turns", sp["turns"]),
-                       num(f"{k}.cost", money(sp["cost"]))])
+                    # Every status, duplicates included: the row adds up to the block's findings.
+                    + [num(f"{k}.status.{s}", b["statuses"][s])
+                       for s in ("fixed", "open", "deferred", "rejected", "duplicate")]
+                    + [num(f"{k}.runs", sp["runs"]), num(f"{k}.turns", sp["turns_text"]),
+                       num(f"{k}.cost", sp["cost_text"])])
     out += [f'<h2 id="blocks">{H("h_blocks")}</h2>',
-            html_table(names("h_blocks_cols"), rows, numeric=set(range(3, 15))),
+            html_table(names("h_blocks_cols"), rows, numeric=set(range(3, 16))),
             f'<p class="note">{H("h_blocks_note")}</p>']
     # Chart.
     out += [f'<h2 id="chart">{H("h_chart")}</h2>',
@@ -2884,12 +2911,13 @@ def render_summary_html(facts: dict) -> str:
     # Economy.
     out.append(f'<h2 id="economy">{H("h_economy")}</h2>')
     if total["runs"]:
-        erows = [[h(role), num(f"role.{role}.runs", s["runs"]), num(f"role.{role}.turns", s["turns"]),
-                  num(f"role.{role}.cost", money(s["cost"]))]
+        erows = [[h(role), num(f"role.{role}.runs", s["runs"]), num(f"role.{role}.unknown", s["unknown"]),
+                  num(f"role.{role}.turns", s["turns_text"]), num(f"role.{role}.cost", s["cost_text"])]
                  for role, s in x["spend_roles"].items() if s["runs"]]
         erows.append([f"<b>{H('sum_economy_total')}</b>", num("total.runs", total["runs"]),
-                      num("total.turns", total["turns"]), num("total.cost", money(total["cost"]))])
-        out.append(html_table(names("h_economy_cols"), erows, numeric={1, 2, 3}))
+                      num("total.unknown", total["unknown"]), num("total.turns", total["turns_text"]),
+                      num("total.cost", total["cost_text"])])
+        out.append(html_table(names("h_economy_cols"), erows, numeric={1, 2, 3, 4}))
         if total["unknown"]:
             out.append(f'<p class="note">{H("sum_economy_unknown", n=num("total.unknown", total["unknown"]))}</p>')
         out += [f'<p class="note">{H("h_economy_chart")}</p>', cost_chart(x["spend_roles"])]

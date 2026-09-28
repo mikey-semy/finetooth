@@ -63,7 +63,7 @@ to `master` for anyone.
 ## Before a PR
 
 ```sh
-python3 -m unittest discover -s tests          # ~5 minutes, needs only git
+python3 -m unittest discover -s tests          # ~a quarter of an hour, needs only git
 skills-ref validate skills/finetooth            # pip install skills-ref
 ```
 

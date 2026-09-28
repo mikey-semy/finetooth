@@ -12367,6 +12367,16 @@ class SummaryHtmlTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         return (self.out / "итог.md").read_text(encoding="utf-8")
 
+    @staticmethod
+    def bound(values: list, fmt) -> str:
+        """Сумма по прогонам, часть которых числа не сообщила: известное — нижней границей
+        (`≥ N`), ни одного известного — «unknown»; всё известно — просто сумма."""
+        have = [v for v in values if v is not None]
+        if values and not have:
+            return "unknown"
+        text = fmt(sum(have))
+        return f"≥ {text}" if len(have) < len(values) else text
+
     def _expected(self, md: str) -> dict[str, str]:
         """Каждое число итога — посчитанное НЕ инструментом: из реестра на диске, из строк
         журнала, которые записал сам тест, из git и из текстового итога."""
@@ -12400,23 +12410,24 @@ class SummaryHtmlTest(unittest.TestCase):
             self.assertEqual(int(v), want[k], f"текстовый итог: {k}")
         want = {k: str(v) for k, v in want.items() if k != "findings.duplicate"}
         runs = [(r, t, c) for r, _x, t, c in self.RUNS]
-        cost = lambda rs: f"${sum(c for _r, _t, c in rs if c is not None):.2f}"  # noqa: E731
-        turns = lambda rs: str(sum(t for _r, t, _c in rs if t is not None))  # noqa: E731
+        cost = lambda rs: self.bound([c for _r, _t, c in rs], lambda v: f"${v:.2f}")  # noqa: E731
+        turns = lambda rs: self.bound([t for _r, t, _c in rs], str)  # noqa: E731
+        unknown = lambda rs: str(sum(1 for _r, t, c in rs if t is None or c is None))  # noqa: E731
         want.update({"cost.total": cost(runs), "total.runs": str(len(runs)), "total.turns": turns(runs),
-                     "total.cost": cost(runs), "total.unknown": "1"})
+                     "total.cost": cost(runs), "total.unknown": unknown(runs)})
         for role in ("hunter", "verify", "fix"):
             mine = [r for r in runs if r[0] == role]
             want.update({f"role.{role}.runs": str(len(mine)), f"role.{role}.turns": turns(mine),
-                         f"role.{role}.cost": cost(mine)})
+                         f"role.{role}.cost": cost(mine), f"role.{role}.unknown": unknown(mine)})
             # И текстовый итог несёт ту же строку роли.
-            self.assertIn(f"| {role} | {len(mine)} | {turns(mine)} | {cost(mine)} |", md)
-        self.assertIn(f"| {len(runs)} | {turns(runs)} | {cost(runs)} |", md)
+            self.assertIn(f"| {role} | {len(mine)} | {unknown(mine)} | {turns(mine)} | {cost(mine)} |", md)
+        self.assertIn(f"| {len(runs)} | {unknown(runs)} | {turns(runs)} | {cost(runs)} |", md)
         for bid in ("H1", "H2"):
             mine = [f for f in reg if f["block"] == bid]
             defects = [f for f in mine if f["status"] not in ("rejected", "duplicate")]
             for sev in ("critical", "high", "medium", "low"):
                 want[f"block.{bid}.sev.{sev}"] = str(sum(1 for f in defects if f["severity"] == sev))
-            for s_ in ("fixed", "open", "deferred", "rejected"):
+            for s_ in ("fixed", "open", "deferred", "rejected", "duplicate"):
                 want[f"block.{bid}.status.{s_}"] = str(sum(1 for f in mine if f["status"] == s_))
             want[f"block.{bid}.files"] = str(len(owned[bid]))
             brun = runs if bid == "H1" else []
@@ -12448,6 +12459,36 @@ class SummaryHtmlTest(unittest.TestCase):
                     self.assertEqual(v, want[key])
         # Прогон с неизвестной ценой и ходами — прогон, но не ноль: 3 из 4 замерены.
         self.assertEqual(want["total.runs"], "4")
+
+    def test_неизвестный_прогон_не_превращается_в_ноль(self):
+        """Прогон, чьи ходы и цену поток не сообщил (обрезанный, упавший), не показан как
+        бесплатный: сумма роли, где ни один прогон числа не сообщил, — «unknown», а сумма, куда
+        такой прогон вошёл, — нижняя граница «≥». Одинаково в Markdown и в HTML. Мутация:
+        `bounded` печатает голую сумму известного — тест красный (роль verify выходила
+        «0» ходов и «$0.00»)."""
+        self._stand(lang="en")
+        md, got = self._markdown(), html_shape(self._html()).numbers
+        self.assertIn("| verify | 1 | 1 | unknown | unknown |", md)
+        self.assertEqual(got["role.verify.cost"], ["unknown"])
+        self.assertEqual(got["role.verify.turns"], ["unknown"])
+        self.assertEqual(got["total.cost"], ["≥ $24.66"])
+        self.assertEqual(got["block.H1.cost"], ["≥ $24.66"])
+        self.assertIn("| **total** | 4 | 1 | ≥ 220 | ≥ $24.66 |", md)
+        self.assertNotIn("| verify | 1 | 1 | 0 |", md)
+
+    def test_строка_статусов_блока_сходится_с_числом_его_находок(self):
+        """Столбцы статусов в таблице блоков — все статусы, дубли тоже: сумма по строке равна
+        числу находок блока в реестре. Мутация: столбец дублей снят — дубль пропадал из
+        таблицы, и строка не сходилась с блоком."""
+        self._stand(lang="en")
+        got = html_shape(self._html()).numbers
+        reg = [json.loads(ln) for ln in (self.s.root / "docs/review/findings.jsonl")
+               .read_text(encoding="utf-8").splitlines() if ln.strip()]
+        self.assertTrue(any(f["status"] == "duplicate" for f in reg), "на стенде нет дубля")
+        for bid in ("H1", "H2"):
+            row = sum(int(v[0]) for k, v in got.items() if k.startswith(f"block.{bid}.status."))
+            with self.subTest(блок=bid):
+                self.assertEqual(row, sum(1 for f in reg if f["block"] == bid))
 
     def test_текст_находки_не_ломает_файл_и_не_исполняется(self):
         """Суть находки, причина и класс — чужой текст: `<script>` и `</td>` в нём остаются
