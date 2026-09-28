@@ -3746,12 +3746,31 @@ def draft_not_imported(b: dict, register: list[dict]) -> str | None:
     return T("draft_unimported", block=b["id"], draft=draft, n=len(missing), cli=CLI)
 
 
+def finding_id(block_id: str, n: int) -> str:
+    """A finding's id: the block's id, a dash, the number in three digits. The ONE place the
+    format is written — `import` hands ids out by it, `check` recognises them by it."""
+    return f"{block_id}-{n:03d}"
+
+
+def finding_number(block_id: str, fid: object) -> int | None:
+    """The number of `fid` if it is an id of block `block_id`, else None."""
+    m = re.fullmatch(rf"{re.escape(block_id)}-(\d+)", str(fid or ""))
+    return int(m.group(1)) if m else None
+
+
+def finding_ref(block_ids: list[str]) -> re.Pattern:
+    """Finding ids of the given blocks as they stand in prose: built from the blocks' own ids,
+    not guessed by shape — a block may be `api-core`, `T.1` or `Б1`, and `import` numbers its
+    findings all the same. Longest id first, so `api-core-001` is not read as `core-001`."""
+    alts = "|".join(re.escape(b) for b in sorted(set(block_ids), key=len, reverse=True))
+    return re.compile(rf"(?<![\w.-])(?:{alts})-\d{{3,}}(?!\w)")
+
+
 def next_finding_id(block_id: str) -> str:
     """The id `import --append` will give the block's first new finding: after the highest
     number the block has ever used — numbers have gaps, and a retired id stays retired."""
-    taken = [int(m.group(1)) for f in findings()
-             if (m := re.fullmatch(rf"{re.escape(block_id)}-(\d+)", f.get("id", "")))]
-    return f"{block_id}-{max(taken, default=0) + 1:03d}"
+    taken = [n for f in findings() if (n := finding_number(block_id, f.get("id"))) is not None]
+    return finding_id(block_id, max(taken, default=0) + 1)
 
 
 def render_recorded_for(block_id: str) -> str:
@@ -3875,12 +3894,8 @@ def cmd_import(args) -> int:
         # already fixed that would erase the fix marks — a neighbouring project got burnt
         # by this and started a separate consolidator. Here we only append, with the
         # block's next free numbers.
-        taken = [
-            int(m.group(1))
-            for f in existing
-            if f.get("block") == args.block
-            and (m := re.fullmatch(rf"{re.escape(args.block)}-(\d+)", f.get("id", "")))
-        ]
+        taken = [n for f in existing if f.get("block") == args.block
+                 and (n := finding_number(args.block, f.get("id"))) is not None]
         next_n = max(taken, default=0) + 1
         added = []
         # After the previous import the block's file holds the already recorded findings
@@ -3892,7 +3907,7 @@ def cmd_import(args) -> int:
             f.setdefault("block", args.block)
             if f["block"] != args.block:
                 die(f"the top-up file holds a finding of another block {f['block']} — the import is stopped")
-            f["id"] = f"{args.block}-{next_n:03d}"
+            f["id"] = finding_id(args.block, next_n)
             next_n += 1
             f.setdefault("status", "open")
             f.setdefault("confidence", "plausible")
@@ -3970,14 +3985,12 @@ def cmd_import(args) -> int:
                 f"free number")
         if fid:
             seen_here.add(fid)
-    numbered = [int(m.group(1)) for fid in taken
-                if (m := re.fullmatch(rf"{re.escape(args.block)}-(\d+)", fid))]
+    numbered = [n for fid in taken if (n := finding_number(args.block, fid)) is not None]
     next_n = max(numbered, default=0) + 1
-    width = 3
     for f in incoming:
         f.setdefault("block", args.block)
         if not f.get("id"):
-            f["id"] = f"{args.block}-{next_n:0{width}d}"
+            f["id"] = finding_id(args.block, next_n)
             next_n += 1
         f.setdefault("status", "open")
         f.setdefault("confidence", "plausible")
@@ -5114,22 +5127,36 @@ def verdict_records(text: str, block_id: str = "") -> list[tuple[str, str, int]]
 CONFIRM_WORDS = tuple(w for w, v in VERDICT_WORDS
                       if v == CHECKED and ("подтвер" in w or "confirm" in w)
                       and not w.startswith(("не ", "not ")))
-# Negated forms are masked before the search: "not confirmed" holds "confirmed", and a
-# refutation must not be read as a confirmation. "unconfirmed" and "не подтверждена" are not
-# in the parser's vocabulary (it reads both as "checked"), but here they say "no".
-CONFIRM_NEGATED = ("не подтвердилась", "не подтверждена", "not confirmed", "unconfirmed")
-FINDING_REF = re.compile(r"(?<![\w.-])([A-Za-z][A-Za-z0-9_]*-\d{3,})(?!\w)")
+# A confirmation word is negated by what stands shortly before it in the same sentence: "не
+# подтвердилась бы", "не была подтверждена", "was not confirmed", "could not be confirmed".
+# A list of whole phrases missed every one of those (Codex on #60); the question is
+# nearness, not wording. The window is the widest of those forms — "could not be confirmed"
+# puts the negation three words before the word — and it looks only backwards: "подтверждена,
+# не только X, но и Y" is still a confirmation. A confirmation word inside a longer word
+# ("unconfirmed") is not the word.
+CONFIRM_NEGATORS = frozenset({"не", "ни", "нельзя", "нет", "not", "no", "never", "cannot",
+                              "failed"})
+# Three words: the widest negated form measured, "could not be confirmed", puts the negation
+# three words before the confirmation word ("не была подтверждена" — two, "was not" — one).
+CONFIRM_NEG_WINDOW = 3
+CONFIRM_AT = re.compile(rf"(?<!\w)(?:{'|'.join(re.escape(w) for w in CONFIRM_WORDS)})(?!\w)")
+SENTENCE_END = re.compile(r"[.!?;](?:\s|$)")
+
+
+def negated_before(low: str, at: int) -> bool:
+    """A negation among the few words before position `at`, within the same sentence."""
+    start = max((m.end() for m in SENTENCE_END.finditer(low, 0, at)), default=0)
+    words = re.findall(r"[\w'’]+", low[start:at])[-CONFIRM_NEG_WINDOW:]
+    return any(w in CONFIRM_NEGATORS or w.endswith(("n't", "n’t")) for w in words)
 
 
 def says_confirmed(line: str) -> bool:
-    """The verdict line CONFIRMS the hypothesis: an affirmative confirmation word anywhere in
-    it, negated forms masked. "проверена и подтверждена как дефект" confirms; "refuted: the
-    guard is there" and "not confirmed" do not. A word quoted alone in backticks is a
-    quotation, as for the parser."""
+    """The verdict line CONFIRMS the hypothesis: an affirmative confirmation word in it that
+    no nearby negation turns round (`negated_before`). "проверена и подтверждена как
+    дефект" confirms; "refuted: the guard is there", "was not confirmed" and "не подтвердилась
+    бы" do not. A word quoted alone in backticks is a quotation, as for the parser."""
     low = unquote_verdicts(line).lower()
-    for neg in CONFIRM_NEGATED:
-        low = low.replace(neg, " ")
-    return any(w in low for w in CONFIRM_WORDS)
+    return any(not negated_before(low, m.start()) for m in CONFIRM_AT.finditer(low))
 
 
 def verdict_passage(lines: list[str], at: int, starts: set[int]) -> str:
@@ -5151,13 +5178,14 @@ def verdict_passage(lines: list[str], at: int, starts: set[int]) -> str:
     return "\n".join(out)
 
 
-def confirmed_without_finding(text: str, block_id: str,
-                              known: set[str]) -> list[tuple[str, list[str]]]:
+def confirmed_without_finding(text: str, block_id: str, known: set[str],
+                              block_ids: list[str] | None = None) -> list[tuple[str, list[str]]]:
     """Confirmed hypotheses whose verdict names no finding in `known`: (hypothesis, the ids
     the verdict does name that `known` does not hold). Read on the parser's records — the
     same verdicts `check` and `hypotheses` see — and only on "checked" ones: "not checked:
     it would be confirmed only on a live system" confirms nothing."""
     lines = text.split("\n")
+    ref = finding_ref(block_ids or [block_id])
     out: list[tuple[str, list[str]]] = []
     seen: set[tuple[str, int]] = set()
     records = verdict_records(text, block_id)
@@ -5166,7 +5194,7 @@ def confirmed_without_finding(text: str, block_id: str,
         if verdict != CHECKED or (h, at) in seen or not says_confirmed(lines[at]):
             continue
         seen.add((h, at))
-        named = FINDING_REF.findall(verdict_passage(lines, at, starts))
+        named = ref.findall(verdict_passage(lines, at, starts))
         if any(n in known for n in named):
             continue
         out.append((h, list(dict.fromkeys(n for n in named if n not in known))))
@@ -5186,10 +5214,9 @@ def finding_ids_for(b: dict, register: list[dict]) -> set[str]:
     except ValueError:
         return known
     known |= {r["id"] for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
-    taken = [int(m.group(1)) for f in register
-             if (m := re.fullmatch(rf"{re.escape(b['id'])}-(\d+)", str(f.get("id", ""))))]
+    taken = [n for f in register if (n := finding_number(b["id"], f.get("id"))) is not None]
     start = max(taken, default=0) + 1
-    known |= {f"{b['id']}-{start + k:03d}" for k in range(len(unimported_rows(rows, register)))}
+    known |= {finding_id(b["id"], start + k) for k in range(len(unimported_rows(rows, register)))}
     return known
 
 
@@ -5754,6 +5781,7 @@ def cmd_check(args) -> int:
     # block, the closed ones of a review begun on an older kit included: on the kit's own
     # review (T1–T4, eight hunter and verifier reports) the rule refuses nothing, and a closed
     # block elsewhere that it does refuse holds exactly the defect the rule exists to recover.
+    block_ids = [b["id"] for b in defn["blocks"]]
     for b in defn["blocks"]:
         if st["blocks"].get(b["id"], {}).get("status") not in READ_STATUSES:
             continue
@@ -5764,7 +5792,7 @@ def cmd_check(args) -> int:
             if not rp.exists():
                 continue
             for h, unknown in confirmed_without_finding(
-                    rp.read_text(encoding="utf-8"), b["id"], known):
+                    rp.read_text(encoding="utf-8"), b["id"], known, block_ids):
                 gates.refuse(
                     "report/confirmed-without-finding",
                     T("confirmed_unknown_finding" if unknown else "confirmed_no_finding",

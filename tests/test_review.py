@@ -10103,7 +10103,16 @@ class ConfirmedIsFindingTest(unittest.TestCase):
                      "- H1.1 — не подтвердилась: предикат совпадает",
                      "- H1.1 — refuted: the guard is there",
                      "- H1.1 — checked: not confirmed, the code is right",
-                     "- H1.1 — не проверена: подтвердилась бы только на живой базе"):
+                     "- H1.1 — не проверена: подтвердилась бы только на живой базе",
+                     "- H1.1 — не проверена: нужна живая база, там бы и подтвердилась потеря",
+                     # отрицание не вплотную к слову — в том же предложении (Codex на #60)
+                     "- H1.1 — опровергнута: не была подтверждена ни на одном входе",
+                     "- H1.1 — проверена: не подтвердилась бы и на живой базе",
+                     "- H1.1 — проверена: не удалось подтвердить, код прав",
+                     "- H1.1 — checked: the loss was not confirmed on any input",
+                     "- H1.1 — checked: it could not be confirmed, the guard holds",
+                     "- H1.1 — checked: it wasn't confirmed by the run",
+                     "- H1.1 — checked: unconfirmed, the guard holds"):
             with self.subTest(line=line):
                 self.new_stand()
                 check = self.stand(line)
@@ -10138,6 +10147,47 @@ class ConfirmedIsFindingTest(unittest.TestCase):
         failed = refused(check)
         self.assertIn("H1-demo.verify.md подтверждает гипотезу H1.2", failed)
         self.assertNotIn("H1.1", failed)
+
+    def test_отрицание_после_слова_подтверждение_не_отменяет(self):
+        """Обратная сторона маскировки по близости: отрицание ПОСЛЕ слова подтверждения —
+        уточнение, а не отказ от него; и отрицание в прошлом предложении не дотягивается."""
+        for line in ("- H1.1 — подтверждена, не только флаг теряется, но и счётчик",
+                     "- H1.1 — confirmed, and not only on the first save",
+                     "- H1.1 — форма не дефект. Подтверждена потеря флага"):
+            with self.subTest(line=line):
+                self.new_stand()
+                check = self.stand(line, self.row("другой дефект"))
+                self.assertIn("подтверждает гипотезу H1.1, но не называет", refused(check))
+
+    def test_номер_находки_узнаётся_по_id_блока_любой_формы(self):
+        """`import` нумерует находки любого блока — `api-core-001`, `T.1-001`, `Б1-001`;
+        образец «латиница, цифры» их не узнавал и отказывал честному вердикту (Codex на #60).
+        Номер ищется по id самого блока, формат — один, у `import`."""
+        for bid in ("api-core", "T.1", "Б1"):
+            with self.subTest(block=bid):
+                self.new_stand()
+                self.s.block_id = bid
+                self.s.blocks(paths=["src/one.ts"])
+                manifest = Path(self.s.root, "docs/review/blocks/H1-demo.md")
+                text = manifest.read_text(encoding="utf-8")
+                manifest.unlink()
+                self.s.write(f"docs/review/blocks/{bid}-demo.md", text.replace("H1", bid))
+                self.draft_path = Path(self.s.root, f"docs/review/reports/{bid}-findings.jsonl")
+                hunter = (f"# охотник\n## Гипотезы\n- {bid}.1 — подтверждена: {bid}-001 — "
+                          f"флаг теряется\n- {bid}.2 — опровергнута: совпадает\n\n"
+                          f"## Ограничения охвата\nнет\n")
+                self.s.write(f"docs/review/reports/{bid}-demo.hunter.md", hunter)
+                self.draft_path.write_text(json.dumps(self.row("флаг теряется", block=bid),
+                                                      ensure_ascii=False) + "\n", encoding="utf-8")
+                self.s.commit()
+                self.s.run("init")
+                self.s.run("coverage")
+                out = self.s.run("set-status", bid, "hunted")
+                self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+                check = self.s.run("check")
+                self.assertNotIn("confirms hypothesis", check.stdout)
+                self.assertNotIn("подтверждает гипотезу", check.stdout)
+                self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
 
     def test_отказ_по_английски_в_английском_ревью(self):
         check = self.stand("- H1.1 — confirmed: the flag is lost", self.row("defect"),
