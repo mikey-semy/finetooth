@@ -15,11 +15,13 @@ Subcommands are described in main(). Standard library only, no dependencies.
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import hashlib
 import json
 import math
 import os
+import posixpath
 import re
 import signal
 import subprocess
@@ -274,7 +276,7 @@ MSG = {
   "vol_head": "Files: {n}. Lines: {lines}. Order of magnitude: ~{k}k tokens just to read, before any reasoning or tool calls.",
   "vol_fits": "This fits what can be read in one session (ceiling {limit} lines).",
   "vol_sweep": "\n**The acceptance criterion sweeps beyond the block:** {n} more files, {lines} lines (`sweep` in blocks.json). Do not read them one by one — attention falls off at the end of a long list. Enumerate the places mechanically: a script at `docs/review/sweeps/{id}.<ext>` (grep, a parser) that prints every place with its path and line; commit it, then read the places it found. The script is the proof that the list is complete.",
-  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage-limits section of your report. Do not pretend you read it.",
+  "vol_over": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the coverage-limits section of your report. Do not pretend you read it. The block will not be accepted as hunted until it is split (`set-status` refuses it), so open the report by saying it must be split and along which subjects.",
   "vol_over_verify": "\n⚠️ **The block is larger than one session can read** — {lines} lines against a ceiling of {limit}. Reading everything carefully will not work, and the only honest way out is to read as much as you can and **name the rest by path** in the block-coverage-status section of your report, opening it with the words \"Coverage is incomplete\". Do not pretend you read it.",
   "vol_border": "\nWhere the budget line runs (largest first, cumulative):",
   "vol_more": "  … and {n} more file(s)",
@@ -341,6 +343,9 @@ MSG = {
   "scope_partial": "PARTIAL review — only the declared scope {paths} was reviewed, the rest of the repository was not (files in scope: {n} of {total}). Reason: {reason}",
   "sarif_rule_help_partial": "Found by a PARTIAL review with finetooth — only the scope {paths} was reviewed, the rest of the repository was not; reason: {reason}. Findings of this class: {ids}. The evidence and the failure scenario of each are in the block report named in the alert; the review state is in docs/review/.",
   "backfill_note": "Fingerprints stamped retroactively at commit {head}: blocks {blocks}; findings {n}. Changes before this commit are not tracked.",
+  "seams_none": "(no two files of the block are linked by an import or by joint changes — every file here can be read on its own)",
+  "seams_head": "Pairs of the block's files that depend on each other: {n} found by `seams`, the top {top} below (an import with the names it takes; joint changes from the history). A defect that lives only where two files are joined is invisible from either file alone — for each pair, find what one side assumes about the other and check that the other side holds it on every path.",
+  "seams_co": "co-change {n}× ({a} / {b} of each file's changes)",
   "setup_note": "Static definition of the blocks. Progress lives in state.json, findings in findings.jsonl. Array order = execution order.",
   "excl_apparatus": "review apparatus, not its subject", "excl_skill": "the review skill — tooling, not the subject of review",
  },
@@ -350,7 +355,7 @@ MSG = {
   "vol_head": "Файлов: {n}. Строк: {lines}. Порядок величины: ~{k}k токенов только на чтение, без рассуждений и вызовов инструментов.",
   "vol_fits": "Это укладывается в то, что читается за сеанс (порог {limit} строк).",
   "vol_sweep": "\n**Критерий приёмки обходит больше, чем блок:** ещё {n} файлов, {lines} строк (`sweep` в blocks.json). Не читай их по одному — к концу длинного списка внимание падает. Перечисли места механически: скрипт `docs/review/sweeps/{id}.<расширение>` (grep, разбор кода) печатает каждое место с путём и строкой; закоммить его и читай найденные места. Скрипт — доказательство, что список полон.",
-  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта об ограничениях охвата. Не делайте вид, что прочитали.",
+  "vol_over": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта об ограничениях охвата. Не делайте вид, что прочитали. Прочитанным блок не примут, пока его не разрежут (`set-status` откажет), поэтому начните отчёт с того, что блок надо разрезать и по каким предметам.",
   "vol_over_verify": "\n⚠️ **Блок больше, чем прочитывается за сеанс** — {lines} строк при пороге {limit}. Прочитать всё внимательно не выйдет, и честный выход один: прочитать столько, сколько получится, и **поимённо назвать остальное** в разделе своего отчёта о состоянии охвата блока, открыв его словами «Охват неполный». Не делайте вид, что прочитали.",
   "vol_border": "\nГде проходит граница бюджета (по убыванию размера, накопительно):",
   "vol_more": "  … и ещё {n} файл(ов)",
@@ -417,6 +422,9 @@ MSG = {
   "scope_partial": "ЧАСТИЧНОЕ ревью — просмотрена только объявленная область {paths}, остальной репозиторий не просматривался (файлов в области: {n} из {total}). Причина: {reason}",
   "sarif_rule_help_partial": "Найдено ЧАСТИЧНЫМ ревью с finetooth — просмотрена только область {paths}, остальной репозиторий не просматривался; причина: {reason}. Находки этого класса: {ids}. Доказательство и сценарий отказа каждой — в отчёте блока, названном в предупреждении; состояние ревью — в docs/review/.",
   "backfill_note": "Отпечатки проставлены задним числом на коммите {head}: блоки {blocks}; находок {n}. Изменения до этого коммита не отслежены.",
+  "seams_none": "(ни одна пара файлов блока не связана ни импортом, ни совместными правками — каждый файл здесь читается сам по себе)",
+  "seams_head": "Пары файлов блока, которые зависят друг от друга: `seams` нашёл {n}, ниже верхние {top} (импорт — с именами, которые он берёт; совместные правки — из истории). Дефект, живущий только на стыке двух файлов, не виден ни из одного из них по отдельности — на каждой паре найди, что одна сторона предполагает о другой, и проверь, что другая держит это на всех путях.",
+  "seams_co": "совместных правок {n}× ({a} / {b} правок каждого файла)",
   "setup_note": "Статическое определение блоков. Прогресс живёт в state.json, находки — в findings.jsonl. Порядок массива = порядок исполнения.",
   "excl_apparatus": "аппарат ревью, а не его предмет", "excl_skill": "скилл ревью — оснастка, а не предмет ревью",
  },
@@ -450,6 +458,30 @@ POST_VERIFY = ("verified", "triaged", "fixing", "closed")
 # The statuses in which fixes are being made or have been accepted. `triaged` is not one of
 # them: triage decides WHAT to fix, and a guard is recorded when the fix is made.
 FIX_PHASE = ("fixing", "closed")
+
+# The statuses in which the block has been read: a hunter report stands behind each of them
+# (gate 4 of `check`). `todo`, `running` and `blocked` are not — "a blocked block is not a
+# read one" (`status`). The readability ceiling is a promise about a reading still to come:
+# once the reading happened, the report was written on the volume of that day, and growth
+# of the code afterwards is caught by the block fingerprint, not by the ceiling.
+READ_STATUSES = ("hunted", *POST_VERIFY)
+# ⚠️ The status alone does not say the block was read UNDER the ceiling: `set-status hunted`
+# on a block above it turned the refusal into a warning without splitting anything (Codex on
+# #57). So the reading records its size — `read_lines`, counted as `sizes` counts — and only a
+# block read within the ceiling earns the warning. A block without the record (a review
+# started before it existed) is not presumed to have been.
+READ_LINES_KEY = "read_lines"
+
+
+def ceiling_block(b: dict) -> bool:
+    """Does the readability ceiling apply to the block: readable, with files."""
+    return bool(b.get("paths")) and b.get("proof", "read") == "read"
+
+
+def read_under_ceiling(s: dict, limit: int) -> bool:
+    """Was the block read, and read at a size within the ceiling?"""
+    n = s.get(READ_LINES_KEY)
+    return s.get("status") in READ_STATUSES and isinstance(n, int) and n <= limit
 
 
 def now() -> str:
@@ -1055,6 +1087,7 @@ def cmd_status(args) -> int:
         if f.get("status") == "open":
             open_by_block[f.get("block", "?")] = open_by_block.get(f.get("block", "?"), 0) + 1
 
+    limit = readable_lines()
     mark = {
         "todo": "·", "running": "»", "hunted": "h", "verified": "v",
         "triaged": "t", "fixing": "f", "closed": "✓", "blocked": "!",
@@ -1068,6 +1101,8 @@ def cmd_status(args) -> int:
         status = s.get("status", "todo")
         opened = open_by_block.get(b["id"], 0)
         tail = f"  open findings: {opened}" if opened else ""
+        if size := ceiling_mark(b, s, limit)[0]:
+            tail += f"  {size}"
         print(f"  {mark.get(status,'?')} {b['id']:<4} {status:<9} {b['title']}{tail}")
 
     total = len(defn["blocks"])
@@ -1380,11 +1415,30 @@ def enumerates_beyond(b: dict) -> bool:
     return bool(ENUMERATION.search("\n".join(unquoted(body, "text"))))
 
 
+def ceiling_mark(b: dict, s: dict, limit: int) -> tuple[str, bool]:
+    """What the ceiling says of a readable block: the mark and whether it blocks the reading.
+
+    Shared by `sizes` and `status`, so they say what `check` says: above the ceiling before
+    the reading — split now; above it after — the report stands, the next review splits.
+    """
+    if not ceiling_block(b):
+        return "", False
+    _, lines = block_lines(b["paths"])
+    if lines <= limit:
+        return "", False
+    if read_under_ceiling(s, limit):
+        return (f"grew past the ceiling by {lines - limit} after the review — the next "
+                f"review splits it", False)
+    return f"⚠ above the ceiling by {lines - limit} — split by subject", True
+
+
 def cmd_sizes(args) -> int:
     """Size of every block against the readability ceiling: what to split before it is too late."""
     defn = blocks()
+    # `sizes` is a cutting tool and runs before `init`; without a state every block is unread.
+    st = state() if STATE_FILE.exists() else {"blocks": {}}
     limit = readable_lines()
-    over = 0
+    over = grown = 0
     print(f"{'block':<6} {'proof':<9} {'files':>6} {'lines':>8}  {'ceiling ' + str(limit)}")
     for b in defn["blocks"]:
         if not b.get("paths"):
@@ -1392,20 +1446,25 @@ def cmd_sizes(args) -> int:
             continue
         n, lines = block_lines(b["paths"])
         proof = b.get("proof", "read")
-        mark = ""
-        if proof == "read" and lines > limit:
-            mark = f"⚠ above the ceiling by {lines - limit} — split by subject"
+        mark, blocking = ceiling_mark(b, st["blocks"].get(b["id"], {}), limit)
+        if blocking:
             over += 1
-        elif proof == "measured":
+        elif mark:
+            grown += 1
+        if proof == "measured":
             mark = "measured, the ceiling does not apply"
         sn, sl = sweep_lines(b)
         if sn:
             mark = (mark + "; " if mark else "") + f"+ sweep {sn} files / {sl} lines (mechanical, not read)"
         print(f"{b['id']:<6} {proof:<9} {n:>6} {lines:>8}  {mark}")
+    if grown:
+        print(f"\nblocks grown past the ceiling after their review: {grown} — the report "
+              f"stands; split them before the next review of this code")
     if over:
         print(f"\nblocks above the ceiling: {over}")
         return 1
-    print("\nall readable blocks are within the ceiling")
+    if not grown:
+        print("\nall readable blocks are within the ceiling")
     return 0
 
 
@@ -1600,10 +1659,14 @@ def mass_basis(sets: list[set[str]]) -> str:
             f"too few for a percentile")
 
 
-def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
-                   min_together: int, min_share: float,
-                   hub_at: int) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
-    """Cross-block pairs above the thresholds, the hub files, and the number of mass commits skipped."""
+def joint_changes(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
+                  keep: Callable[[str, str], bool]
+                  ) -> tuple[dict[str, int], dict[tuple[str, str], int], int]:
+    """How often each owned file changed, how often each pair `keep` accepts changed in one
+    commit, and how many mass commits were skipped. ONE count for `coupling` (pairs across
+    blocks) and `seams` (pairs inside one): the two differ only in which pairs they keep,
+    so a mass cutoff or a share can never mean one thing in one command and another in the
+    other."""
     changes: dict[str, int] = {}
     together: dict[tuple[str, str], int] = {}
     skipped = 0
@@ -1619,9 +1682,18 @@ def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: in
         ordered = sorted(files)
         for i, a in enumerate(ordered):
             for b in ordered[i + 1:]:
-                if set(owned[a]) & set(owned[b]):
-                    continue  # the same block reads both: not a seam
-                together[(a, b)] = together.get((a, b), 0) + 1
+                if keep(a, b):
+                    together[(a, b)] = together.get((a, b), 0) + 1
+    return changes, together, skipped
+
+
+def coupling_pairs(owned: dict[str, list[str]], sets: list[set[str]], cutoff: int,
+                   min_together: int, min_share: float,
+                   hub_at: int) -> tuple[list[dict], list[tuple[str, set[str]]], int]:
+    """Cross-block pairs above the thresholds, the hub files, and the number of mass commits skipped."""
+    # the same block reads both: not a seam between blocks
+    changes, together, skipped = joint_changes(
+        owned, sets, cutoff, lambda a, b: not set(owned[a]) & set(owned[b]))
     partners: dict[str, set[str]] = {}
     for (a, b), n in together.items():
         if n >= min_together:
@@ -1694,6 +1766,474 @@ def cmd_coupling(args) -> int:
                          f"\t{p['together']}\t{p['share_a']:.2f}\t{p['share_b']:.2f}")
         COUPLING_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"\nwritten: {COUPLING_FILE.relative_to(ROOT)}")
+    return 0
+
+
+# --------------------------------------------------------------------------- seams
+
+# Seams INSIDE a block: pairs of its own files that depend on each other. `coupling` sees
+# pairs across blocks; inside a block the hunter reads both files, but a defect that exists
+# only where they are joined (one side assumes what the other does not hold on every path)
+# was the weakest class of the recall measurement — of 7 cross-file cases on blocks of real
+# size, the kit found 3 in full. The link is shown, the assumption is not: what one side
+# assumes about the other is the manifest author's hypothesis, not something to generate.
+#
+# How many seams the prompt and the default listing carry: the manifest holds 10–15
+# hypotheses (the kit's guidance since the first project), and one hypothesis per seam at
+# the lower edge of that range is as many as a manifest can take without the seams crowding
+# out every other question.
+SEAMS_TOP = 10
+
+JS_EXTS = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+# A specifier written with the emitted extension names the source file: TypeScript's ESM
+# rule (`./x.js` resolves to `./x.ts`).
+# From a TypeScript importer the source extensions are tried BEFORE the written one: with
+# both `x.ts` and a built `x.js` beside it, the compiler reads `x.ts`.
+JS_EMITTED = {".js": (".ts", ".tsx", ".d.ts"), ".jsx": (".tsx", ".d.ts"), ".mjs": (".mts", ".d.mts"),
+              ".cjs": (".cts", ".d.cts")}
+TS_IMPORTERS = (".ts", ".tsx", ".mts", ".cts")
+PY_EXTS = (".py",)
+TS_CONFIGS = ("tsconfig.json", "jsconfig.json")
+
+# All five are searched in the text with comments and string contents blanked
+# (`js_code_mask`) — that, not the pattern, is what keeps a commented-out `require(…)` or a
+# string holding `import(…)` from counting. Static forms are also anchored at the start of a
+# statement's line, as they are written; `require(…)` and `import(…)` are calls and can
+# stand anywhere.
+JS_IMPORT = re.compile(
+    r"^[ \t]*import\s+(?:type\s+)?(?P<clause>[\w$*{},\s]+?)\s+from\s*(['\"])(?P<spec>[^'\"\n]+)\2",
+    re.M)
+JS_BARE_IMPORT = re.compile(r"^[ \t]*import\s*(['\"])(?P<spec>[^'\"\n]+)\1", re.M)
+JS_REEXPORT = re.compile(
+    r"^[ \t]*export\s+(?:type\s+)?(?P<clause>\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*"
+    r"(['\"])(?P<spec>[^'\"\n]+)\2", re.M)
+JS_REQUIRE = re.compile(
+    r"(?:(?:const|let|var)\s+(?P<bind>\{[^}]*\}|[\w$]+)\s*=\s*)?"
+    r"\brequire\s*\(\s*(['\"])(?P<spec>[^'\"\n]+)\2\s*\)")
+JS_DYNAMIC = re.compile(r"\bimport\s*\(\s*(['\"])(?P<spec>[^'\"\n]+)\1\s*\)")
+
+
+def js_code_mask(text: str) -> str:
+    """The text with comments and the CONTENTS of string literals replaced by spaces — same
+    length, same line breaks, the quote characters kept.
+
+    Not a parser: a regex literal holding a quote (`/'/`) opens a "string", and a `'`/`"`
+    string is closed at the end of its line, so the damage stays on that one line. A template
+    literal is blanked whole, `${…}` included.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            for j in range(i, end):
+                if text[j] != "\n":
+                    out[j] = " "
+            i = end
+            continue
+        if c in "'\"`":
+            i += 1
+            while i < n and text[i] != c and not (c != "`" and text[i] == "\n"):
+                if text[i] == "\\" and i + 1 < n:
+                    out[i] = " "
+                    i += 1
+                if text[i] != "\n":
+                    out[i] = " "
+                i += 1
+            i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
+def jsonc(text: str):
+    """JSON with comments and trailing commas — what `tsconfig.json` is allowed to be.
+
+    A strict `json.loads` refuses most real configs (`create-next-app` writes none of the
+    extras, but half the projects add a comment): the comments are cut outside strings, a
+    comma before `}` or `]` is dropped. None when it still does not parse.
+    """
+    out, i, n, quote_ch = [], 0, len(text), None
+    while i < n:
+        c = text[i]
+        if quote_ch:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == quote_ch:
+                quote_ch = None
+        elif c == '"':
+            quote_ch = c
+            out.append(c)
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    try:
+        return json.loads(re.sub(r",(\s*[}\]])", r"\1", "".join(out)))
+    except ValueError:
+        return None
+
+
+class TsConfig:
+    """`compilerOptions.paths` and `baseUrl` of one config, with its relative `extends`.
+
+    Read, not guessed: an alias resolves only as the project's own config declares it. A
+    `paths` target and `baseUrl` are resolved the way TypeScript does — against `baseUrl`
+    when one is set, else against the directory of the config that declares `paths`. An
+    `extends` naming a package (`@tsconfig/node20`) is not followed: that file is not in
+    the repository.
+    """
+
+    def __init__(self, rel: str) -> None:
+        self.rel = rel
+        self.paths: list[tuple[str, list[str]]] = []   # (pattern, targets from the root)
+        self.base: str | None = None                   # baseUrl from the root
+        base_url, paths, seen, at = None, None, set(), rel
+        while at and at not in seen:
+            seen.add(at)
+            conf = jsonc((ROOT / at).read_text(encoding="utf-8", errors="replace")) \
+                if (ROOT / at).is_file() else None
+            if not isinstance(conf, dict):
+                break
+            opts = conf.get("compilerOptions") or {}
+            here = posixpath.dirname(at)
+            if base_url is None and isinstance(opts.get("baseUrl"), str):
+                base_url = posixpath.normpath(posixpath.join(here, opts["baseUrl"]))
+            if paths is None and isinstance(opts.get("paths"), dict):
+                paths = (here, opts["paths"])
+            ext = conf.get("extends")
+            if not (isinstance(ext, str) and ext.startswith(".")):
+                break
+            nxt = posixpath.normpath(posixpath.join(here, ext))
+            if nxt.startswith(".."):
+                break   # outside the repository: not a file of the project under review
+            at = nxt if nxt.endswith(".json") else nxt + ".json"
+        self.base = base_url
+        if paths:
+            anchor = base_url if base_url is not None else paths[0]
+            for pattern, targets in paths[1].items():
+                if isinstance(targets, list):
+                    self.paths.append((pattern, [posixpath.normpath(posixpath.join(anchor, t))
+                                                 for t in targets if isinstance(t, str)]))
+            # The longest prefix before `*` wins, as in TypeScript.
+            self.paths.sort(key=lambda p: -len(p[0].split("*")[0]))
+
+    def candidates(self, spec: str) -> list[str]:
+        for pattern, targets in self.paths:
+            if "*" in pattern:
+                head, _, tail = pattern.partition("*")
+                if spec.startswith(head) and spec.endswith(tail) and len(spec) >= len(head) + len(tail):
+                    mid = spec[len(head):len(spec) - len(tail)]
+                    return [t.replace("*", mid, 1) for t in targets]
+            elif spec == pattern:
+                return targets
+        return [posixpath.normpath(posixpath.join(self.base, spec))] if self.base is not None else []
+
+    def described(self) -> str:
+        if not self.paths and self.base is None:
+            return ""
+        shown = [f"{p} → {', '.join(t or '.' for t in ts)}" for p, ts in self.paths]
+        if self.base is not None:
+            shown.append(f"baseUrl {self.base or '.'}")
+        return f"{self.rel}: {'; '.join(shown)}"
+
+
+class Imports:
+    """Import edges between tracked files: who imports whom and which names.
+
+    TS/JS by pattern (static `import … from`, `export … from`, `require`, `import()`),
+    Python by `ast`. A specifier resolves to a tracked file or not at all: a package, an
+    alias the configs do not declare, a file that is not in the repository are counted and
+    skipped — never matched by a guess at the nearest name.
+    """
+
+    def __init__(self, tracked: set[str]) -> None:
+        self.tracked = tracked
+        self.configs: dict[str, TsConfig | None] = {}
+        self.resolved = self.unresolved = 0
+
+    def config_for(self, rel: str) -> TsConfig | None:
+        """The nearest `tsconfig.json`/`jsconfig.json` above the file — the one the compiler uses."""
+        d = posixpath.dirname(rel)
+        while True:
+            if d not in self.configs:
+                found = None
+                for name in TS_CONFIGS:
+                    cand = posixpath.join(d, name) if d else name
+                    if (ROOT / cand).is_file():
+                        found = TsConfig(cand)
+                        break
+                self.configs[d] = found
+            if self.configs[d] is not None or not d:
+                return self.configs[d]
+            d = posixpath.dirname(d)
+
+    def file_of(self, base: str, exts: tuple[str, ...], index: str,
+                source_first: bool = False) -> str | None:
+        if base.startswith("..") or base.startswith("/"):
+            return None
+        tries = [base]
+        stem, ext = posixpath.splitext(base)
+        if exts == JS_EXTS:
+            # `./x.js` names `./x.ts`; `./types` may be a declaration file only
+            emitted = [stem + e for e in JS_EMITTED.get(ext, ())]
+            tries = emitted + tries if source_first else tries + emitted
+            exts = exts + (".d.ts",)
+        tries += [base + e for e in exts]
+        tries += [posixpath.normpath(posixpath.join(base, index + e)) for e in exts]
+        return next((t for t in tries if t in self.tracked), None)
+
+    def js_target(self, rel: str, spec: str) -> str | None:
+        ts = rel.endswith(TS_IMPORTERS)
+        if spec.startswith("."):
+            return self.file_of(posixpath.normpath(posixpath.join(posixpath.dirname(rel), spec)),
+                                JS_EXTS, "index", ts)
+        conf = self.config_for(rel)
+        for cand in (conf.candidates(spec) if conf else []):
+            hit = self.file_of(cand, JS_EXTS, "index", ts)
+            if hit:
+                return hit
+        return None
+
+    @staticmethod
+    def js_names(clause: str) -> list[str]:
+        clause = re.sub(r"^type\s+", "", clause.strip())
+        names: list[str] = []
+        if clause.startswith("*"):
+            return ["*"]
+        brace = re.search(r"\{([^}]*)\}", clause)
+        head = clause[:brace.start()] if brace else clause
+        if head.strip(" ,"):
+            names.append("default")
+        if brace:
+            for part in brace.group(1).split(","):
+                word = re.sub(r"^type\s+", "", part.strip()).split()
+                if word:
+                    names.append(word[0].split(":")[0])
+        return names
+
+    def js_edges(self, rel: str, text: str) -> list[tuple[str, list[str]]]:
+        # The forms are searched in the MASKED text (comments and string contents blanked,
+        # offsets kept) and the specifier is read back from the original at the same span:
+        # `// const old = require('./x')` or a string holding `import('./x')` is not a link.
+        code = js_code_mask(text)
+        spec = lambda m: text[m.start("spec"):m.end("spec")]
+        found: list[tuple[str, list[str]]] = []
+        for m in JS_IMPORT.finditer(code):
+            found.append((spec(m), self.js_names(m["clause"])))
+        for m in JS_BARE_IMPORT.finditer(code):
+            found.append((spec(m), []))
+        for m in JS_REEXPORT.finditer(code):
+            found.append((spec(m), self.js_names(m["clause"])))
+        for m in JS_REQUIRE.finditer(code):
+            bind = m["bind"] or ""
+            found.append((spec(m), self.js_names(bind) if bind.startswith("{")
+                          else (["*"] if bind else [])))
+        for m in JS_DYNAMIC.finditer(code):
+            found.append((spec(m), []))
+        return [(t, names) for spec, names in found if (t := self.counted(self.js_target(rel, spec)))]
+
+    def counted(self, target: str | None) -> str | None:
+        if target:
+            self.resolved += 1
+        else:
+            self.unresolved += 1
+        return target
+
+    def py_module(self, rel: str, dotted: str, level: int) -> str | None:
+        """A module name to its file. Relative (`level` dots) from the importer's package; an
+        absolute one from the nearest directory above the importer that holds it — the
+        script's own directory first, the root last, as `sys.path` would have them for a
+        project run from its tree. `pyproject` package maps are not read."""
+        parts = [p for p in dotted.split(".") if p]
+        if level:
+            d = posixpath.dirname(rel)
+            for _ in range(level - 1):
+                d = posixpath.dirname(d)
+            roots = [d]
+        else:
+            roots, d = [], posixpath.dirname(rel)
+            while True:
+                roots.append(d)
+                if not d:
+                    break
+                d = posixpath.dirname(d)
+        for r in roots:
+            base = posixpath.join(r, *parts) if parts else r
+            hit = self.file_of(base, PY_EXTS, "__init__") if parts else (
+                posixpath.join(r, "__init__.py") if posixpath.join(r, "__init__.py") in self.tracked
+                else None)
+            if hit:
+                return hit
+        return None
+
+    def py_edges(self, rel: str, text: str) -> list[tuple[str, list[str]]]:
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            return []
+        found: list[tuple[str | None, list[str]]] = []
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    found.append((self.py_module(rel, a.name, 0), []))
+            elif isinstance(n, ast.ImportFrom):
+                module = n.module or ""
+                whole: list[str] = []
+                for a in n.names:
+                    # `from pkg import mod` imports a submodule when there is one
+                    sub = (self.py_module(rel, f"{module}.{a.name}" if module else a.name, n.level)
+                           if a.name != "*" else None)
+                    if sub:
+                        found.append((sub, []))
+                    else:
+                        whole.append(a.name)
+                if whole:
+                    found.append((self.py_module(rel, module, n.level), whole))
+        return [(t, names) for t, names in found if self.counted(t)]
+
+    def edges(self, rel: str) -> list[tuple[str, list[str]]]:
+        ext = posixpath.splitext(rel)[1]
+        if ext not in JS_EXTS and ext not in PY_EXTS:
+            return []
+        lines = text_lines(rel)
+        if lines is None:
+            return []
+        text = b"\n".join(lines).decode("utf-8", "replace")
+        return self.js_edges(rel, text) if ext in JS_EXTS else self.py_edges(rel, text)
+
+
+def block_seams(b: dict, min_together: int, min_share: float,
+                since: str | None = None) -> dict:
+    """The pairs of the block's files linked by an import, by joint changes, or both —
+    sorted: both kinds first, then by joint changes, then by imported names."""
+    defn = blocks()
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    files = sorted(git_files(b.get("paths", [])) - excluded)
+    inside = set(files)
+    imp = Imports(all_files())
+    pairs: dict[tuple[str, str], dict] = {}
+
+    def pair(a: str, c: str) -> dict:
+        return pairs.setdefault(tuple(sorted((a, c))), {"imports": {}, "together": 0,
+                                                         "share": (0.0, 0.0)})
+    outside = 0
+    for f in files:
+        for target, names in imp.edges(f):
+            if target == f:
+                continue
+            if target not in inside:
+                outside += 1
+                continue
+            got = pair(f, target)["imports"].setdefault((f, target), set())
+            got.update(names)
+    owned, _, _ = coverage_map()
+    sets, merges = commit_file_sets(since)
+    cutoff = mass_cutoff(sets) if sets else 0
+    changes, together, skipped = joint_changes(owned, sets, cutoff,
+                                               lambda a, c: a in inside and c in inside)
+    for (a, c), n in together.items():
+        share = (n / changes[a], n / changes[c])
+        if n >= min_together and max(share) >= min_share:
+            got = pair(a, c)
+            got["together"], got["share"] = n, share
+    rows = []
+    for (a, c), p in pairs.items():
+        names = set().union(*p["imports"].values()) if p["imports"] else set()
+        rows.append({"a": a, "b": c, **p, "names": names,
+                     "both": bool(p["imports"]) and p["together"] > 0})
+    rows.sort(key=lambda r: (not r["both"], -r["together"], -len(r["names"]), r["a"], r["b"]))
+    configs = sorted({c.described() for c in imp.configs.values() if c and c.described()})
+    return {"files": files, "rows": rows, "resolved": imp.resolved, "unresolved": imp.unresolved,
+            "outside": outside, "configs": configs, "sets": sets, "merges": merges,
+            "cutoff": cutoff, "skipped": skipped}
+
+
+SEAM_CO = "co-change {n}× ({a} / {b} of each file's changes)"
+
+
+def seam_lines(rows: list[dict], indent: str = "  ", co: str = SEAM_CO) -> list[str]:
+    """The pairs as the listing and the hunter prompt print them — one shape for both; `co`
+    words the joint-change line in the language of the reader."""
+    out = []
+    for i, r in enumerate(rows, 1):
+        out.append(f"{indent}{i}. {r['a']}  ↔  {r['b']}")
+        for (src, dst), names in sorted(r["imports"].items()):
+            shown = ", ".join(sorted(names)) if names else "—"
+            out.append(f"{indent}     import {src} → {dst}: {shown}")
+        if r["together"]:
+            out.append(f"{indent}     " + co.format(n=r["together"], a=f"{r['share'][0]:.0%}",
+                                                     b=f"{r['share'][1]:.0%}"))
+    return out
+
+
+def render_seams_for(b: dict) -> str:
+    """`{{SEAMS}}`: the block's top seams for the hunter — where reading must join two files."""
+    found = block_seams(b, COUPLING_MIN_TOGETHER, COUPLING_MIN_SHARE)
+    rows = found["rows"]
+    if not rows:
+        return T("seams_none")
+    head = T("seams_head", n=len(rows), top=min(SEAMS_TOP, len(rows)))
+    return head + "\n\n```\n" + "\n".join(
+        seam_lines(rows[:SEAMS_TOP], indent="", co=MSG[review_lang()]["seams_co"])) + "\n```"
+
+
+def cmd_seams(args) -> int:
+    """Pairs of files INSIDE one block linked by an import or by joint changes."""
+    defn = blocks()
+    idx = block_index(defn)
+    if args.block not in idx:
+        die(f"unknown block {args.block}; known: {', '.join(idx)}")
+    b = idx[args.block]
+    if args.top < 1:
+        die(f"--top must be at least 1, not {args.top}")
+    found = block_seams(b, args.min_together, args.min_share, args.since)
+    rows = found["rows"]
+    n_imp = sum(1 for r in rows if r["imports"])
+    n_co = sum(1 for r in rows if r["together"])
+    n_both = sum(1 for r in rows if r["both"])
+    print(f"block {b['id']}: {len(found['files'])} files; pairs linked by an import: {n_imp}, "
+          f"by joint changes: {n_co}, by both: {n_both}")
+    print(f"imports: {found['resolved']} resolved to a tracked file ({found['outside']} of them "
+          f"outside the block), {found['unresolved']} not resolved — packages, aliases no config "
+          f"declares, files not in the repository; skipped")
+    for c in found["configs"]:
+        print(f"aliases: {c}")
+    sets = found["sets"]
+    if sets:
+        print(history_line(sets, found["merges"]))
+        print(f"joint changes: together ≥ {args.min_together}, share ≥ {args.min_share:.0%} "
+              f"(the thresholds of `coupling`); {found['skipped']} mass commits skipped "
+              f"(> {found['cutoff']} files, {mass_basis(sets)})")
+    else:
+        print("no commits in the history — joint changes cannot be counted")
+    if not rows:
+        print("\nno two files of the block are linked — nothing to join across files")
+        return 0
+    top = rows[:args.top]
+    print(f"\nseams ({len(top)} of {len(rows)}; both kinds first, then joint changes, then "
+          f"imported names):")
+    print("\n".join(seam_lines(top)))
+    print(f"\nfor each: a hypothesis in the manifest ({manifest_path(b).relative_to(ROOT)}) on "
+          f"what one side assumes about the other — the value, the state, the error it expects "
+          f"— and the check that the other side holds it on every path. The hunter prompt "
+          f"carries the top {SEAMS_TOP} (`{CLI} prompt {b['id']} --role hunter`).")
     return 0
 
 
@@ -2599,6 +3139,8 @@ def cmd_prompt(args) -> int:
         # commits to make, and the lookup is a git run per file it reads.
         "{{COMMIT_RULES}}": commit_rules(args.role, args.diff or "")
         if "{{COMMIT_RULES}}" in body else "",
+        # The same: the seams read the whole history, and only the hunter's template asks.
+        "{{SEAMS}}": render_seams_for(b) if "{{SEAMS}}" in body else "",
     }
     if diff:
         # The diff is a substitution like any other and goes in the SAME pass. Applied
@@ -3139,18 +3681,24 @@ def cmd_set_status(args) -> int:
                 f"serious findings: fix them (`{CLI} set-finding <id> fixed --commit <sha>`), defer "
                 f"with a reason (`deferred --reason \"…\"`) or reject (`rejected --reason \"…\"`). "
                 f"To switch the gate off for this project: `\"fix_gate\": \"none\"` in blocks.json")
+    b = block_index(defn)[args.block]
+    if args.status in READ_STATUSES and ceiling_block(b):
+        record_reading(args.block, b, s, args.status)
     if args.status in ("verified", "closed"):
         # A block passed with its draft outside the register passes with findings nobody
         # will see: the summary, findings.md and the fix gate read the register only (#42).
         if why := draft_not_imported(block_index(defn)[args.block], findings()):
             die(why)
+    closing = args.status == "closed" and s.get("status") != "closed"
     s["status"] = args.status
     # The timestamp is set on EVERY entry into running, not only the first: a block
     # returned to work three weeks later would otherwise count as stuck at once, and the
     # check advised restarting exactly what was being worked on.
     if args.status == "running":
         s["started"] = now()
-    if args.status == "closed":
+    # Only a real closing: `set-status <ID> closed` on a closed block is how a review older
+    # than `read_lines` records the size (record_reading), and it must not rewrite the date.
+    if closing:
         s["finished"] = now()
     # Fingerprint of WHAT exactly was reviewed. A "passed" status without it holds forever:
     # the block's files get rewritten, and the block still counts as closed — what was
@@ -3173,6 +3721,31 @@ def cmd_set_status(args) -> int:
     save_json(STATE_FILE, st)
     print(f"{args.block}: {args.status}")
     return 0
+
+
+def record_reading(bid: str, b: dict, s: dict, to: str) -> None:
+    """Record the size a block is read at, or refuse a reading the ceiling does not allow.
+
+    Entry into a read status from an unread one IS the reading: the block must fit the
+    ceiling now, and its size is written, replacing a record of an earlier reading. A move
+    between read statuses keeps the record; a block without one (a review older than the
+    record) gets it only while it fits — so the honest backfill for such a block is
+    `set-status <ID> <its current status>` while it is within the ceiling, and a block that
+    has already grown past it without a record is split, not excused.
+    """
+    limit = readable_lines()
+    _, lines = block_lines(b["paths"])
+    fresh = s.get("status", "todo") not in READ_STATUSES
+    if not fresh and isinstance(s.get(READ_LINES_KEY), int):
+        return
+    if lines > limit:
+        how = ("a report on this volume would lie about coverage"
+               if fresh else "the size it was read at was never recorded, and now it is "
+                             "above the ceiling, so no reading within it can be vouched for")
+        die(f"{bid}: {lines} lines against a ceiling of {limit} — cannot move to `{to}`: {how}. "
+            f"Split the block by subject in blocks.json (`{CLI} sizes` shows the size), then "
+            f"review the parts")
+    s[READ_LINES_KEY] = lines
 
 
 # -------------------------------------------------------------------- set-finding
@@ -4769,12 +5342,36 @@ def cmd_check(args) -> int:
             continue
         n, lines = block_lines(b["paths"])
         limit = readable_lines()
-        if lines > limit:
-            gates.refuse(
-                "blocks/too-big-to-read",
-                f"{bid}: {n} files, {lines} lines — cannot be read in one session "
-                f"(ceiling {limit}). Split the block, or the report will lie about coverage"
-            )
+        if lines <= limit:
+            continue
+        # The split must come BEFORE the reading: after it the report already says what was
+        # read, and refusing then made a closed block red for code added later (this kit's
+        # own T1 grew past the ceiling with new commands, and every PR into review.py failed
+        # `check`). What is left is a debt of the next review, said aloud.
+        s = st["blocks"].get(bid, {})
+        status = s.get("status", "todo")
+        if read_under_ceiling(s, limit):
+            gates.warn(
+                "blocks/grew-past-ceiling",
+                f"{bid}: {n} files, {lines} lines — grew past the ceiling ({limit}) after the "
+                f"review (read at {s[READ_LINES_KEY]}, status {status}); the report stands for "
+                f"what was read then, but the "
+                f"next review of this code must split the block first: `{CLI} sizes`")
+            continue
+        # A status past the hunt without a reading recorded within the ceiling is no excuse:
+        # the report of such a block was written on a volume nobody can read in one session.
+        read = s.get(READ_LINES_KEY)
+        why = ("" if status not in READ_STATUSES else
+               f" Status {status} does not excuse it: the block was read at {read} lines."
+               if isinstance(read, int) else
+               f" Status {status} does not excuse it: the size at reading was never recorded "
+               f"(a review older than the record), and only a block read within the ceiling "
+               f"is let through.")
+        gates.refuse(
+            "blocks/too-big-to-read",
+            f"{bid}: {n} files, {lines} lines — cannot be read in one session "
+            f"(ceiling {limit}).{why} Split the block, or the report will lie about coverage"
+        )
 
     # The loop signal, as `prompt --role fix` will refuse it: said here too, because the lead
     # reads `check` after every import, and the stop belongs before the next round is cut, not
@@ -5119,6 +5716,9 @@ Next — by hand, and this is not a formality:
    first, domain ones next, live-system ones last. Example: {asset(ASSET_BLOCKS, lang)}
 3. The manifest of the first block — docs/review/blocks/<ID>-<slug>.md: 10–15 hypotheses about your
    project and the acceptance criterion. Example: {asset(ASSET_MANIFEST, lang)}
+   `{cli} seams <ID>` lists the pairs of the block's files linked by an import or by joint
+   changes: for each of the top ones write a hypothesis on what one side assumes about the
+   other — nobody else joins them, and the hunter gets the same list in its prompt.
 4. `{cli} init`, then `{cli} coverage` — and deal with the unowned files until there are
    none left. This is where everything forgotten surfaces. Reviewing only a part on purpose
    (a trial run, a release gate, one risky area)? Declare `"scope": {{"paths": [...], "reason": "..."}}`
@@ -5226,6 +5826,12 @@ def main() -> int:
     c.add_argument("--min-together", type=int, default=COUPLING_MIN_TOGETHER, help="joint commits a pair needs")
     c.add_argument("--min-share", type=float, default=COUPLING_MIN_SHARE, help="share of one file's commits the pair must cover")
     c.add_argument("--write", action="store_true", help="also write docs/review/coupling.tsv")
+    c = sub.add_parser("seams", help="pairs of files inside one block linked by an import or by joint changes")
+    c.add_argument("block")
+    c.add_argument("--top", type=int, default=SEAMS_TOP, help=f"how many pairs to print (default {SEAMS_TOP})")
+    c.add_argument("--since", help="only commits since this date (git --since)")
+    c.add_argument("--min-together", type=int, default=COUPLING_MIN_TOGETHER, help="joint commits a pair needs")
+    c.add_argument("--min-share", type=float, default=COUPLING_MIN_SHARE, help="share of one file's commits the pair must cover")
     c = sub.add_parser("order", help="blocks in the order worth walking them: risk first, change frequency second")
     c.add_argument("--since", help="only commits since this date (git --since)")
     sub.add_parser("refs", help="finding ids of the register named in the code outside docs/review/")
@@ -5256,7 +5862,7 @@ def main() -> int:
         "check": cmd_check, "log": cmd_log, "import": cmd_import, "decide": cmd_decide,
         "set-finding": cmd_set_finding, "hypotheses": cmd_hypotheses,
         "restamp": cmd_restamp, "roots": cmd_roots, "backfill": cmd_backfill,
-        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "order": cmd_order, "refs": cmd_refs, "summary": cmd_summary, "sarif": cmd_sarif,
+        "inventory": cmd_inventory, "sizes": cmd_sizes, "coupling": cmd_coupling, "seams": cmd_seams, "order": cmd_order, "refs": cmd_refs, "summary": cmd_summary, "sarif": cmd_sarif,
         "setup": cmd_setup,
     }[args.cmd](args)
 

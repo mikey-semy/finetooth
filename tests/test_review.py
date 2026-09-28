@@ -2506,6 +2506,190 @@ class ReviewToolTest(unittest.TestCase):
         out = self.s.run("check")
         self.assertIn("cannot be read in one session", refused(out), out.stdout)
 
+    HUNTER_STUB = "# охотник\n## Гипотезы\n- H1.1 — проверена: да\n## Ограничения охвата\nнет\n"
+
+    def _read_block(self, lines: int) -> None:
+        """Стенд, на котором `check` иначе зелёный: блок с отчётами обеих ролей и картой
+        покрытия, потолок 100 строк, в блоке `lines` строк. Статус ставит тест."""
+        self.s.write("src/big.ts", "x\n" * lines)
+        self.s.blocks(paths=["src/big.ts"], readable_lines=100)
+        self.s.manifest(hypotheses=1)
+        self.s.reports(hunter=self.HUNTER_STUB, verify=FULL_VERIFY)
+        self.s.commit()
+        self.s.run("init")
+        self.s.run("coverage")
+
+    def _grow(self, lines: int) -> None:
+        """Код блока вырос после ревью — коммитом, как растёт в жизни."""
+        self.s.write("src/big.ts", "x\n" * lines)
+        self.s.commit("рост")
+        self.s.run("coverage")
+
+    def _state_block(self) -> dict:
+        return json.loads((self.s.root / "docs/review/state.json").read_text(
+            encoding="utf-8"))["blocks"]["H1"]
+
+    def _forget_read_size(self) -> None:
+        """Ревью, начатое до записи размера при чтении: поля в состоянии нет, а блок
+        закрыт давно — дата, которую запись размера обязана сохранить."""
+        path = self.s.root / "docs/review/state.json"
+        st = json.loads(path.read_text(encoding="utf-8"))
+        st["blocks"]["H1"].pop("read_lines", None)
+        if st["blocks"]["H1"].get("finished"):
+            st["blocks"]["H1"]["finished"] = self.OLD_STAMP
+        path.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
+    def test_непрочитанный_блок_выше_потолка_роняет_проверку_в_любом_статусе_до_охоты(self):
+        """Резать блок надо ДО чтения: `running` и `blocked` — тоже ещё не прочитанный блок
+        (отчёта охотника за ними нет), и отказ на них тот же, что на `todo`."""
+        self._read_block(150)
+        for status in ("running", "blocked"):
+            with self.subTest(статус=status):
+                self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
+                out = self.s.run("check")
+                self.assertIn("cannot be read in one session", refused(out), out.stdout)
+                self.assertNotIn("grew past the ceiling", out.stdout)
+
+    def test_блок_выше_потолка_не_переходит_в_прочитанный_статус(self):
+        """Лазейка из замечания Codex к #57: `set-status hunted` на блоке выше потолка
+        превращал отказ в предупреждение, ничего не разрезав. Переход в прочитанный статус
+        и есть чтение — блок обязан влезать в потолок, иначе отказ, и статус не меняется."""
+        self._read_block(150)
+        for status in ("hunted", "verified", "closed"):
+            with self.subTest(статус=status):
+                out = self.s.run("set-status", "H1", status)
+                self.assertNotEqual(out.returncode, 0, out.stdout)
+                self.assertIn("150 lines against a ceiling of 100", out.stderr)
+                self.assertIn(" sizes`", out.stderr, "отказ обязан сказать, что делать")
+                self.assertEqual(self._state_block()["status"], "todo")
+        # Правило 8: механизм сменился — шаблон говорит. Охотнику, получившему блок выше
+        # порога, промпт велит не только назвать непрочитанное, но и сказать, что резать:
+        # прочитанным такой блок не примут.
+        for lang, said in (("ru", "`set-status` откажет"), ("en", "`set-status` refuses it")):
+            with self.subTest(язык=lang):
+                self.s.blocks(paths=["src/big.ts"], readable_lines=100, lang=lang)
+                self.assertIn(said, self.s.run("prompt", "H1", "--role", "hunter").stdout)
+
+    def test_блок_выросший_за_потолок_после_охоты_предупреждает(self):
+        """Потолок — обещание о чтении, которое ещё впереди. Блок, прочитанный В ПРЕДЕЛАХ
+        потолка (размер записан при чтении), отчёт отвечает за объём того дня, рост кода
+        после ревью ловит отпечаток блока, а отказ ронял `check` на закрытом блоке за код,
+        добавленный позже: каждый PR в review.py краснел. Теперь это долг следующего ревью
+        — вслух, с командой, и прогон зелёный."""
+        self._read_block(100)
+        self.assertEqual(self.s.run("set-status", "H1", "hunted").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 100)
+        self._grow(150)
+        for status in ("hunted", "verified", "triaged", "fixing", "closed"):
+            with self.subTest(статус=status):
+                self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
+                self.assertEqual(self._state_block().get("read_lines"), 100,
+                                 "переход между прочитанными статусами — не новое чтение")
+                out = self.s.run("check")
+                self.assertEqual(out.returncode, 0, out.stdout)
+                said = warned(out)
+                self.assertIn("150 lines — grew past the ceiling (100) after the review", said,
+                              out.stdout)
+                self.assertIn(f"(read at 100, status {status})", said)
+                self.assertIn(" sizes`", said, "предупреждение обязано назвать команду")
+                self.assertNotIn("cannot be read in one session", out.stdout)
+
+    def test_прочитанный_блок_без_записи_размера_выше_потолка_роняет_проверку(self):
+        """Старое ревью: размер при чтении не записан. Статус не доказывает, что блок читали
+        в пределах потолка, — отказ, как у непрочитанного, с причиной; и задним числом
+        записать размер переходом статуса нельзя, пока блок выше потолка."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        self._forget_read_size()
+        self._grow(150)
+        out = self.s.run("check")
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
+        self.assertIn("size at reading was never recorded", out.stdout)
+        self.assertNotIn("grew past the ceiling", out.stdout)
+        again = self.s.run("set-status", "H1", "closed")
+        self.assertNotEqual(again.returncode, 0, again.stdout)
+        self.assertIn("was never recorded", again.stderr)
+        self.assertNotIn("read_lines", self._state_block())
+
+    def test_размер_при_чтении_выше_нынешнего_потолка_не_прощает_блок(self):
+        """Запись размера — не пропуск сама по себе: проект снизил потолок (число — замер
+        на своём языке), и блок, прочитанный на 100 строках, при потолке 90 прочитан выше
+        него. Такой блок не «вырос после ревью» — его отчёт на непосильном объёме."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.blocks(paths=["src/big.ts"], readable_lines=90)
+        self.s.commit("потолок проекта ниже")
+        out = self.s.run("check")
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
+        self.assertIn("the block was read at 100 lines", out.stdout)
+        self.assertNotIn("grew past the ceiling", out.stdout)
+
+    def test_размер_старого_блока_записывается_переходом_пока_он_в_пределах_потолка(self):
+        """Честный путь для ревью без записи: пока блок влезает в потолок, `set-status` в
+        его же прочитанный статус записывает размер — и позже рост даёт предупреждение."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        self._forget_read_size()
+        finished = self._state_block()["finished"]
+        self.assertEqual(self.s.run("set-status", "H1", "closed").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 100)
+        self.assertEqual(self._state_block()["finished"], finished,
+                         "запись размера не переписывает дату закрытия")
+        self._grow(150)
+        self.s.run("restamp", "H1")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("grew past the ceiling", warned(out))
+
+    def test_новое_чтение_перезаписывает_размер(self):
+        """Возврат в работу и новая охота — новое чтение: размер берётся заново, и
+        блок, выросший за потолок, обязан сначала разрезаться."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self._grow(150)
+        self.s.run("set-status", "H1", "running")
+        out = self.s.run("set-status", "H1", "hunted")
+        self.assertNotEqual(out.returncode, 0, out.stdout)
+        self._grow(80)
+        self.assertEqual(self.s.run("set-status", "H1", "hunted").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 80)
+
+    def test_sizes_и_status_различают_непрочитанный_и_выросший_блок(self):
+        """`sizes` и `status` говорят то же, что `check`: до охоты — резать сейчас (и
+        `sizes` краснеет), после чтения в пределах потолка — долг следующего ревью (и
+        `sizes` зелёный)."""
+        self._read_block(150)
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("above the ceiling by 50 — split by subject", out.stdout)
+        self.assertIn("above the ceiling by 50", self.s.run("status").stdout)
+        self._grow(100)
+        self.s.run("set-status", "H1", "hunted")
+        self._grow(150)
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("grew past the ceiling by 50 after the review", out.stdout)
+        self.assertIn("blocks grown past the ceiling after their review: 1", out.stdout)
+        self.assertNotIn("split by subject", out.stdout)
+        self.assertIn("grew past the ceiling by 50", self.s.run("status").stdout)
+        self._forget_read_size()
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 1, "без записи размера блок не прощён и в sizes")
+        self.assertIn("split by subject", out.stdout)
+
+    def test_прочитанный_блок_в_пределах_потолка_молчит(self):
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        for said in (out.stdout, self.s.run("status").stdout, self.s.run("sizes").stdout):
+            self.assertNotIn("grew past", said)
+            self.assertNotIn("above the ceiling", said)
+            self.assertNotIn("cannot be read", said)
+
     def test_порог_размера_не_считает_исключённое(self):
         """Исключённый кодоген не должен требовать резать блок."""
         self.s.write("src/one.ts", "a\n")
@@ -3001,8 +3185,13 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertIn(named, self.COVERAGE_SECTIONS,
                       f"предупреждение не называет ни одного раздела отчёта: {warning}")
         self.s.reports(hunter=self._hunter_naming_unread_in(named), verify=FULL_VERIFY)
-        self.s.run("set-status", "H1", "hunted")
-        self.s.run("set-status", "H1", "verified")
+        # Предупреждение взято из промпта; дальше тест о воротах отчёта, а не о пороге:
+        # блок выше порога `set-status hunted` не пропустит (#57), и стенд, где статус не
+        # сменился, проверял бы ворота, которые на `todo` не работают вовсе.
+        self.s.write("src/one.ts", "a\n" * 50)
+        self.s.commit("блок в пределах порога")
+        for status in ("hunted", "verified"):
+            self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
         self.s.commit("отчёты")
         out = self.s.run("check")
         self.assertNotIn(self.LIMITS_REFUSAL, refused(out),
@@ -3052,8 +3241,11 @@ class ParallelKitLessonsTest(unittest.TestCase):
                               f"- src/one.ts\n")
                 s.reports(hunter=hunter, verify=paths_only.replace(
                     f"## {section}\n", f"## {section}\n{said[-1]}.\n"))
-                s.run("set-status", "H1", "hunted")
-                s.run("set-status", "H1", "verified")
+                # Как в тесте охотника выше: блок до порога, иначе статус не сменится (#57).
+                s.write("src/one.ts", "a\n" * 50)
+                s.commit("блок в пределах порога")
+                for status in ("hunted", "verified"):
+                    self.assertEqual(s.run("set-status", "H1", status).returncode, 0)
                 s.commit("отчёт по предупреждению")
                 self.assertNotIn("no coverage verdict", refused(s.run("check")),
                                  f"проверяющий написал ровно то, что велело предупреждение "
@@ -4275,7 +4467,7 @@ BODY_ARGV = {
     # Именно находка, а не блок: `set-status` в обходе идёт раньше `restamp`, и после него
     # блок не в том статусе, который штампуется, — блочный `restamp` отказывался бы всегда.
     "restamp": ("H1-001",), "backfill": (), "inventory": (), "sizes": (),
-    "coupling": (), "order": (), "refs": (), "summary": ("--out", "s.md"),
+    "coupling": (), "seams": ("H1",), "order": (), "refs": (), "summary": ("--out", "s.md"),
     "roots": (), "findings": (), "check": (), "log": ("H1", "строка"),
     "decide": ("H1", "решение"),
     # Без `--out`: поток — поведение по умолчанию, и обход границы записи проверяет, что оно
@@ -5043,6 +5235,214 @@ class ThresholdTest(unittest.TestCase):
         self.s.run("init")
         out = self.s.run("coupling").stdout
         self.assertIn("95th percentile of this repository", out)
+
+
+class SeamsTest(unittest.TestCase):
+    """`seams`: пары файлов ВНУТРИ блока, связанные импортом или совместными правками.
+
+    Замер полноты (finetooth-hq, 2026-09-recall, фаза 2): из семи дефектов, видимых только
+    при связывании нескольких файлов блока, полностью найдено три. `coupling` смотрит пары
+    между блоками, стыков внутри блока не видел никто.
+    """
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _ts_stand(self, tsconfig: str | None) -> str:
+        if tsconfig is not None:
+            self.s.write("tsconfig.json", tsconfig)
+        self.s.write("src/lib/db.ts", "export function getUser() {}\nexport const LIMIT = 5\n")
+        self.s.write("src/lib/index.ts", "export { getUser, LIMIT as MAX } from './db'\n")
+        self.s.write("src/lib/all.ts", "export * from './db'\n")
+        self.s.write("src/api/route.ts", (
+            "import { getUser, type LIMIT } from '@/lib/db'\n"
+            "import React from 'react'\n"
+            "// import { ghost } from './ghost'\n"
+            "const helper = require('./helper')\n"))
+        self.s.write("src/api/helper.ts", "export const h = 1\n")
+        self.s.write("src/api/ghost.ts", "export const ghost = 1\n")
+        self.s.write("src/api/esm.ts", "import { h } from './helper.js'\nimport type { T } from '.'\n"
+                                       "import { x } from './both.js'\n")
+        self.s.write("src/api/both.ts", "export const x = 1\n")
+        self.s.write("src/api/both.js", "exports.x = 1\n")
+        self.s.write("src/api/plain.js", "const { x } = require('./both.js')\n")
+        self.s.write("src/api/dead.ts", (
+            "// const old = require('./old1')\n"
+            "/* const m = await import('./old2')\n   require('./old3') */\n"
+            "const s = \"import('./old4')\", t = `require('./old5')`\n"
+            "const live = require('./helper')\n"))
+        for k in range(1, 6):
+            self.s.write(f"src/api/old{k}.ts", "export const o = 1\n")
+        self.s.write("src/api/index.d.ts", "export type T = string\n")
+        self.s.blocks(paths=["src/**", "tsconfig.json"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("seams", "H1")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    TSCONFIG = ('{\n  // комментарий, как в живых проектах\n  "compilerOptions": {\n'
+                '    "paths": { "@/*": ["./src/*"], },\n  },\n}\n')
+
+    def test_импорт_ts_относительный_алиас_и_реэкспорт(self):
+        out = self._ts_stand(self.TSCONFIG)
+        self.assertIn("import src/api/route.ts → src/lib/db.ts: LIMIT, getUser", out,
+                      "алиас `@/` из paths в tsconfig обязан разрешиться в src/")
+        self.assertIn("import src/lib/index.ts → src/lib/db.ts: LIMIT, getUser", out,
+                      "`export { … } from` — тоже импорт, с именами источника")
+        self.assertIn("import src/lib/all.ts → src/lib/db.ts: *", out)
+        self.assertIn("import src/api/route.ts → src/api/helper.ts: *", out, "require")
+        self.assertIn("import src/api/esm.ts → src/api/helper.ts: h", out,
+                      "`./x.js` в TypeScript называет `./x.ts`")
+        self.assertIn("import src/api/esm.ts → src/api/index.d.ts: T", out,
+                      "`'.'` — каталог: его index, в том числе файл объявлений")
+        self.assertIn("aliases: tsconfig.json: @/* → src/*", out,
+                      "вывод обязан назвать конфиг, из которого прочитан алиас")
+        self.assertNotIn("ghost", out, "импорт в комментарии — не импорт")
+        self.assertNotRegex(out, r"old\d", "`require`/`import()` в комментарии `//`, `/* */` и в "
+                                     "строке — не связь")
+        self.assertIn("import src/api/dead.ts → src/api/helper.ts: *", out,
+                      "настоящий `require` рядом с мёртвыми обязан остаться")
+        self.assertIn("import src/api/esm.ts → src/api/both.ts: x", out,
+                      "из .ts TypeScript берёт исходник раньше собранного .js")
+        self.assertIn("import src/api/plain.js → src/api/both.js: x", out,
+                      "из .js написанное расширение и есть файл")
+        self.assertRegex(out, r"1 not resolved", "пакет `react` не разрешается и считается")
+
+    def test_алиас_без_конфига_не_угадывается(self):
+        """`@/` — соглашение, а не правило: без paths в конфиге проект мог назвать им что
+        угодно, и связь, выведенная догадкой, была бы ложной."""
+        out = self._ts_stand(None)
+        self.assertNotIn("src/api/route.ts → src/lib/db.ts", out)
+        self.assertIn("import src/lib/index.ts → src/lib/db.ts", out)
+        self.assertNotIn("aliases:", out)
+
+    def test_алиас_из_относительного_extends(self):
+        """`paths` часто лежат в общем базовом конфиге, а `tsconfig.json` его расширяет;
+        цели разрешаются от конфига, который объявил `paths`, а не от расширяющего."""
+        self.s.write("config/tsconfig.base.json",
+                     '{"compilerOptions": {"paths": {"@/*": ["../src/*"]}}}\n')
+        out = self._ts_stand('{"extends": "./config/tsconfig.base.json"}\n')
+        self.assertIn("import src/api/route.ts → src/lib/db.ts: LIMIT, getUser", out)
+        self.assertIn("aliases: tsconfig.json: @/* → src/*", out)
+
+    def test_импорт_python(self):
+        self.s.write("pkg/__init__.py", "")
+        self.s.write("pkg/a.py", "from .b import thing, other\nfrom . import sub\nimport pkg.c\n"
+                                 "import os\n\ndef f():\n    from pkg.d import late\n")
+        self.s.write("pkg/b.py", "thing = other = 1\n")
+        self.s.write("pkg/c.py", "")
+        self.s.write("pkg/d.py", "late = 1\n")
+        self.s.write("pkg/sub.py", "")
+        self.s.blocks(paths=["pkg/**"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("seams", "H1").stdout
+        self.assertIn("import pkg/a.py → pkg/b.py: other, thing", out)
+        self.assertIn("import pkg/a.py → pkg/sub.py: —", out,
+                      "`from . import sub` берёт подмодуль, а не имя из __init__")
+        self.assertNotIn("pkg/a.py → pkg/__init__.py", out)
+        self.assertIn("import pkg/a.py → pkg/c.py: —", out)
+        self.assertIn("import pkg/a.py → pkg/d.py: late", out, "импорт внутри функции — тоже импорт")
+
+    def _touch(self, *files: str) -> None:
+        for f in files:
+            p = self.s.root / f
+            p.write_text(p.read_text(encoding="utf-8") + "1\n", encoding="utf-8")
+        self.s.commit("t")
+
+    def _history_stand(self) -> None:
+        """a↔b: импорт и три совместные правки; c↔d: четыре совместные правки, импорта нет;
+        g→h: три имени; e→f: одно имя (по алфавиту e раньше g — сортировку по именам видно);
+        i↔j: две совместные правки — ниже порога; a↔x:
+        три совместные правки, но x в другом блоке."""
+        w = self.s.write
+        w("src/a.ts", "import { b1 } from './b'\n")
+        w("src/b.ts", "export const b1 = 1\n")
+        w("src/c.ts", "0\n")
+        w("src/d.ts", "0\n")
+        w("src/e.ts", "import { f1 } from './f'\n")
+        w("src/f.ts", "export const f1 = 1\n")
+        w("src/g.ts", "import { h1, h2, h3 } from './h'\n")
+        w("src/h.ts", "export const h1 = 1, h2 = 2, h3 = 3\n")
+        w("src/i.ts", "0\n")
+        w("src/j.ts", "0\n")
+        w("other/x.ts", "0\n")
+        self.s.blocks(paths=["src/**"], extra_blocks=[{
+            "id": "H2", "slug": "two", "phase": 1, "title": "Второй", "role": "demo",
+            "goal": "г", "paths": ["other/**"], "ref_paths": []}])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        for _ in range(3):
+            self._touch("src/a.ts", "src/b.ts")
+        for _ in range(4):
+            self._touch("src/c.ts", "src/d.ts")
+        for _ in range(2):
+            self._touch("src/i.ts", "src/j.ts")
+        for _ in range(3):
+            self._touch("src/e.ts", "other/x.ts")
+        self.s.run("init")
+
+    def test_совместные_правки_внутри_блока_и_порог_coupling(self):
+        self._history_stand()
+        out = self.s.run("seams", "H1").stdout
+        self.assertIn("src/c.ts  ↔  src/d.ts", out)
+        self.assertIn("co-change 4× (100% / 100% of each file's changes)", out)
+        self.assertIn("together ≥ 3, share ≥ 50% (the thresholds of `coupling`)", out)
+        self.assertNotIn("src/i.ts", out, "две совместные правки — ниже порога `coupling`")
+        self.assertNotIn("other/x.ts", out, "пара через блоки — работа `coupling`, не `seams`")
+
+    def test_сортировка_оба_вида_затем_правки_затем_имена(self):
+        self._history_stand()
+        out = self.s.run("seams", "H1").stdout
+        order = [out.index(p) for p in ("1. src/a.ts  ↔  src/b.ts", "2. src/c.ts  ↔  src/d.ts",
+                                        "3. src/g.ts  ↔  src/h.ts", "4. src/e.ts  ↔  src/f.ts")]
+        self.assertEqual(order, sorted(order), out)
+        top = self.s.run("seams", "H1", "--top", "2").stdout
+        self.assertIn("seams (2 of 4;", top)
+        self.assertNotIn("src/g.ts  ↔", top)
+
+    def test_промпт_охотника_несёт_стыки_блока(self):
+        self._history_stand()
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("1. src/a.ts  ↔  src/b.ts", out.stdout)
+        self.assertIn("совместных правок 3×", out.stdout, "стенд русский — строка тоже")
+        self.assertNotIn("{{SEAMS}}", out.stdout)
+
+    def test_без_стыков_промпт_говорит_нейтрально(self):
+        self.s.write("src/one.ts", "0\n")
+        self.s.blocks(paths=["src/one.ts"])
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ни одна пара файлов блока не связана", out.stdout)
+        self.assertIn("no two files of the block are linked", self.s.run("seams", "H1").stdout)
+
+    def test_английский_шаблон_охотника_тоже_несёт_стыки(self):
+        """Шаблоны ролей живут парой: подстановка в русском при забытой английской
+        оставила бы английскому ревью список стыков только в выводе `seams`."""
+        self.s.write("src/a.ts", "import { b1 } from './b'\n")
+        self.s.write("src/b.ts", "export const b1 = 1\n")
+        self.s.blocks(paths=["src/**"], lang="en")
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        out = self.s.run("prompt", "H1", "--role", "hunter")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Pairs of the block's files that depend on each other", out.stdout)
+        self.assertIn("import src/a.ts → src/b.ts: b1", out.stdout)
+
+    def test_неизвестный_блок_назван(self):
+        self._history_stand()
+        out = self.s.run("seams", "Z9")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("unknown block Z9; known: H1, H2", out.stderr)
 
 
 STREAM_REPLY = "блок пройден"
@@ -6221,6 +6621,7 @@ class GateRegistryTest(unittest.TestCase):
         ("freshness/tree-behind",               "test_отставшее_от_сервера_дерево_роняет_проверку"),
         ("blocks/proof-unknown",                "test_род_доказательства_вне_словаря"),
         ("blocks/too-big-to-read",              "test_блок_который_за_сеанс_не_прочитать_роняет_проверку"),
+        ("blocks/grew-past-ceiling",            "test_блок_выросший_за_потолок_после_охоты_предупреждает"),
         ("refs/findings-named-in-code",         "test_refs_находит_номер_находки_в_коде_и_только_его"),
         ("findings/fix-debt-age",               "test_check_предупреждает_о_находке_старше_недели"),
         ("sweep/undeclared",                    "test_перечисление_без_sweep_краснеет"),

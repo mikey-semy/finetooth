@@ -61,7 +61,9 @@ one of your own:
    cross-cutting first, domain next, live-system last. `review inventory` prints the
    repository tree with sizes and ownership — cut by it. A block is what can be read in one
    sitting (the `readable_lines` ceiling, 6000 lines by default; `review sizes` shows who is
-   above it). A block that reading cannot prove (test quality, performance, scanners) gets
+   above it). `set-status <ID> hunted` records the size the block was read at and
+   refuses a block above the ceiling; one read within it that grows later is a `check`
+   warning, and the next review splits it first. A block that reading cannot prove (test quality, performance, scanners) gets
    `"proof": "measured"`: the proof is the artifacts from the manifest, and the ceiling does
    not apply. A criterion that enumerates across the program ("every place that changes
    data") is a sweep, not reading: declare it in `sweep`, and the hunter enumerates by a
@@ -88,6 +90,10 @@ one of your own:
    finding, 10–15 numbered hypotheses about this project, an acceptance criterion that cannot
    be met without reading the code. Sample — [assets/manifest.example.md](assets/manifest.example.md).
    Without project-specific hypotheses the review comes out "on general grounds"; do not cut this part.
+   `review seams <ID>` lists the pairs of the block's own files linked by an import (TS/JS
+   with the `paths` aliases of `tsconfig.json`/`jsconfig.json`, Python) or by joint changes
+   (the thresholds of `coupling`): for each of the top ones write a hypothesis on what one side
+   assumes about the other. The hunter prompt carries the same top pairs.
 2. **Hunter.** `review prompt <ID> --role hunter` prints a ready prompt — hand it to a subagent
    **whole and unedited**. The agent writes the report and the draft findings to disk itself.
    Then `review set-status <ID> hunted`. Headless, with the spend measured and written to the
