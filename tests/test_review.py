@@ -1401,6 +1401,23 @@ class ReviewToolTest(unittest.TestCase):
                 with self.subTest(шаблон=name, правило=rule):
                     self.assertIn(rule.lower(), text, f"{name}: правило снято из шаблона")
 
+    def test_шаблоны_запрещают_обходить_отказ_в_команде(self):
+        """Проверяющий пытался обойти подтверждение `yarn build` через
+        `dangerouslyDisableSandbox` (see #45). Отказ записывается в отчёт, а не обходится —
+        во всех шести шаблонах, что исполняют команды и правят."""
+        refs = SKILL / "references"
+        en = ("a refused command is reported, not worked around", "`dangerouslydisablesandbox`",
+              "no rewording of the command", '"not run: denied by settings"')
+        ru = ("отказанная команда записывается в отчёт, а не обходится",
+              "`dangerouslydisablesandbox`", "никакой переформулировки команды",
+              "«не исполнено: запрещено настройками»")
+        for role in ("verify", "fix", "fixreview"):
+            for name, rules in ((f"{role}.md", en), (f"{role}.ru.md", ru)):
+                text = re.sub(r"\s+", " ", (refs / name).read_text(encoding="utf-8")).lower()
+                for rule in rules:
+                    with self.subTest(шаблон=name, правило=rule):
+                        self.assertIn(rule, text, f"{name}: правило снято из шаблона")
+
     def test_шаблоны_ролей_говорят_где_писать_вердикт(self):
         """Правка механизма — правка промпта: разборщик перестал читать вердикты внутри
         цитаты, и шаблоны обоих языков обязаны назвать все её формы. Иначе гейт краснеет
@@ -3547,6 +3564,88 @@ class SetupTest(unittest.TestCase):
                          "повторный запуск не должен менять уже настроенное определение")
 
 
+class ProjectDenyRulesTest(unittest.TestCase):
+    """Запреты из настроек самого проекта сильнее заранее одобренного ролям (see #45):
+    проект запретил `pytest` в `.claude/settings.local.json`, и роли падали на тестах, пока
+    инварианты не назвали `python3 -m pytest`. `setup` называет такие правила сразу, `status`
+    — одной строкой. Форма правил — Claude Code
+    (https://code.claude.com/docs/en/permissions, «Permission rule syntax»)."""
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+
+    def _settings(self, name: str, text: str) -> None:
+        self.s.write(f".claude/{name}", text)
+
+    def _setup(self, gates: list[str] | None = None) -> subprocess.CompletedProcess:
+        """`setup` в стенде; с `gates` — повторный, когда ворота уже вписаны в blocks.json."""
+        out = self.s.run("setup")
+        if gates is not None:
+            path = self.s.root / "docs/review/blocks.json"
+            bj = json.loads(path.read_text(encoding="utf-8"))
+            bj["gates"] = gates
+            path.write_text(json.dumps(bj, ensure_ascii=False), encoding="utf-8")
+            out = self.s.run("setup")
+        return out
+
+    def test_запрет_на_команду_ворот_и_ролей_назван_с_советом(self):
+        self._settings("settings.local.json", json.dumps({"permissions": {"deny": [
+            "Bash(pytest *)", "Bash(npm test:*)"]}}))
+        out = self._setup(["timeout 600 pytest -q", "npm run lint && CI=1 npm test"])
+        self.assertEqual(out.returncode, 0, out.stderr)
+        text = out.stdout
+        self.assertIn(".claude/settings.local.json: Bash(pytest *)", text)
+        # обёртку `timeout` и присваивание в начале Claude Code снимает до сравнения,
+        # составную команду делит — запрет задевает часть
+        self.assertIn("hits gate `timeout 600 pytest -q`", text)
+        self.assertIn("hits gate `npm run lint && CI=1 npm test`", text)
+        # и то, что роли запускают по шаблону, — из списков run-role.sh
+        self.assertIn("hits `pytest` (roles: hunter, verify, fix, fixreview)", text)
+        self.assertIn("python3 -m pytest", text, "совет называет рабочую форму команды")
+
+    def test_правило_не_задевает_чужие_команды(self):
+        """Обратная сторона: пробел перед `*` — граница слова (`Bash(ls *)` не задевает
+        `lsof`), а правило на подкоманду не задевает саму программу. Совпадение по
+        подстроке объявило бы здесь все три запрета."""
+        self._settings("settings.json", json.dumps({"permissions": {"deny": [
+            "Bash(py *)", "Bash(git push *)", "Read(./.env)", "Bash(run_in_background:true)"]}}))
+        out = self._setup(["pytest -q"])
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("deny commands the review runs", out.stdout)
+
+    def test_запрет_всего_bash_задевает_всё(self):
+        self._settings("settings.json", json.dumps({"permissions": {"deny": ["Bash"]}}))
+        out = self._setup(["make test"])
+        self.assertIn("hits gate `make test`", out.stdout)
+
+    def test_битые_настройки_предупреждение_а_не_трейсбек(self):
+        self._settings("settings.json", "{oops")
+        self._settings("settings.local.json", json.dumps({"permissions": {"deny": "pytest"}}))
+        out = self._setup()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn(".claude/settings.json could not be read", out.stdout)
+        self.assertIn("permissions.deny is not a list", out.stdout)
+
+    def test_status_называет_запрет_одной_строкой(self):
+        self._settings("settings.local.json", json.dumps({"permissions": {"deny": [
+            "Bash(pytest *)"]}}))
+        self._setup(["pytest -q"])
+        self.s.run("init")
+        out = self.s.run("status")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        lines = [l for l in out.stdout.splitlines() if "deny" in l]
+        self.assertEqual(len(lines), 1, out.stdout)
+        self.assertIn("Bash(pytest *) (.claude/settings.local.json)", lines[0])
+
+    def test_без_запретов_status_молчит(self):
+        self._setup(["pytest -q"])
+        self.s.run("init")
+        out = self.s.run("status")
+        self.assertNotIn("deny", out.stdout)
+
+
 class ReportShapeTest(unittest.TestCase):
     """Разбор отчёта: форма — не смысл.
 
@@ -5190,6 +5289,33 @@ class SpendTest(unittest.TestCase):
         self.assertEqual(args[args.index("--disallowedTools") + 1], deny, args)
         # Запрет — не замена одобренного списка: `--allowedTools` роли остаётся.
         self.assertIn("--allowedTools", args)
+
+    def test_роли_с_исполнением_заранее_одобряют_uv(self):
+        """Проект на `uv` гоняет тесты через `uv run`: охотник без него обёртывал
+        `.venv/bin` в PATH, чтобы вообще запустить набор (see #45). Проверяющий и обе
+        правящие роли получают ещё и `uv *` (`uv sync` перед стендом); охотник — только
+        `uv run`: он не меняет файлов проекта, а `uv add` меняет."""
+        for role, want, unwanted in (("hunter", ("Bash(uv run *)",), ("Bash(uv *)",)),
+                                     ("verify", ("Bash(uv run *)", "Bash(uv *)"), ()),
+                                     ("fix", ("Bash(uv run *)", "Bash(uv *)"), ()),
+                                     ("fixreview", ("Bash(uv run *)", "Bash(uv *)"), ())):
+            with self.subTest(роль=role):
+                # Свой стенд на роль: заглушка и каталог прогонов заводятся заново.
+                self.s = Stand()
+                self.addCleanup(self.s.cleanup)
+                # Ревью правки читает дифф: ему нужен второй коммит, `HEAD~1..HEAD`.
+                def second() -> None:
+                    self.s.write("src/one.ts", "b\n")
+                    self.s.commit()
+                out, _ = self._run_role(exit_code=0, role=role,
+                                        before=second if role == "fixreview" else None)
+                self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+                args = self._claude_args()
+                tools = args[args.index("--allowedTools") + 1].split(",")
+                for t in want:
+                    self.assertIn(t, tools, f"{role}: {t} не одобрен заранее")
+                for t in unwanted:
+                    self.assertNotIn(t, tools, f"{role}: {t} шире, чем нужно роли")
 
     def test_без_role_deny_запрета_нет(self):
         """Обратная сторона: без переменной поведение прежнее — флага нет вовсе, а не

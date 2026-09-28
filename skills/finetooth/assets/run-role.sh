@@ -50,10 +50,13 @@ REVIEW="${REVIEW:-python3 $HERE/../scripts/review.py}"
 case "$ROLE" in
   # The hunter executes too: a block with `proof: measured` is proven by runs, and three
   # blocks of the kit's own review (T1–T3) had their hunter refused `python3` and fall back to
-  # reading. It still changes no project file — the role template forbids it.
-  hunter)    CAP=110; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(make *)";;
-  verify)    CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(make *)";;
-  fix|fixreview) CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(make *)";;
+  # reading. It still changes no project file — the role template forbids it. `uv run` is
+  # how a uv project runs its tests: a field hunter without it wrapped `.venv/bin` into PATH
+  # (see #45). verify, fix and fixreview get `uv *` too — a stand or a fix may need
+  # `uv sync` first; the hunter gets only `uv run`, since `uv add` changes project files.
+  hunter)    CAP=110; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(make *)";;
+  verify)    CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(uv *),Bash(make *)";;
+  fix|fixreview) CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(uv *),Bash(make *)";;
   *) echo "unknown role: $ROLE" >&2; exit 2;;
 esac
 CAP="${ROLE_MAX_TURNS:-$CAP}"

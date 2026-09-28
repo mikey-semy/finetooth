@@ -91,6 +91,14 @@ task is to **close them correctly**, not quickly.
     script, a copy of a file — delete it before you finish, or commit it when it is part of
     the fix. At the end `git status` shows nothing but your report under `docs/review/`:
     the next run refuses to start in a dirty tree.
+17. **A refused command is reported, not worked around.** A command the project's permission
+    settings deny, or one that waits for a confirmation nobody gives, is not yours to get
+    around: no `dangerouslyDisableSandbox`, no rewording of the command to slip past the
+    rule — another path to the same program, `sh -c`, a wrapper, a copy of the tool
+    elsewhere. The settings are the operator's boundary for this role. Write the command
+    into the report as "not run: denied by settings", word for word, and say which of your
+    conclusions rest on reading because of it. In a field run a verifier tried to bypass a
+    confirmation for `yarn build` with the sandbox switch.
 
 # Project invariants
 
