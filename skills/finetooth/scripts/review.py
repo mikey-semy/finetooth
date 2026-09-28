@@ -5366,27 +5366,48 @@ def verdict_records(text: str, block_id: str = "") -> list[tuple[str, str, int]]
 CONFIRM_WORDS = tuple(w for w, v in VERDICT_WORDS
                       if v == CHECKED and ("подтвер" in w or "confirm" in w)
                       and not w.startswith(("не ", "not ")))
-# A confirmation word is negated by what stands shortly before it in the same sentence: "не
-# подтвердилась бы", "не была подтверждена", "was not confirmed", "could not be confirmed".
-# A list of whole phrases missed every one of those (Codex on #60); the question is
-# nearness, not wording. The window is the widest of those forms — "could not be confirmed"
-# puts the negation three words before the word — and it looks only backwards: "подтверждена,
-# не только X, но и Y" is still a confirmation. A confirmation word inside a longer word
-# ("unconfirmed") is not the word.
+# A confirmation word is negated only when the negation is ITS OWN: the negator stands right
+# before the word, or right before the auxiliaries of the word's own verb phrase — "не
+# подтвердилась бы", "не была подтверждена", "не до конца подтверждена", "was not confirmed",
+# "could not be confirmed", "has not yet been confirmed", "wasn't confirmed". A list of whole
+# phrases missed most of those (Codex on #60). A window of the few words before the word
+# caught them, and caught as well the negator of a neighbouring clause: "there is no guard,
+# confirmed by running it", "узды нет, подтверждена потеря флага", "no doubt confirmed by the
+# run" — the commonest shape of a hunter's proof states an absence first — and those
+# confirmations went unrefused (fix review of the 0.8.0 candidate). So the walk back from the
+# word skips only the auxiliaries and degree words of its own phrase and stops at anything
+# else: a punctuation mark ends the phrase ("нет, подтверждена"), a word of another phrase
+# ("doubt", "guard") means the negator negates that word, not the confirmation. It looks only
+# backwards: "подтверждена, не только X, но и Y" is still a confirmation. A confirmation word
+# inside a longer word ("unconfirmed") is not the word; emphasis and code marks are
+# transparent ("**not** confirmed").
 CONFIRM_NEGATORS = frozenset({"не", "ни", "нельзя", "нет", "not", "no", "never", "cannot",
                               "failed"})
-# Three words: the widest negated form measured, "could not be confirmed", puts the negation
-# three words before the confirmation word ("не была подтверждена" — two, "was not" — one).
-CONFIRM_NEG_WINDOW = 3
+# The words a negation may stand behind and still be the confirmation's own: the auxiliaries,
+# modals and degree words of the negated forms above, in both languages. A word missing here
+# errs towards refusing (the gate asks for a finding, the hunter rewords), never towards
+# silence.
+CONFIRM_PHRASE_WORDS = frozenset({
+    "be", "been", "being", "is", "are", "was", "were", "am", "has", "have", "had", "do", "does",
+    "did", "can", "could", "will", "would", "shall", "should", "may", "might", "must", "to",
+    "get", "got", "yet", "ever", "even", "fully", "entirely", "completely", "really",
+    "actually", "quite",
+    "был", "была", "было", "были", "быть", "будет", "будут", "бы", "б", "ещё", "еще", "пока",
+    "даже", "до", "конца", "полностью", "вполне", "окончательно", "вообще"})
 CONFIRM_AT = re.compile(rf"(?<!\w)(?:{'|'.join(re.escape(w) for w in CONFIRM_WORDS)})(?!\w)")
-SENTENCE_END = re.compile(r"[.!?;](?:\s|$)")
+PHRASE_TOKEN = re.compile(r"[\w'’]+|[^\w\s*`]")
 
 
 def negated_before(low: str, at: int) -> bool:
-    """A negation among the few words before position `at`, within the same sentence."""
-    start = max((m.end() for m in SENTENCE_END.finditer(low, 0, at)), default=0)
-    words = re.findall(r"[\w'’]+", low[start:at])[-CONFIRM_NEG_WINDOW:]
-    return any(w in CONFIRM_NEGATORS or w.endswith(("n't", "n’t")) for w in words)
+    """The confirmation word at `at` is negated by its own phrase: a negator right before it,
+    or right before the auxiliaries and degree words that lead up to it (see
+    CONFIRM_PHRASE_WORDS). A punctuation mark or any other word in between ends the search."""
+    for tok in reversed(PHRASE_TOKEN.findall(low[:at])):
+        if tok in CONFIRM_NEGATORS or tok.endswith(("n't", "n’t")):
+            return True
+        if tok not in CONFIRM_PHRASE_WORDS:
+            return False
+    return False
 
 
 def says_confirmed(line: str) -> bool:

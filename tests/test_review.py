@@ -10228,7 +10228,11 @@ class ConfirmedIsFindingTest(unittest.TestCase):
                      "- H1.1 — checked: the loss was not confirmed on any input",
                      "- H1.1 — checked: it could not be confirmed, the guard holds",
                      "- H1.1 — checked: it wasn't confirmed by the run",
-                     "- H1.1 — checked: unconfirmed, the guard holds"):
+                     "- H1.1 — checked: unconfirmed, the guard holds",
+                     # отрицание перед вспомогательными словами своего оборота
+                     "- H1.1 — checked: it could not have been confirmed on any input",
+                     "- H1.1 — проверена: не до конца подтверждена, нужна живая база",
+                     "- H1.1 — checked: **not** confirmed, the guard holds"):
             with self.subTest(line=line):
                 self.new_stand()
                 check = self.stand(line)
@@ -10270,6 +10274,21 @@ class ConfirmedIsFindingTest(unittest.TestCase):
         for line in ("- H1.1 — подтверждена, не только флаг теряется, но и счётчик",
                      "- H1.1 — confirmed, and not only on the first save",
                      "- H1.1 — форма не дефект. Подтверждена потеря флага"):
+            with self.subTest(line=line):
+                self.new_stand()
+                check = self.stand(line, self.row("другой дефект"))
+                self.assertIn("подтверждает гипотезу H1.1, но не называет", refused(check))
+
+    def test_отрицание_соседнего_оборота_подтверждение_не_отменяет(self):
+        """Отрицание относится к слову подтверждения, только если стоит перед ним самим или
+        перед вспомогательными словами его оборота. Доказательство охотника чаще всего сначала
+        называет отсутствие — «узды нет», «there is no guard», — и окно из трёх слов читало такой
+        вердикт как опровержение: `check` молчал ровно о том, ради чего ворота (ревью
+        кандидата 0.8.0)."""
+        for line in ("- H1.1 — checked: there is no guard, confirmed by running it.",
+                     "- H1.1 — проверена: узды нет, подтверждена потеря флага",
+                     "- H1.1 — checked: no doubt confirmed by the run",
+                     "- `H1.1 — checked: there is no guard, confirmed by running it.`"):
             with self.subTest(line=line):
                 self.new_stand()
                 check = self.stand(line, self.row("другой дефект"))
