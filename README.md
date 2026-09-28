@@ -296,7 +296,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-506 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+515 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -485,7 +485,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 506 scenarios
+tests/                            tests of the tool and the skill format: 515 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
@@ -546,9 +546,17 @@ insist); the agent's PID sits next to the stream while it runs, so a stop reache
 register nobody updates describes fixed things as open. `review summary` writes one immutable
 file outside it: the date and the **base commit**, the blocks with their acceptance criteria and
 fingerprints, the rejected findings with reasons (so the next review does not find them again),
-the accepted risks, and what closed each class (guards, commits). `review summary --aged <file>`
+the accepted risks, what closed each class (guards, commits), and what the review cost (the
+measured role runs of the journal, which dies with the directory). `review summary --aged <file>`
 answers, from `git log` alone, how far each block has drifted since that commit — an auditor's
-re-test starts from there, not from zero.
+re-test starts from there, not from zero. `review summary --html` writes the same summary, the
+same numbers, as one self-contained HTML file for a reader who never saw the review
+(`docs/review-summary.html` by default, or `--out`): goal and coverage, the blocks table with
+findings by severity and status and the spend of each block, a chart of findings per block,
+the open findings at the line their code sits on now with the block report's path, the guards
+per defect class, the accepted risks with reasons, the economy by role, and what is left. SVG
+drawn by the tool, a light and a dark theme, wide tables scroll inside their own box on a
+phone; nothing is loaded over the network and there is no script — a file to attach to a PR.
 
 **Findings where the platform shows them.** `review sarif` prints the open and deferred
 findings of the register as SARIF 2.1.0 for GitHub code scanning: the rule is the finding's
