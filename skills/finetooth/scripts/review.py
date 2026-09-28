@@ -4451,15 +4451,17 @@ def cmd_set_status(args) -> int:
         # will see: the summary, findings.md and the fix gate read the register only (#42).
         if why := draft_not_imported(block_index(defn)[args.block], findings()):
             die(why)
-    closing = args.status == "closed" and s.get("status") != "closed"
+    # A re-set of the status a block already has is not a transition: it is how a review older
+    # than `read_lines` records the size (record_reading), and it must touch nothing else.
+    repeat = s.get("status") == args.status
+    closing = args.status == "closed" and not repeat
     s["status"] = args.status
     # The timestamp is set on EVERY entry into running, not only the first: a block
     # returned to work three weeks later would otherwise count as stuck at once, and the
     # check advised restarting exactly what was being worked on.
     if args.status == "running":
         s["started"] = now()
-    # Only a real closing: `set-status <ID> closed` on a closed block is how a review older
-    # than `read_lines` records the size (record_reading), and it must not rewrite the date.
+    # Only a real closing: a repeated `closed` must not rewrite the date.
     if closing:
         s["finished"] = now()
     # Fingerprint of WHAT exactly was reviewed. A "passed" status without it holds forever:
@@ -4471,7 +4473,11 @@ def cmd_set_status(args) -> int:
     # after the diff review (closed). Moving to triaged or fixing is not a review; re-take
     # the fingerprint there, and any status change would silently declare the changed code
     # reviewed, bypassing `restamp`, which exists precisely so that this is said on record.
-    if args.status in ("verified", "closed"):
+    # The same holds for a repeat of `verified`/`closed`: the CHANGELOG sends every review
+    # under way to run one to record `read_lines`, and re-taking the fingerprint there made
+    # a block closed on one version of the code certify another — no `restamped_at`, no
+    # journal line, and the "block files changed" refusal gone (fix review of 0.8.0).
+    if args.status in ("verified", "closed") and not repeat:
         stamp(block_index(defn)[args.block], s)
     if args.report:
         for r in args.report:

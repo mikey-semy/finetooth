@@ -2643,6 +2643,35 @@ class ReviewToolTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertIn("grew past the ceiling", warned(out))
 
+    def test_повторный_статус_записывает_размер_но_не_отпечаток(self):
+        """R10-001: `set-status <ID> <тот же статус>` — запись размера для ревью, начатого до
+        неё, а не новое ревью. Раньше повтор `closed`/`verified` молча перебирал отпечаток
+        блока на сегодняшнем коде: отказ «файлы изменились после ревью» пропадал без
+        `restamp`, без `restamped_at` и без строки в журнале — закрытый блок начинал
+        заверять другой код."""
+        for status in ("verified", "closed"):
+            with self.subTest(статус=status):
+                self.s = Stand()
+                self.addCleanup(self.s.cleanup)
+                self._read_block(100)
+                self.s.run("set-status", "H1", "hunted")
+                self.s.run("set-status", "H1", status)
+                self._forget_read_size()
+                self._grow(90)
+                before = self._state_block()
+                self.assertIn("block files changed after the review",
+                              refused(self.s.run("check")))
+                out = self.s.run("set-status", "H1", status)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                after = self._state_block()
+                self.assertEqual(after.get("read_lines"), 90, "размер обязан записаться")
+                for key in ("reviewed_sha", "refs_sha", "hypotheses_sha"):
+                    self.assertEqual(after.get(key), before.get(key),
+                                     f"{key} перебран повтором статуса")
+                self.assertNotIn("restamped_at", after)
+                self.assertIn("block files changed after the review",
+                              refused(self.s.run("check")))
+
     def test_новое_чтение_перезаписывает_размер(self):
         """Возврат в работу и новая охота — новое чтение: размер берётся заново, и
         блок, выросший за потолок, обязан сначала разрезаться."""
