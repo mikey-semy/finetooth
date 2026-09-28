@@ -2502,6 +2502,26 @@ class ReviewToolTest(unittest.TestCase):
         self.s.run("init")
         self.s.run("coverage")
 
+    def _grow(self, lines: int) -> None:
+        """Код блока вырос после ревью — коммитом, как растёт в жизни."""
+        self.s.write("src/big.ts", "x\n" * lines)
+        self.s.commit("рост")
+        self.s.run("coverage")
+
+    def _state_block(self) -> dict:
+        return json.loads((self.s.root / "docs/review/state.json").read_text(
+            encoding="utf-8"))["blocks"]["H1"]
+
+    def _forget_read_size(self) -> None:
+        """Ревью, начатое до записи размера при чтении: поля в состоянии нет, а блок
+        закрыт давно — дата, которую запись размера обязана сохранить."""
+        path = self.s.root / "docs/review/state.json"
+        st = json.loads(path.read_text(encoding="utf-8"))
+        st["blocks"]["H1"].pop("read_lines", None)
+        if st["blocks"]["H1"].get("finished"):
+            st["blocks"]["H1"]["finished"] = self.OLD_STAMP
+        path.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
     def test_непрочитанный_блок_выше_потолка_роняет_проверку_в_любом_статусе_до_охоты(self):
         """Резать блок надо ДО чтения: `running` и `blocked` — тоже ещё не прочитанный блок
         (отчёта охотника за ними нет), и отказ на них тот же, что на `todo`."""
@@ -2513,43 +2533,131 @@ class ReviewToolTest(unittest.TestCase):
                 self.assertIn("cannot be read in one session", refused(out), out.stdout)
                 self.assertNotIn("grew past the ceiling", out.stdout)
 
-    def test_блок_выросший_за_потолок_после_охоты_предупреждает(self):
-        """Потолок — обещание о чтении, которое ещё впереди. У прочитанного блока отчёт
-        написан на объёме того дня, рост кода после ревью ловит отпечаток блока, а отказ
-        ронял `check` на закрытом блоке за код, добавленный позже: закрытый T1
-        самоизучения набора вырос за потолок новыми командами, и каждый PR в review.py
-        краснел. Теперь это долг следующего ревью — вслух, с командой, и прогон зелёный."""
+    def test_блок_выше_потолка_не_переходит_в_прочитанный_статус(self):
+        """Лазейка из замечания Codex к #57: `set-status hunted` на блоке выше потолка
+        превращал отказ в предупреждение, ничего не разрезав. Переход в прочитанный статус
+        и есть чтение — блок обязан влезать в потолок, иначе отказ, и статус не меняется."""
         self._read_block(150)
+        for status in ("hunted", "verified", "closed"):
+            with self.subTest(статус=status):
+                out = self.s.run("set-status", "H1", status)
+                self.assertNotEqual(out.returncode, 0, out.stdout)
+                self.assertIn("150 lines against a ceiling of 100", out.stderr)
+                self.assertIn(" sizes`", out.stderr, "отказ обязан сказать, что делать")
+                self.assertEqual(self._state_block()["status"], "todo")
+
+    def test_блок_выросший_за_потолок_после_охоты_предупреждает(self):
+        """Потолок — обещание о чтении, которое ещё впереди. Блок, прочитанный В ПРЕДЕЛАХ
+        потолка (размер записан при чтении), отчёт отвечает за объём того дня, рост кода
+        после ревью ловит отпечаток блока, а отказ ронял `check` на закрытом блоке за код,
+        добавленный позже: каждый PR в review.py краснел. Теперь это долг следующего ревью
+        — вслух, с командой, и прогон зелёный."""
+        self._read_block(100)
+        self.assertEqual(self.s.run("set-status", "H1", "hunted").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 100)
+        self._grow(150)
         for status in ("hunted", "verified", "triaged", "fixing", "closed"):
             with self.subTest(статус=status):
                 self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
+                self.assertEqual(self._state_block().get("read_lines"), 100,
+                                 "переход между прочитанными статусами — не новое чтение")
                 out = self.s.run("check")
                 self.assertEqual(out.returncode, 0, out.stdout)
                 said = warned(out)
                 self.assertIn("150 lines — grew past the ceiling (100) after the review", said,
                               out.stdout)
-                self.assertIn(f"(status {status})", said)
+                self.assertIn(f"(read at 100, status {status})", said)
                 self.assertIn(" sizes`", said, "предупреждение обязано назвать команду")
                 self.assertNotIn("cannot be read in one session", out.stdout)
 
+    def test_прочитанный_блок_без_записи_размера_выше_потолка_роняет_проверку(self):
+        """Старое ревью: размер при чтении не записан. Статус не доказывает, что блок читали
+        в пределах потолка, — отказ, как у непрочитанного, с причиной; и задним числом
+        записать размер переходом статуса нельзя, пока блок выше потолка."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        self._forget_read_size()
+        self._grow(150)
+        out = self.s.run("check")
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
+        self.assertIn("size at reading was never recorded", out.stdout)
+        self.assertNotIn("grew past the ceiling", out.stdout)
+        again = self.s.run("set-status", "H1", "closed")
+        self.assertNotEqual(again.returncode, 0, again.stdout)
+        self.assertIn("was never recorded", again.stderr)
+        self.assertNotIn("read_lines", self._state_block())
+
+    def test_размер_при_чтении_выше_нынешнего_потолка_не_прощает_блок(self):
+        """Запись размера — не пропуск сама по себе: проект снизил потолок (число — замер
+        на своём языке), и блок, прочитанный на 100 строках, при потолке 90 прочитан выше
+        него. Такой блок не «вырос после ревью» — его отчёт на непосильном объёме."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.blocks(paths=["src/big.ts"], readable_lines=90)
+        self.s.commit("потолок проекта ниже")
+        out = self.s.run("check")
+        self.assertIn("cannot be read in one session", refused(out), out.stdout)
+        self.assertIn("the block was read at 100 lines", out.stdout)
+        self.assertNotIn("grew past the ceiling", out.stdout)
+
+    def test_размер_старого_блока_записывается_переходом_пока_он_в_пределах_потолка(self):
+        """Честный путь для ревью без записи: пока блок влезает в потолок, `set-status` в
+        его же прочитанный статус записывает размер — и позже рост даёт предупреждение."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self.s.run("set-status", "H1", "closed")
+        self._forget_read_size()
+        finished = self._state_block()["finished"]
+        self.assertEqual(self.s.run("set-status", "H1", "closed").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 100)
+        self.assertEqual(self._state_block()["finished"], finished,
+                         "запись размера не переписывает дату закрытия")
+        self._grow(150)
+        self.s.run("restamp", "H1")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("grew past the ceiling", warned(out))
+
+    def test_новое_чтение_перезаписывает_размер(self):
+        """Возврат в работу и новая охота — новое чтение: размер берётся заново, и
+        блок, выросший за потолок, обязан сначала разрезаться."""
+        self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
+        self._grow(150)
+        self.s.run("set-status", "H1", "running")
+        out = self.s.run("set-status", "H1", "hunted")
+        self.assertNotEqual(out.returncode, 0, out.stdout)
+        self._grow(80)
+        self.assertEqual(self.s.run("set-status", "H1", "hunted").returncode, 0)
+        self.assertEqual(self._state_block().get("read_lines"), 80)
+
     def test_sizes_и_status_различают_непрочитанный_и_выросший_блок(self):
         """`sizes` и `status` говорят то же, что `check`: до охоты — резать сейчас (и
-        `sizes` краснеет), после — долг следующего ревью (и `sizes` зелёный)."""
+        `sizes` краснеет), после чтения в пределах потолка — долг следующего ревью (и
+        `sizes` зелёный)."""
         self._read_block(150)
         out = self.s.run("sizes")
         self.assertEqual(out.returncode, 1, out.stdout)
         self.assertIn("above the ceiling by 50 — split by subject", out.stdout)
         self.assertIn("above the ceiling by 50", self.s.run("status").stdout)
+        self._grow(100)
         self.s.run("set-status", "H1", "hunted")
+        self._grow(150)
         out = self.s.run("sizes")
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertIn("grew past the ceiling by 50 after the review", out.stdout)
         self.assertIn("blocks grown past the ceiling after their review: 1", out.stdout)
         self.assertNotIn("split by subject", out.stdout)
         self.assertIn("grew past the ceiling by 50", self.s.run("status").stdout)
+        self._forget_read_size()
+        out = self.s.run("sizes")
+        self.assertEqual(out.returncode, 1, "без записи размера блок не прощён и в sizes")
+        self.assertIn("split by subject", out.stdout)
 
     def test_прочитанный_блок_в_пределах_потолка_молчит(self):
         self._read_block(100)
+        self.s.run("set-status", "H1", "hunted")
         self.s.run("set-status", "H1", "closed")
         out = self.s.run("check")
         self.assertEqual(out.returncode, 0, out.stdout)

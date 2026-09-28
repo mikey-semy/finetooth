@@ -35,7 +35,7 @@ session that knows nothing runs one command and sees the full picture.
    review comes out "on general grounds". This is the longest part, and it cannot be cut.
 2. **Hunter** (`--role hunter`) reads all the block's files and puts forward findings. It writes
    the report and the draft `reports/<ID>-findings.jsonl` itself, to disk. The report must have
-   verdicts on all the manifest's hypotheses and a "Coverage limits" section. Then `set-status <ID> hunted`.
+   verdicts on all the manifest's hypotheses and a "Coverage limits" section. Then `set-status <ID> hunted` — it records the block's size and refuses a block above the ceiling (split it first).
 3. **Verifier** (`--role verify`) checks every finding against the current code, does its own
    independent pass over the riskiest places and rewrites the block's findings file.
    Rejected ones **are not deleted** — they stay with the rejection reason, otherwise the next
