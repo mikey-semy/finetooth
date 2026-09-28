@@ -6334,6 +6334,68 @@ class GateCoverageTest(unittest.TestCase):
                 self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
                 self.assertIn(refusal, refused(out), out.stdout)
 
+    # Формы `file`, которые не путь: каждая — описка рукописной строки реестра или черновика,
+    # и каждая раньше доходила до кода путей где-то ещё. Массив и объект — ещё и
+    # нехешируемые: множество путей починки и кэш строк падали на них, а не на `+=`.
+    NOT_A_PATH = (None, 12, 1.5, True, False, 0, [], ["src/one.ts"], {"path": "src/one.ts"})
+
+    def test_файл_находки_любой_формы_во_всех_командах(self):
+        """R13-002 закрыл `import --dry-run` и `check` для `null` и числа, а остальные
+        команды читали `file` сами: `findings` падал на `+=`, `sarif` — на `removeprefix`,
+        `check` на починенной находке с массивом — на множестве путей, обычный `import`
+        принимал такую строку молча. Одно правило на всё: ни одна команда не отвечает
+        трейсбеком, ворота отказывают по имени поля, импорт — на любом из путей."""
+        self._green()
+        head = self.s.git("rev-parse", "HEAD").stdout.strip()
+        reader = ("findings", "sarif", "summary", "summary --html", "roots", "status",
+                  "prompt H1 --role hunter", "prompt H1 --role fix", "coverage --no-write")
+        writer = ("restamp H1-001", "backfill")  # последними: они переписывают реестр
+        for value in self.NOT_A_PATH:
+            said = "field file is empty" if value is None else f"file={value!r} is not a path"
+            for status in ("open", "deferred", "fixed"):
+                with self.subTest(file=value, status=status):
+                    # Окно отпечатка и строка — чтобы показ искал строку в файле; находка
+                    # раунда — чтобы сигнал петли спросил дифф по её файлу.
+                    self._register(file=value, line=1, status=status, region_sha="0" * 40,
+                                   region_span=[0, 0], defer_reason="риск принят",
+                                   fix_commit=head if status == "fixed" else None,
+                                   found_in={"role": "fixreview", "round": 1,
+                                             "diff": f"{head}~1..{head}"})
+                    out = self.s.run("check")
+                    self.assertNotIn("Traceback", out.stderr, out.stderr)
+                    self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                    self.assertIn(said, refused(out), out.stdout)
+                    if value is not None:  # одна строка — одно сообщение, не два
+                        self.assertNotIn("field file is empty", refused(out), out.stdout)
+                    for cmd in (*reader, *writer):
+                        out = self.s.run(*cmd.split())
+                        self.assertNotIn("Traceback", out.stderr, f"{cmd}: {out.stderr}")
+                        # `restamp` отказывает по тому же имени поля, а не «файла нет».
+                        if cmd.startswith("restamp") and status != "fixed" and value is not None:
+                            self.assertIn(said, out.stderr, out.stdout + out.stderr)
+        # Черновик: сухой прогон и все три пути импорта отказывают одной и той же строкой,
+        # и реестр остаётся пустым.
+        register = self.s.root / "docs/review/findings.jsonl"
+        register.write_text("", encoding="utf-8")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        for value in self.NOT_A_PATH:
+            said = "`file` is empty" if value is None else f"file={value!r} is not a path"
+            for flags in (("--dry-run",), (), ("--force",), ("--append",)):
+                with self.subTest(file=value, flags=flags):
+                    row = {"block": "H1", "severity": "low", "confidence": "confirmed",
+                           "status": "open", "file": value, "line": 1, "claim": "дефект",
+                           "scenario": "сценарий"}
+                    draft.write_text(json.dumps(row) + "\n", encoding="utf-8")
+                    out = self.s.run("import", "H1", *flags)
+                    self.assertNotIn("Traceback", out.stderr, out.stderr)
+                    # Сухой прогон перечисляет (1), импорт останавливается на строке (2).
+                    self.assertEqual(out.returncode, 1 if flags == ("--dry-run",) else 2,
+                                     out.stdout + out.stderr)
+                    self.assertIn(f"line 1: {said}", out.stdout + out.stderr)
+                    if value is not None:
+                        self.assertNotIn("`file` is empty", out.stdout + out.stderr)
+                    self.assertEqual(register.read_text(encoding="utf-8"), "")
+
     def test_число_в_пределах_файла_по_прежнему_проходит(self):
         self._green()
         self._register(line=1)
