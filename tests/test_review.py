@@ -6334,6 +6334,68 @@ class GateCoverageTest(unittest.TestCase):
                 self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
                 self.assertIn(refusal, refused(out), out.stdout)
 
+    # Формы `file`, которые не путь: каждая — описка рукописной строки реестра или черновика,
+    # и каждая раньше доходила до кода путей где-то ещё. Массив и объект — ещё и
+    # нехешируемые: множество путей починки и кэш строк падали на них, а не на `+=`.
+    NOT_A_PATH = (None, 12, 1.5, True, False, 0, [], ["src/one.ts"], {"path": "src/one.ts"})
+
+    def test_файл_находки_любой_формы_во_всех_командах(self):
+        """R13-002 закрыл `import --dry-run` и `check` для `null` и числа, а остальные
+        команды читали `file` сами: `findings` падал на `+=`, `sarif` — на `removeprefix`,
+        `check` на починенной находке с массивом — на множестве путей, обычный `import`
+        принимал такую строку молча. Одно правило на всё: ни одна команда не отвечает
+        трейсбеком, ворота отказывают по имени поля, импорт — на любом из путей."""
+        self._green()
+        head = self.s.git("rev-parse", "HEAD").stdout.strip()
+        reader = ("findings", "sarif", "summary", "summary --html", "roots", "status",
+                  "prompt H1 --role hunter", "prompt H1 --role fix", "coverage --no-write")
+        writer = ("restamp H1-001", "backfill")  # последними: они переписывают реестр
+        for value in self.NOT_A_PATH:
+            said = "field file is empty" if value is None else f"file={value!r} is not a path"
+            for status in ("open", "deferred", "fixed"):
+                with self.subTest(file=value, status=status):
+                    # Окно отпечатка и строка — чтобы показ искал строку в файле; находка
+                    # раунда — чтобы сигнал петли спросил дифф по её файлу.
+                    self._register(file=value, line=1, status=status, region_sha="0" * 40,
+                                   region_span=[0, 0], defer_reason="риск принят",
+                                   fix_commit=head if status == "fixed" else None,
+                                   found_in={"role": "fixreview", "round": 1,
+                                             "diff": f"{head}~1..{head}"})
+                    out = self.s.run("check")
+                    self.assertNotIn("Traceback", out.stderr, out.stderr)
+                    self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                    self.assertIn(said, refused(out), out.stdout)
+                    if value is not None:  # одна строка — одно сообщение, не два
+                        self.assertNotIn("field file is empty", refused(out), out.stdout)
+                    for cmd in (*reader, *writer):
+                        out = self.s.run(*cmd.split())
+                        self.assertNotIn("Traceback", out.stderr, f"{cmd}: {out.stderr}")
+                        # `restamp` отказывает по тому же имени поля, а не «файла нет».
+                        if cmd.startswith("restamp") and status != "fixed" and value is not None:
+                            self.assertIn(said, out.stderr, out.stdout + out.stderr)
+        # Черновик: сухой прогон и все три пути импорта отказывают одной и той же строкой,
+        # и реестр остаётся пустым.
+        register = self.s.root / "docs/review/findings.jsonl"
+        register.write_text("", encoding="utf-8")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        for value in self.NOT_A_PATH:
+            said = "`file` is empty" if value is None else f"file={value!r} is not a path"
+            for flags in (("--dry-run",), (), ("--force",), ("--append",)):
+                with self.subTest(file=value, flags=flags):
+                    row = {"block": "H1", "severity": "low", "confidence": "confirmed",
+                           "status": "open", "file": value, "line": 1, "claim": "дефект",
+                           "scenario": "сценарий"}
+                    draft.write_text(json.dumps(row) + "\n", encoding="utf-8")
+                    out = self.s.run("import", "H1", *flags)
+                    self.assertNotIn("Traceback", out.stderr, out.stderr)
+                    # Сухой прогон перечисляет (1), импорт останавливается на строке (2).
+                    self.assertEqual(out.returncode, 1 if flags == ("--dry-run",) else 2,
+                                     out.stdout + out.stderr)
+                    self.assertIn(f"line 1: {said}", out.stdout + out.stderr)
+                    if value is not None:
+                        self.assertNotIn("`file` is empty", out.stdout + out.stderr)
+                    self.assertEqual(register.read_text(encoding="utf-8"), "")
+
     def test_число_в_пределах_файла_по_прежнему_проходит(self):
         self._green()
         self._register(line=1)
@@ -12623,7 +12685,7 @@ class SummaryHtmlTest(unittest.TestCase):
         self.out = Path(tempfile.mkdtemp(prefix="finetooth-html-"))
         self.addCleanup(shutil.rmtree, self.out, True)
 
-    def _stand(self, lang: str = "ru", scope: dict | None = None) -> None:
+    def _stand(self, lang: str = "ru", scope: dict | None = None, runs: tuple | None = None) -> None:
         self.s.write("src/one.ts", "".join(f"строка {i}\n" for i in range(1, 13)))
         self.s.write("src/two.ts", "x\n")
         self.s.write("tests/guard.test.ts", "g\n")
@@ -12651,7 +12713,7 @@ class SummaryHtmlTest(unittest.TestCase):
                      ("H1-005", "duplicate", "--dup-of", "H1-003")):
             out = self.s.run("set-finding", *argv)
             self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        for role, text, _t, _c in self.RUNS:
+        for role, text, _t, _c in (self.RUNS if runs is None else runs):
             self.assertEqual(self.s.run("log", "H1", f"{role} — {text}").returncode, 0)
         self.s.run("log", "H2", "fix — решение без замера: блок отложен")
 
@@ -12773,6 +12835,73 @@ class SummaryHtmlTest(unittest.TestCase):
         self.assertEqual(got["block.H1.cost"], ["≥ $24.66"])
         self.assertIn("| **total** | 4 | 1 | ≥ 220 | ≥ $24.66 |", md)
         self.assertNotIn("| verify | 1 | 1 | 0 |", md)
+
+    @staticmethod
+    def _cost_bars(text: str) -> dict[str, dict] | None:
+        """График цены по ролям так, как его увидит человек: роль → ширина полосы (None, если
+        полосы нет), подсказка полосы и подпись у её конца. None — графика в файле нет.
+
+        У полосы и подписи нет метки `data-k`, и сверка чисел по меткам их не видит."""
+        class Chart(__import__("html.parser").parser.HTMLParser):
+            # Без своего `__init__`: состояние заводится ниже, после создания разборщика
+            # (конструктор по умолчанию и так сворачивает ссылки на символы).
+            found = inside = False
+            into = role = None
+
+            def handle_starttag(self, tag, attrs) -> None:
+                a = dict(attrs)
+                if tag == "svg" and a.get("aria-label") == "Measured cost by role":
+                    self.found = self.inside = True
+                elif self.inside and tag == "text":
+                    self.into = "label" if a.get("class") == "muted" else "role"
+                elif self.inside and tag == "rect":
+                    self.rows[self.role]["width"] = float(a["width"])
+                elif self.inside and tag == "title":
+                    self.into = "title"
+
+            def handle_endtag(self, tag) -> None:
+                if tag == "svg":
+                    self.inside = False
+                self.into = None
+
+            def handle_data(self, data) -> None:
+                if self.into == "role":
+                    self.role = data.strip()
+                    self.rows[self.role] = {"width": None, "title": None, "label": None}
+                elif self.into in ("title", "label"):
+                    self.rows[self.role][self.into] = data.strip()
+        p = Chart()
+        p.rows = {}
+        p.feed(text)
+        p.close()
+        return p.rows if p.found else None
+
+    def test_график_цены_не_рисует_неизвестное_нулём(self):
+        """R11-001: прогон, чья цена не пришла, в таблице — «unknown» и «≥», и это держат
+        метки `data-k`; но то же правило обязано дойти до графика цены, у которого меток нет.
+        Роль без единой известной цены — без полосы и с подписью «unknown», а не полоса
+        «$0.00»: такой график говорит «обрезанный прогон был бесплатным». Полосы известных
+        ролей — в пропорции их цен, а если не известна ни одна — графика нет вовсе, а не
+        ряд нулей. Мутация: график возвращён к виду до починки (ширина из `cost` без
+        `cost_known`, подпись и подсказка `money(cost)`, строка «ни одной известной — графика
+        нет» снята) — тест красный."""
+        self._stand(lang="en")
+        bars = self._cost_bars(self._html())
+        known = {role: round(sum(c for r, _x, _t, c in self.RUNS if r == role), 2)
+                 for role in ("hunter", "fix")}
+        self.assertEqual(set(bars), {"hunter", "verify", "fix"}, bars)
+        self.assertEqual(bars["verify"], {"width": None, "title": None, "label": "unknown"})
+        for role, cost in known.items():
+            with self.subTest(роль=role):
+                self.assertEqual(bars[role]["label"], f"${cost:.2f}")
+                self.assertEqual(bars[role]["title"], f"{role}: ${cost:.2f}")
+        self.assertAlmostEqual(bars["hunter"]["width"] / bars["fix"]["width"],
+                               known["hunter"] / known["fix"], places=2)
+        # Ни одной известной цены: таблица скажет «unknown», графику нечего показать.
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self._stand(lang="en", runs=tuple(r for r in self.RUNS if r[0] == "verify"))
+        self.assertIsNone(self._cost_bars(self._html()))
 
     def test_строка_статусов_блока_сходится_с_числом_его_находок(self):
         """Столбцы статусов в таблице блоков — все статусы, дубли тоже: сумма по строке равна
