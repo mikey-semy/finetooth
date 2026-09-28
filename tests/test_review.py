@@ -2545,6 +2545,13 @@ class ReviewToolTest(unittest.TestCase):
                 self.assertIn("150 lines against a ceiling of 100", out.stderr)
                 self.assertIn(" sizes`", out.stderr, "отказ обязан сказать, что делать")
                 self.assertEqual(self._state_block()["status"], "todo")
+        # Правило 8: механизм сменился — шаблон говорит. Охотнику, получившему блок выше
+        # порога, промпт велит не только назвать непрочитанное, но и сказать, что резать:
+        # прочитанным такой блок не примут.
+        for lang, said in (("ru", "`set-status` откажет"), ("en", "`set-status` refuses it")):
+            with self.subTest(язык=lang):
+                self.s.blocks(paths=["src/big.ts"], readable_lines=100, lang=lang)
+                self.assertIn(said, self.s.run("prompt", "H1", "--role", "hunter").stdout)
 
     def test_блок_выросший_за_потолок_после_охоты_предупреждает(self):
         """Потолок — обещание о чтении, которое ещё впереди. Блок, прочитанный В ПРЕДЕЛАХ
@@ -3161,8 +3168,13 @@ class ParallelKitLessonsTest(unittest.TestCase):
         self.assertIn(named, self.COVERAGE_SECTIONS,
                       f"предупреждение не называет ни одного раздела отчёта: {warning}")
         self.s.reports(hunter=self._hunter_naming_unread_in(named), verify=FULL_VERIFY)
-        self.s.run("set-status", "H1", "hunted")
-        self.s.run("set-status", "H1", "verified")
+        # Предупреждение взято из промпта; дальше тест о воротах отчёта, а не о пороге:
+        # блок выше порога `set-status hunted` не пропустит (#57), и стенд, где статус не
+        # сменился, проверял бы ворота, которые на `todo` не работают вовсе.
+        self.s.write("src/one.ts", "a\n" * 50)
+        self.s.commit("блок в пределах порога")
+        for status in ("hunted", "verified"):
+            self.assertEqual(self.s.run("set-status", "H1", status).returncode, 0)
         self.s.commit("отчёты")
         out = self.s.run("check")
         self.assertNotIn(self.LIMITS_REFUSAL, refused(out),
@@ -3212,8 +3224,11 @@ class ParallelKitLessonsTest(unittest.TestCase):
                               f"- src/one.ts\n")
                 s.reports(hunter=hunter, verify=paths_only.replace(
                     f"## {section}\n", f"## {section}\n{said[-1]}.\n"))
-                s.run("set-status", "H1", "hunted")
-                s.run("set-status", "H1", "verified")
+                # Как в тесте охотника выше: блок до порога, иначе статус не сменится (#57).
+                s.write("src/one.ts", "a\n" * 50)
+                s.commit("блок в пределах порога")
+                for status in ("hunted", "verified"):
+                    self.assertEqual(s.run("set-status", "H1", status).returncode, 0)
                 s.commit("отчёт по предупреждению")
                 self.assertNotIn("no coverage verdict", refused(s.run("check")),
                                  f"проверяющий написал ровно то, что велело предупреждение "
