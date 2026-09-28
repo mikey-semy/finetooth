@@ -6308,6 +6308,32 @@ class GateCoverageTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("is not a number", refused(out), out.stdout)
 
+    def test_файл_находки_не_строкой(self):
+        """R13-002: `"file": null` и `"file": 12` — обычные описки рукописного черновика.
+        `f.get("file", "")` отдаёт умолчание только на ОТСУТСТВУЮЩИЙ ключ, и оба значения
+        доходили до пути: трейсбек из `import --dry-run` и из `check`, выход 1 без слова —
+        а сообщение, которое починило бы черновик, так и не печаталось. Отказ называет поле
+        на обоих путях."""
+        self._green()
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        for value, said, refusal in ((None, "`file` is empty", "field file is empty"),
+                                     (12, "file=12 is not a path", "file=12 is not a path")):
+            with self.subTest(file=value):
+                row = {"block": "H1", "severity": "low", "confidence": "confirmed",
+                       "status": "open", "file": value, "line": 2, "claim": "дефект",
+                       "scenario": "сценарий"}
+                draft.write_text(json.dumps(row) + "\n", encoding="utf-8")
+                out = self.s.run("import", "H1", "--dry-run")
+                self.assertNotIn("Traceback", out.stderr, out.stderr)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(f"line 1: {said}", out.stdout)
+                draft.unlink()
+                self._register(file=value, line=2)
+                out = self.s.run("check")
+                self.assertNotIn("Traceback", out.stderr, out.stderr)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(refusal, refused(out), out.stdout)
+
     def test_число_в_пределах_файла_по_прежнему_проходит(self):
         self._green()
         self._register(line=1)
@@ -6644,6 +6670,7 @@ class GateRegistryTest(unittest.TestCase):
         ("finding/severity-unknown",            "test_severity_вне_словаря"),
         ("finding/confidence-unknown",          "test_confidence_вне_словаря"),
         ("finding/status-unknown",              "test_статус_находки_вне_словаря"),
+        ("finding/file-not-a-string",           "test_файл_находки_не_строкой"),
         ("finding/file-missing",                "test_починенная_находка_на_удалённом_файле_не_роняет_проверку"),
         ("finding/deferred-without-reason",     "test_отложенная_находка_требует_причину"),
         ("finding/external-fix-malformed",      "test_внешний_коммит_починки_написан_не_по_форме"),

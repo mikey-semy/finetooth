@@ -767,7 +767,9 @@ def file_sha(rel: str) -> str | None:
     contributed only its NAME to the block fingerprint — its contents could be rewritten
     and `check` would never say "block files changed after the review".
     """
-    if not rel or rel.startswith("("):
+    # A finding's `file` comes from a hand-written record and may be any JSON value; a
+    # non-string is refused by name (`location_problems`), and here it is simply no file.
+    if not isinstance(rel, str) or not rel or rel.startswith("("):
         return None
     p = ROOT / rel
     if p.is_symlink():
@@ -829,7 +831,7 @@ def text_lines(rel: str) -> list[bytes] | None:
     itself decides) and a missing file have no lines: such a finding keeps the whole-file
     fingerprint.
     """
-    if not rel or rel.startswith("("):
+    if not isinstance(rel, str) or not rel or rel.startswith("("):
         return None
     p = ROOT / rel
     if p.is_symlink():
@@ -3825,14 +3827,25 @@ def location_problems(f: dict, tracked: set[str]) -> dict[str, str]:
     """What is wrong with where a finding points — ONE rule for `check` over the register and
     for `import --dry-run` over a draft (a draft that the dry run passed was refused by
     `check` right after the import for a file that is not there or a line given as text).
-    Keys: `file-missing`, `line-not-a-number`, `line-past-end`; the value is the message."""
+    Keys: `file-not-a-string`, `file-missing`, `line-not-a-number`, `line-past-end`; the
+    value is the message."""
     out: dict[str, str] = {}
     live = f.get("status") in ("open", "deferred")
+    # The draft is hand-written, and `"file": null` or `"file": 12` is as easy a slip as a
+    # quoted line. `f.get("file", "")` gives the default only for a MISSING key, so both
+    # values reached the path code and the process died with a traceback — before the
+    # message that would fix the row was printed (fix review of 0.8.0). An empty or null
+    # file is the required-field refusal's to name; any other non-string is named here.
+    path = f.get("file")
+    if path is not None and not isinstance(path, str):
+        out["file-not-a-string"] = (f"file={path!r} is not a path — write the file as a string "
+                                    f"in quotes, relative to the repository root")
+    path = path if isinstance(path, str) else ""
     # Only open and deferred findings must point at a live file: a fixed finding is
     # history, and renaming the file after the fix does not make it false. The check
     # used to demand the file for any status and stayed red on history forever.
-    if live and f.get("file") and f["file"] not in tracked and not f["file"].startswith("("):
-        out["file-missing"] = f"file {f['file']} is not in the repository"
+    if live and path and path not in tracked and not path.startswith("("):
+        out["file-missing"] = f"file {path} is not in the repository"
     # A line number the file does not have is the cheapest sign of fabrication — for a
     # finding that is still open. A fixed one cites the file as it was before the fix;
     # after it the file legitimately shrinks (the first migrated registry: three fixed
@@ -3844,10 +3857,10 @@ def location_problems(f: dict, tracked: set[str]) -> dict[str, str]:
     if f.get("line") is not None and (isinstance(f["line"], bool) or not isinstance(f["line"], int)):
         out["line-not-a-number"] = (f"line={f['line']!r} is not a number — write the line as a "
                                     f"number without quotes, or leave the field out")
-    elif live and f.get("line"):
-        n = file_lines(f.get("file", ""))
+    elif live and f.get("line") and path:
+        n = file_lines(path)
         if n is not None and f["line"] > n:
-            out["line-past-end"] = f"line {f['line']} is cited, but {f.get('file')} has {n}"
+            out["line-past-end"] = f"line {f['line']} is cited, but {path} has {n}"
     return out
 
 
@@ -5724,6 +5737,8 @@ def cmd_check(args) -> int:
             gates.refuse("finding/status-unknown",
                          f"finding {fid}: status={f.get('status')} is not in the vocabulary")
         place = location_problems(f, tracked)
+        if "file-not-a-string" in place:
+            gates.refuse("finding/file-not-a-string", f"finding {fid}: {place['file-not-a-string']}")
         if "file-missing" in place:
             gates.refuse("finding/file-missing", f"finding {fid}: {place['file-missing']}")
         # A deferred finding does not count as open and therefore survives the whole
