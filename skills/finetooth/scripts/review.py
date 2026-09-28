@@ -921,7 +921,7 @@ def shown_lines() -> Callable[[dict], object]:
         line = f.get("line")
         if not line_follows_code(f):
             return line
-        rel = f.get("file", "")
+        rel = finding_file(f)
         if rel not in cache:
             cache[rel] = text_lines(rel)
         lines = cache[rel]
@@ -2689,7 +2689,7 @@ def render_summary(defn: dict, st: dict, rows: list[dict], facts: dict | None = 
 
     def finding_line(f: dict, reason_key: str | None) -> str:
         at = fx["at"].get(f.get("id"))
-        where = f"`{f.get('file')}:{at}`" if at else f"`{f.get('file')}`"
+        where = f"`{finding_file(f)}:{at}`" if at else f"`{finding_file(f)}`"
         line = f"- **{f.get('id')}** ({f.get('severity')}) {where} — {f.get('claim', '').strip()}"
         if reason_key and f.get(reason_key):
             line += f"  \n  *{f[reason_key].strip()}*"
@@ -2911,7 +2911,7 @@ def render_summary_html(facts: dict) -> str:
 
     def where(f: dict) -> str:
         at = x["at"].get(f.get("id"))
-        return f"<code>{h(f.get('file'))}{':' + h(at) if at else ''}</code>"
+        return f"<code>{h(finding_file(f))}{':' + h(at) if at else ''}</code>"
 
     def finding_rows(fs: list[dict], last) -> list[list[str]]:
         return [[f"<b>{h(f.get('id'))}</b>", h(sev_label.get(f.get("severity"), f.get("severity"))),
@@ -3235,13 +3235,13 @@ def render_sarif(defn: dict, rows: list[dict]) -> dict:
                            "status": f.get("status", "open"),
                            **({"report": report} if report else {})},
         }
-        if f.get("file"):
+        if finding_file(f):
             # A relative reference from the repository root (GitHub: "interprets results
             # that are reported with relative paths as relative to the root of the GitHub
             # repository analyzed"), percent-encoded because `uri` is an RFC 3986 string
             # (§3.10.1): a space or a Cyrillic letter is not allowed in one raw, and
             # `upload-sarif` decodes it back with decodeURIComponent.
-            uri = quote(f["file"].removeprefix("./"), safe="/")
+            uri = quote(finding_file(f).removeprefix("./"), safe="/")
             # GitHub lists `region.startLine` as required. A finding without a line is about
             # the whole file, and line 1 is what the action itself hashes for such a result.
             # The line is where the finding's code sits NOW (`shown_lines`): an alert
@@ -3823,6 +3823,34 @@ def reject_reason_of(f: dict) -> str:
         claim if re.match(r"отвергнут|отклонен|отклонён|не подтверд|rejected|not confirmed", claim, re.I) else "")
 
 
+def finding_file(f: dict) -> str:
+    """A finding's `file` as every command reads it: the path when it is a string, "" when it
+    is anything else.
+
+    The register and the drafts are hand-written JSON, and `"file": null`, `12`, `true`, a
+    list or an object are all one slip away. `f.get("file", "")` falls back only when the key
+    is MISSING, so each of them reached the path code and the command died with a traceback:
+    `findings` on `+=`, `sarif` on `removeprefix`, `check` on the set of a fixed finding's
+    paths, the line lookup on a cache keyed by the path (the 0.8.0 release candidate, after
+    `import --dry-run` and `check` were closed for two of the forms). What is not a string is
+    no file here — the same as a finding about no file at all — and `file_problem` is what
+    names it; a command that reads `file` directly is the next traceback."""
+    path = f.get("file")
+    return path if isinstance(path, str) else ""
+
+
+def file_problem(f: dict) -> str | None:
+    """Why a finding's `file` is not a path, or None: ONE message for `check`, for
+    `import --dry-run` and for `import` itself. A missing or null file is the required-field
+    refusal's to name, not this one's; every other value that is not a string is named with
+    what was written."""
+    path = f.get("file")
+    if path is None or isinstance(path, str):
+        return None
+    return (f"file={path!r} is not a path — write the file as a string in quotes, relative "
+            f"to the repository root")
+
+
 def location_problems(f: dict, tracked: set[str]) -> dict[str, str]:
     """What is wrong with where a finding points — ONE rule for `check` over the register and
     for `import --dry-run` over a draft (a draft that the dry run passed was refused by
@@ -3831,16 +3859,11 @@ def location_problems(f: dict, tracked: set[str]) -> dict[str, str]:
     value is the message."""
     out: dict[str, str] = {}
     live = f.get("status") in ("open", "deferred")
-    # The draft is hand-written, and `"file": null` or `"file": 12` is as easy a slip as a
-    # quoted line. `f.get("file", "")` gives the default only for a MISSING key, so both
-    # values reached the path code and the process died with a traceback — before the
-    # message that would fix the row was printed (fix review of 0.8.0). An empty or null
-    # file is the required-field refusal's to name; any other non-string is named here.
-    path = f.get("file")
-    if path is not None and not isinstance(path, str):
-        out["file-not-a-string"] = (f"file={path!r} is not a path — write the file as a string "
-                                    f"in quotes, relative to the repository root")
-    path = path if isinstance(path, str) else ""
+    # `"file": 12` is as easy a slip as a quoted line, and it used to reach the path code
+    # and kill the process before the message that would fix the row was printed.
+    if why := file_problem(f):
+        out["file-not-a-string"] = why
+    path = finding_file(f)
     # Only open and deferred findings must point at a live file: a fixed finding is
     # history, and renaming the file after the fix does not make it false. The check
     # used to demand the file for any status and stayed red on history forever.
@@ -3972,7 +3995,7 @@ def render_recorded_for(block_id: str) -> str:
     line_of = shown_lines()
     for f in sorted(rows, key=lambda f: f.get("id", "")):
         at = line_of(f)
-        where = f.get("file", "") + (f":{at}" if at else "")
+        where = finding_file(f) + (f":{at}" if at else "")
         out.append(T("rec_row", id=f.get("id", "?"), severity=f.get("severity", "?"),
                      status=f.get("status", "?"), where=where, claim=f.get("claim", ""),
                      date=(f.get("imported_at") or "")[:10]))
@@ -4005,7 +4028,7 @@ def render_findings_for(block_id: str) -> str:
     out = []
     line_of = shown_lines()
     for f in rows:
-        where = f.get("file", "")
+        where = finding_file(f)
         if at := line_of(f):
             where += f":{at}"
         out.append(
@@ -4107,7 +4130,7 @@ class ImportWouldReplace(ImportRefused):
 
 def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, append: bool,
                 force: bool, found_in: dict | None = None,
-                hold_limits: bool = True) -> tuple[list, list[dict], list[dict]]:
+                hold_rows: bool = True) -> tuple[list, list[dict], list[dict]]:
     """What `import` writes, computed without writing it: (the rows of the block's file after
     the import, the register after it, the rows of the register that are new or rewritten).
     Raises ImportRefused where `import` refuses. ONE place: `import` writes what this returns,
@@ -4115,18 +4138,29 @@ def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, 
     run sees the defaults `import` fills in and the rejection it normalises — asked of the row
     as written, a `"confidence": null` or a `rejected` confidence with no reason passed the
     dry run and was refused by `check` a minute later (fix review of the 0.8.0 candidate).
-    `hold_limits=False` is the dry run's: `check` holds the same two limits and names every
-    row over them, where `import` stops at the first."""
+    `hold_rows=False` is the dry run's: `check` holds the same two limits and the same rule
+    for `file` (`file_problem`, the empty-field gate) and names every row that breaks them,
+    where `import` stops at the first."""
     incoming = []
     for n, row in numbered:
         # The limits `check` holds are held here too: a draft that `import` accepted and
         # `check` then refused made every later gate red on a row nobody could fix through
         # the tool (the kit's own review hit it three times).
         for field, limit in (("claim", CLAIM_MAX), ("scenario", SCENARIO_MAX)):
-            if hold_limits and isinstance(row, dict) and len(str(row.get(field) or "")) > limit:
+            if hold_rows and isinstance(row, dict) and len(str(row.get(field) or "")) > limit:
                 raise ImportRefused(
                     f"{name} line {n}: {field} is {len(str(row[field]))} characters against a "
                     f"limit of {limit} — shorten it in the draft; the evidence belongs in the report")
+        # So is the file, in the words of `check`: a row whose `file` is written but is not
+        # a path went into the register, and every command that read it after that died
+        # with a traceback or `check` refused a record the lead could fix only by hand. A row
+        # with no `file` key at all is left as before — `check` names the empty field.
+        if hold_rows and isinstance(row, dict) and "file" in row:
+            why = file_problem(row) or ("field file is empty — `check` refuses a finding without it"
+                                        if not finding_file(row).strip() else None)
+            if why:
+                raise ImportRefused(f"{name} line {n}: {why}; `{CLI} import {block} --dry-run` "
+                                    f"lists every problem of the draft at once")
         incoming.append(row)
 
     # A row numbered for ANOTHER block (`V2-001` in the file of H1) is refused on every
@@ -4169,7 +4203,7 @@ def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, 
             if found_in:
                 f["found_in"] = dict(found_in)
             f["imported_at"] = now()
-            put_fingerprint(f, code_fingerprint(f.get("file", ""), f.get("line"))
+            put_fingerprint(f, code_fingerprint(finding_file(f), f.get("line"))
                             or {"code_sha": None})
             added.append(f)
         return incoming, existing + added, added
@@ -4255,13 +4289,13 @@ def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, 
         # register's line may already be the one `restamp` moved it to while the block's
         # file still cites where it was when the hunter wrote it.
         prev = before.get(f["id"])
-        if (prev and prev.get("file") == f.get("file")
+        if (prev and finding_file(prev) == finding_file(f)
                 and (prev.get("code_sha") or prev.get("region_sha"))):
             put_fingerprint(f, {k: prev[k] for k in CODE_FINGERPRINT_FIELDS if k in prev})
             if prev.get("region_sha") and "line" in prev:
                 f["line"] = prev["line"]
         else:
-            put_fingerprint(f, code_fingerprint(f.get("file", ""), f.get("line"))
+            put_fingerprint(f, code_fingerprint(finding_file(f), f.get("line"))
                             or {"code_sha": None})
         if f.get("confidence") == "rejected":
             f["status"] = "rejected"
@@ -4292,11 +4326,11 @@ def import_dry_run(block: str, src: Path, numbered: list, *, append: bool, force
     try:
         try:
             _, merged, new = import_plan(block, src.name, rows, findings(), append=append,
-                                         force=force, found_in=found_in, hold_limits=False)
+                                         force=force, found_in=found_in, hold_rows=False)
         except ImportWouldReplace as exc:
             note = str(exc)
             _, merged, new = import_plan(block, src.name, rows, findings(), append=True,
-                                         force=force, found_in=found_in, hold_limits=False)
+                                         force=force, found_in=found_in, hold_rows=False)
     except ImportRefused as exc:
         problems.append(f"`import` refuses the file as a whole — {exc}; the rows are checked "
                         f"once it takes the file")
@@ -4400,9 +4434,9 @@ def in_own_diff(f: dict) -> bool:
     """Does the finding's file:line lie on a line its round's diff wrote? By LINE, not by
     file: a finding elsewhere in a file the round touched is not the round's own code."""
     line, rng = f.get("line"), (f.get("found_in") or {}).get("diff")
-    if not isinstance(line, int) or isinstance(line, bool) or not rng or not f.get("file"):
+    if not isinstance(line, int) or isinstance(line, bool) or not rng or not finding_file(f):
         return False
-    return any(a <= line <= b for a, b in diff_spans(str(rng), f["file"]) or [])
+    return any(a <= line <= b for a, b in diff_spans(str(rng), finding_file(f)) or [])
 
 
 def decisions() -> list[dict]:
@@ -4448,7 +4482,7 @@ def loop_stop(block_id: str, rnd: int, rows: list[dict]) -> str | None:
            and d["round"] >= prev for d in decisions()):
         return None
     f = inside[0]
-    return T("loop_stop", id=f.get("id"), sev=f.get("severity"), file=f.get("file"),
+    return T("loop_stop", id=f.get("id"), sev=f.get("severity"), file=finding_file(f),
              line=f.get("line"), prev=prev, diff=f["found_in"]["diff"], cli=CLI, block=block_id)
 
 
@@ -4739,7 +4773,7 @@ def render_findings_md(rows: list[dict], line_of: Callable[[dict], object] | Non
         out.append(T("md_cols"))
         out.append("|---|---|---|---|---|")
         for f in chunk:
-            where = f.get("file", "")
+            where = finding_file(f)
             if at := line_of(f):
                 where += f":{at}"
             claim = (f.get("claim", "") or "").replace("|", "\\|").replace("\n", " ")
@@ -4888,9 +4922,11 @@ def restamp_finding(fid: str, line: int | None = None) -> int:
     f = hit[0]
     if f.get("status") not in ("open", "deferred"):
         die(f"finding {fid} is in status {f.get('status')} — only open and deferred ones are stamped")
-    rel = f.get("file", "")
+    rel = finding_file(f)
+    if why := file_problem(f):
+        die(f"finding {fid}: {why} — `{CLI} check` names every such record")
     if not file_sha(rel):
-        die(f"file {f.get('file')} does not exist — a finding is moved (`{CLI} set-finding`), not stamped")
+        die(f"file {rel} does not exist — a finding is moved (`{CLI} set-finding`), not stamped")
     lines = text_lines(rel)
     was = f.get("line")
     if line is not None:
@@ -4908,7 +4944,7 @@ def restamp_finding(fid: str, line: int | None = None) -> int:
         at = was
     fp = code_fingerprint(rel, at)
     if at == was and all(f.get(k) == fp.get(k) for k in CODE_FINGERPRINT_FIELDS):
-        print(f"{fid}: the fingerprint already matches {f.get('file')} — nothing to stamp")
+        print(f"{fid}: the fingerprint already matches {rel} — nothing to stamp")
         return 0
     put_fingerprint(f, fp)
     if "region_sha" in fp:
@@ -4918,7 +4954,7 @@ def restamp_finding(fid: str, line: int | None = None) -> int:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
-    print(f"{fid}: code fingerprint re-taken — the defect is confirmed on the current version of {f.get('file')}")
+    print(f"{fid}: code fingerprint re-taken — the defect is confirmed on the current version of {rel}")
     if "region_sha" in fp:
         above, below = fp["region_span"]
         text = lines[at - 1].decode("utf-8", "replace").strip()
@@ -5018,7 +5054,7 @@ def cmd_roots(args) -> int:
             for guard, ids in guards.items():
                 print(f"       {guard or 'no guard'} — {', '.join(ids)}")
         for f in items:
-            where = f.get("file", "")
+            where = finding_file(f)
             if at := line_of(f):
                 where += f":{at}"
             print(f"       {f.get('id','?'):<10} {f.get('status','?'):<9} {where}")
@@ -5091,7 +5127,7 @@ def cmd_backfill(args) -> int:
     for f in rows:
         if (f.get("status") in ("open", "deferred")
                 and not f.get("code_sha") and not f.get("region_sha")):
-            fp = code_fingerprint(f.get("file", ""), f.get("line"))
+            fp = code_fingerprint(finding_file(f), f.get("line"))
             if fp:
                 put_fingerprint(f, fp)
                 stamped_findings.append(f.get("id", "?"))
@@ -5635,6 +5671,10 @@ def finding_gates(gates: "Refusals", f: dict, rows: list[dict], idx: dict,
         gates.refuse("finding/duplicate-id", f"finding {fid}: duplicate id")
     seen_ids.add(fid)
     for field in ("id", "block", "severity", "confidence", "status", "file", "claim", "scenario"):
+        # A `file` that is falsy but not a string (0, false, [], {}) is refused below as
+        # not a path — by what was written, not as an empty field on top of that.
+        if field == "file" and file_problem(f):
+            continue
         if not f.get(field):
             gates.refuse("finding/empty-field", f"finding {fid}: field {field} is empty")
     if f.get("block") not in idx:
@@ -5692,10 +5732,11 @@ def finding_gates(gates: "Refusals", f: dict, rows: list[dict], idx: dict,
         if touched.code != 0:
             gates.refuse("finding/commit-missing",
                          f"finding {fid}: commit {f['fix_commit']} is not in the repository")
-        elif f.get("file") and not ({f["file"], *f.get("fixed_in", [])} & set(touched.fields)):
+        elif finding_file(f) and not ({finding_file(f), *f.get("fixed_in", [])}
+                                      & set(touched.fields)):
             gates.refuse(
                 "finding/commit-does-not-touch",
-                f"finding {fid}: commit {f['fix_commit']} does not touch {f['file']} — "
+                f"finding {fid}: commit {f['fix_commit']} does not touch {finding_file(f)} — "
                 f"either the mark belongs to another finding, or the fix was made elsewhere: "
                 f"then name it (`{CLI} set-finding {fid} fixed --commit <sha> "
                 f"--fixed-in <path>`)"
@@ -5721,23 +5762,23 @@ def finding_gates(gates: "Refusals", f: dict, rows: list[dict], idx: dict,
     # description is stale. Both demand action, not silence: a finding that is not
     # moved makes the next pass argue with nonexistent code.
     if (f.get("status") in ("open", "deferred") and not f.get("code_sha")
-            and not f.get("region_sha") and file_sha(f.get("file", ""))):
+            and not f.get("region_sha") and file_sha(finding_file(f))):
         gates.refuse(
             "finding/no-code-fingerprint",
-            f"finding {fid}: no code fingerprint — changes in {f.get('file')} under it are not "
+            f"finding {fid}: no code fingerprint — changes in {finding_file(f)} under it are not "
             f"tracked; `{CLI} backfill`"
         )
     # The region form (#37): only the lines around the finding count, wherever they have
     # moved. The whole-file form is read as before, so a register written by an older
     # kit keeps its meaning until `restamp` moves each record over.
     if (f.get("status") in ("open", "deferred") and f.get("region_sha")
-            and file_sha(f.get("file", ""))):
-        lines = text_lines(f.get("file", ""))
+            and file_sha(finding_file(f))):
+        lines = text_lines(finding_file(f))
         at = locate_region(f, lines) if lines is not None else None
         if at is None:
             gates.refuse(
                 "finding/region-changed",
-                f"finding {fid}: the code around {f.get('file')}:{f.get('line')} changed since "
+                f"finding {fid}: the code around {finding_file(f)}:{f.get('line')} changed since "
                 f"it was stamped — re-check: either it is already closed (`{CLI} set-finding "
                 f"{fid} fixed --commit <sha>`), or the description is stale, or the defect is "
                 f"still there (`{CLI} restamp {fid}`, with `--line <N>` if it now sits elsewhere)"
@@ -5751,11 +5792,11 @@ def finding_gates(gates: "Refusals", f: dict, rows: list[dict], idx: dict,
         # from K=2 on in the measurement behind REGION_K, so a drifting record costs
         # nothing measured; a "large shift" threshold would be a number from the head.
     elif f.get("status") in ("open", "deferred") and f.get("code_sha"):
-        fresh = file_sha(f.get("file", ""))
+        fresh = file_sha(finding_file(f))
         if fresh and fresh != f["code_sha"]:
             gates.refuse(
                 "finding/code-changed",
-                f"finding {fid}: code in {f.get('file')} changed since import — "
+                f"finding {fid}: code in {finding_file(f)} changed since import — "
                 f"re-check: either it is already closed (`{CLI} set-finding {fid} fixed "
                 f"--commit <sha>`), or the description is stale, or the defect is still there "
                 f"(`{CLI} restamp {fid}`"
