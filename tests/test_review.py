@@ -147,7 +147,8 @@ class Stand:
     def blocks(self, *, paths: list[str], exclusions: list[dict] | None = None,
                ref_paths: list[str] | None = None, readable_lines: int | None = None,
                named_files: bool = False, proof: str | None = None, lang: str = "ru",
-               fix_gate: str | None = None, extra_blocks: list[dict] | None = None) -> None:
+               fix_gate: str | None = None, extra_blocks: list[dict] | None = None,
+               scope: dict | None = None) -> None:
         # Гейт «каждый файл назван в отчёте» в стенде выключен: стендовые отчёты — заглушки.
         # Тесты самого гейта включают его явно.
         extra = {"readable_lines": readable_lines} if readable_lines else {}
@@ -156,6 +157,8 @@ class Stand:
         extra["lang"] = lang
         if fix_gate is not None:
             extra["fix_gate"] = fix_gate
+        if scope is not None:
+            extra["scope"] = scope
         self.write("docs/review/blocks.json", json.dumps({
             "review_id": "test", "project": "Тестовый проект", "gates": ["npm test"], **extra,
             "exclusions": (exclusions or []) + [
@@ -5989,6 +5992,155 @@ class GateCoverageTest(unittest.TestCase):
         self.assertIn("is not in the vocabulary", out.stdout)
 
 
+class PartialScopeTest(unittest.TestCase):
+    """Объявленная частичная область (`scope` в blocks.json, см. #53).
+
+    Ворота выпуска 0.8.0 провели один блок по живому репозиторию на ~2000 файлов, и чтобы
+    `check` позеленел, понадобилось 183 исключения. Область заменяет их одной записью — и
+    держит две стороны: файл ВНЕ области не требует блока, файл ВНУТРИ — требует, как
+    раньше; а всё, что можно принять за итог сплошного ревью (`coverage`, `status`,
+    `summary`, `sarif`), прямо говорит, что ревью частичное, и называет область и причину.
+    """
+
+    REASON = "пробный прогон одного блока"
+
+    def setUp(self) -> None:
+        self.s = Stand()
+        self.addCleanup(self.s.cleanup)
+        self.s.write("src/one.ts", "a\n")
+        # Вне области — то, ради чего поле заведено: ничьи файлы, которых этот прогон не читает.
+        self.s.write("other/a.ts", "b\n")
+        self.s.write("other/b.ts", "c\n")
+
+    def _stand(self, scope: dict | None) -> None:
+        self.s.blocks(paths=["src/one.ts"], scope=scope)
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+
+    def _scoped(self, **over) -> dict:
+        return {"paths": ["src/**"], "reason": self.REASON, **over}
+
+    def test_файлы_вне_области_не_требуют_ни_блока_ни_исключений(self):
+        self._stand(self._scoped())
+        cov = self.s.run("coverage")
+        self.assertEqual(cov.returncode, 0, cov.stdout)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("belong to no block", out.stdout)
+
+    def test_ничей_файл_внутри_области_роняет_проверку_как_раньше(self):
+        self.s.write("src/two.ts", "d\n")
+        self._stand(self._scoped())
+        cov = self.s.run("coverage")
+        self.assertEqual(cov.returncode, 1, cov.stdout)
+        self.assertIn("src/two.ts", cov.stdout)
+        self.assertNotIn("other/a.ts", cov.stdout, "файл вне области в отказ не попадает")
+        out = self.s.run("check")
+        self.assertIn("1 files belong to no block", refused(out), out.stdout)
+
+    def test_без_поля_поведение_прежнее(self):
+        self._stand(None)
+        cov = self.s.run("coverage")
+        self.assertEqual(cov.returncode, 1, cov.stdout)
+        self.assertIn("other/a.ts", cov.stdout)
+        self.assertNotIn("PARTIAL", cov.stdout)
+        out = self.s.run("check")
+        self.assertIn("2 files belong to no block", refused(out), out.stdout)
+        self.assertNotIn("PARTIAL", self.s.run("status").stdout)
+        self.s.run("summary")
+        text = (self.s.root / "docs/review-summary.md").read_text(encoding="utf-8")
+        self.assertNotIn("ЧАСТИЧНОЕ", text)
+        self.assertNotIn('"scope"', text)
+        doc = json.loads(self.s.run("sarif").stdout)
+        self.assertNotIn("properties", doc["runs"][0])
+
+    def test_частичное_ревью_названо_в_status_coverage_summary_и_sarif(self):
+        self._stand(self._scoped())
+        # Сколько файлов в области и сколько всего — числами, которые считает git, а не
+        # подобранными к выводу: область `src/**` — один файл; всего — три, аппарат вычтен.
+        status = self.s.run("status").stdout
+        for token in ("PARTIAL review", "`src/**`", self.REASON, "files in scope: 1 of 3"):
+            with self.subTest(where="status", token=token):
+                self.assertIn(token, status)
+        cov = self.s.run("coverage")
+        self.assertIn("PARTIAL review", cov.stdout)
+        self.assertIn("covered:     1/1 files of the declared scope", cov.stdout)
+        first = (self.s.root / "docs/review/coverage.tsv").read_text(encoding="utf-8").splitlines()[0]
+        self.assertTrue(first.startswith("# PARTIAL review"), first)
+        self.assertIn(self.REASON, first)
+        # Пометка в карте — комментарий: сверка карты с пересчётом её не считает расхождением.
+        self.assertEqual(self.s.run("check").returncode, 0)
+
+        self.s.run("summary")
+        text = (self.s.root / "docs/review-summary.md").read_text(encoding="utf-8")
+        head = text.split("## ")[0]
+        for token in ("ЧАСТИЧНОЕ ревью", "`src/**`", self.REASON, "файлов в области: 1 из 3"):
+            with self.subTest(where="summary", token=token):
+                self.assertIn(token, head, "итог говорит о частичности до таблицы блоков")
+        self.assertIn('"scope": {"paths": ["src/**"]', text, "машинный блок несёт область")
+
+        (self.s.root / "docs/review/findings.jsonl").write_text(json.dumps({
+            "id": "H1-001", "block": "H1", "severity": "medium", "confidence": "confirmed",
+            "status": "open", "file": "src/one.ts", "line": 1, "claim": "утверждение",
+            "scenario": "сценарий"}, ensure_ascii=False) + "\n", encoding="utf-8")
+        doc = json.loads(self.s.run("sarif").stdout)
+        self.assertEqual(sarif_problems(doc), [])
+        run = doc["runs"][0]
+        self.assertEqual(run["properties"], {"coverage": "partial",
+                                             "scope": {"paths": ["src/**"], "reason": self.REASON}})
+        help_text = run["tool"]["driver"]["rules"][0]["help"]["text"]
+        self.assertIn("ЧАСТИЧНЫМ", help_text)
+        self.assertNotIn("сплошным", help_text, "частичное ревью не называет себя сплошным")
+
+    def test_блок_шире_области_счёт_покрытия_берётся_внутри_области(self):
+        """Блок может владеть файлами вне области (его `paths` шире этого прогона): «покрыто
+        2/1» — число, которому нельзя верить, поэтому и числитель считается внутри области."""
+        self.s.blocks(paths=["src/one.ts", "other/a.ts"], scope=self._scoped())
+        self.s.manifest(hypotheses=1)
+        self.s.commit()
+        self.s.run("init")
+        cov = self.s.run("coverage")
+        self.assertIn("covered:     1/1 files of the declared scope", cov.stdout)
+
+    def test_причина_в_несколько_строк_не_ломает_карту_покрытия(self):
+        """Причина уходит в первую строку `coverage.tsv` комментарием; перевод строки в ней
+        дал бы строку без `#`, и сверка карты с пересчётом прочла бы её как владение."""
+        self._stand(self._scoped(reason="ворота выпуска:\nтолько один блок"))
+        self.assertEqual(self.s.run("coverage").returncode, 0)
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("ворота выпуска: только один блок", self.s.run("status").stdout)
+
+    def test_область_без_причины_роняет_проверку(self):
+        for reason in ("", "   ", None):
+            with self.subTest(reason=reason):
+                sc = self._scoped(reason=reason) if reason is not None else {"paths": ["src/**"]}
+                self.s.blocks(paths=["src/one.ts"], scope=sc)
+                self.s.manifest(hypotheses=1)
+                self.s.commit(f"причина {reason!r}")
+                self.s.run("init", "--force")
+                out = self.s.run("check")
+                self.assertIn("`scope` has no `reason`", refused(out), out.stdout)
+
+    def test_область_которая_ни_с_чем_не_совпала_роняет_проверку(self):
+        self._stand(self._scoped(paths=["src/**", "lib/**"]))
+        out = self.s.run("check")
+        failed = refused(out)
+        self.assertIn("`scope` pattern `lib/**` matches no tracked file", failed, out.stdout)
+        self.assertNotIn("`src/**`", failed)
+
+    def test_область_не_той_формы_называет_форму(self):
+        for bad in (["src/**"], {"paths": [], "reason": "r"}, {"paths": "src/**", "reason": "r"},
+                    {"reason": "r"}):
+            with self.subTest(scope=bad):
+                self.s.blocks(paths=["src/one.ts"], scope=bad)
+                out = self.s.run("check")
+                self.assertEqual(out.returncode, 2, out.stderr)
+                self.assertIn("the `scope` field must be an object", out.stderr)
+                self.assertNotIn("Traceback", out.stderr)
+
+
 # Контейнер отказов инструмента и два его глагола: другого способа завести ворота в `check`
 # нет, а у отказа есть ключ, и пишет его то место, где ворота стоят.
 GATE_VERBS = ("refuse", "warn")
@@ -6156,6 +6308,8 @@ class GateRegistryTest(unittest.TestCase):
         ("sweep/undeclared",                    "test_перечисление_без_sweep_краснеет"),
         ("sweep/no-script",                     "test_sweep_без_скрипта_после_охоты_краснеет"),
         ("loop/top-finding-in-own-diff",        "test_главная_находка_внутри_диффа_прошлого_круга_останавливает_круг"),
+        ("scope/no-reason",                     "test_область_без_причины_роняет_проверку"),
+        ("scope/matches-nothing",               "test_область_которая_ни_с_чем_не_совпала_роняет_проверку"),
     ]
 
     def test_каждые_ворота_check_записаны_вместе_со_своим_тестом(self):

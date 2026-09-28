@@ -340,6 +340,8 @@ MSG = {
   "aged_head": "Drift since the base commit `{sha}` ({n} commits on the branch):",
   "aged_row": "  {block:<6} commits: {commits:<5} files: {files:<5} {title}",
   "aged_none": "nothing changed under the blocks' paths since the base — the summary still describes the tree",
+  "scope_partial": "PARTIAL review — only the declared scope {paths} was reviewed, the rest of the repository was not (files in scope: {n} of {total}). Reason: {reason}",
+  "sarif_rule_help_partial": "Found by a PARTIAL review with finetooth — only the scope {paths} was reviewed, the rest of the repository was not; reason: {reason}. Findings of this class: {ids}. The evidence and the failure scenario of each are in the block report named in the alert; the review state is in docs/review/.",
   "backfill_note": "Fingerprints stamped retroactively at commit {head}: blocks {blocks}; findings {n}. Changes before this commit are not tracked.",
   "seams_none": "(no two files of the block are linked by an import or by joint changes — every file here can be read on its own)",
   "seams_head": "Pairs of the block's files that depend on each other: {n} found by `seams`, the top {top} below (an import with the names it takes; joint changes from the history). A defect that lives only where two files are joined is invisible from either file alone — for each pair, find what one side assumes about the other and check that the other side holds it on every path.",
@@ -417,6 +419,8 @@ MSG = {
   "aged_head": "Дрейф от коммита-базы `{sha}` ({n} коммитов на ветке):",
   "aged_row": "  {block:<6} коммитов: {commits:<5} файлов: {files:<5} {title}",
   "aged_none": "под путями блоков ничего не менялось с базы — итог по-прежнему описывает дерево",
+  "scope_partial": "ЧАСТИЧНОЕ ревью — просмотрена только объявленная область {paths}, остальной репозиторий не просматривался (файлов в области: {n} из {total}). Причина: {reason}",
+  "sarif_rule_help_partial": "Найдено ЧАСТИЧНЫМ ревью с finetooth — просмотрена только область {paths}, остальной репозиторий не просматривался; причина: {reason}. Находки этого класса: {ids}. Доказательство и сценарий отказа каждой — в отчёте блока, названном в предупреждении; состояние ревью — в docs/review/.",
   "backfill_note": "Отпечатки проставлены задним числом на коммите {head}: блоки {blocks}; находок {n}. Изменения до этого коммита не отслежены.",
   "seams_none": "(ни одна пара файлов блока не связана ни импортом, ни совместными правками — каждый файл здесь читается сам по себе)",
   "seams_head": "Пары файлов блока, которые зависят друг от друга: `seams` нашёл {n}, ниже верхние {top} (импорт — с именами, которые он берёт; совместные правки — из истории). Дефект, живущий только на стыке двух файлов, не виден ни из одного из них по отдельности — на каждой паре найди, что одна сторона предполагает о другой, и проверь, что другая держит это на всех путях.",
@@ -852,6 +856,19 @@ def check_definition(defn: dict) -> None:
             die(f"docs/review/blocks.json: exclusion #{i} has no `pattern` — an exclusion is "
                 f"`{{\"pattern\": \"dist/**\", \"reason\": \"why\"}}`, and the pattern is what "
                 f"is subtracted from the blocks' files; the example is {example}")
+    # The declared partial scope (see `review_scope`). Its SHAPE is checked here, where every
+    # command meets it: a scope written as a bare list or with an empty `paths` would reach
+    # `git_files`, which reads an empty list as "no files", and the coverage gate would pass
+    # over nothing at all. Whether the patterns match and the reason is given is `check`'s
+    # business — those are states to refuse, not definitions to die on.
+    if "scope" in defn:
+        sc = defn["scope"]
+        if not isinstance(sc, dict) or not isinstance(sc.get("paths"), list) or not sc["paths"] \
+                or not all(isinstance(p, str) and p.strip() for p in sc["paths"]):
+            die(f"docs/review/blocks.json: the `scope` field must be an object "
+                f"`{{\"paths\": [\"src/api/**\"], \"reason\": \"why only this part\"}}` with at "
+                f"least one pattern — it declares that the review covers only these files; "
+                f"remove the field for a whole-repository review")
     seen: set[str] = set()
     for i, b in enumerate(defn["blocks"], 1):
         where = f"block {b['id']}" if isinstance(b, dict) and b.get("id") else f"block #{i}"
@@ -1064,6 +1081,9 @@ def cmd_status(args) -> int:
     total = len(defn["blocks"])
     closed = sum(1 for b in defn["blocks"] if st["blocks"].get(b["id"], {}).get("status") == "closed")
     print(f"\nblocks: {closed}/{total} closed")
+    partial = scope_line(defn, "en")
+    if partial:
+        print(partial)
 
     by_sev = {s: 0 for s in SEVERITIES}
     for f in rows:
@@ -1115,11 +1135,55 @@ def cmd_next(args) -> int:
 # ----------------------------------------------------------------------- coverage
 
 
+def review_scope(defn: dict) -> dict | None:
+    """The declared partial scope — `{"paths": [...], "reason": "..."}` — or None.
+
+    A review of one risky area, a release gate or a first trial of the kit is not a
+    whole-repository review, and the coverage rule used to know only the whole: the 0.8.0
+    release gate walked one block of a ~2000-file repository and needed 183 exclusions to
+    get `check` green. An exclusion says "this file is deliberately not a subject of review",
+    for good; a scope says "THIS run reads only these files", and every output that could
+    be taken for a whole-review result (`coverage`, `status`, `summary`, `sarif`) says so.
+    The field is an INCLUSION list of git pathspecs — the vocabulary of a block's `paths` —
+    with the reason beside it, so one object carries both and neither can drift from the
+    other; a file added inside the scope is still refused until a block owns it.
+    """
+    return defn.get("scope")
+
+
+def scope_files(defn: dict) -> set[str] | None:
+    """Tracked files the declared scope covers (exclusions subtracted), or None — no scope."""
+    sc = review_scope(defn)
+    if sc is None:
+        return None
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    return git_files(sc["paths"]) - excluded
+
+
+def scope_line(defn: dict, lang: str) -> str | None:
+    """One sentence that says the review is partial, names the scope and the reason."""
+    sc = review_scope(defn)
+    if sc is None:
+        return None
+    excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
+    inside = scope_files(defn) or set()
+    total = len(all_files() - excluded)
+    # One line whatever the reason holds: it becomes a `#` line of coverage.tsv, and a line
+    # break in it would put a line into the map that the stale-map check reads as ownership.
+    reason = " ".join(str(sc.get("reason") or "").split()) or "—"
+    return MSG[lang]["scope_partial"].format(
+        paths=", ".join(f"`{p}`" for p in sc["paths"]), n=len(inside), total=total, reason=reason)
+
+
 def coverage_map() -> tuple[dict[str, list[str]], set[str], set[str]]:
-    """file -> owning block ids, plus the excluded and the unassigned sets."""
+    """file -> owning block ids, plus the excluded and the unassigned sets.
+
+    With a declared scope, "unassigned" is counted inside the scope only: a file outside it
+    is not part of this review and is not refused (see `review_scope`)."""
     defn = blocks()
     excluded = git_files([e["pattern"] for e in defn.get("exclusions", [])])
-    everything = all_files() - excluded
+    inside = scope_files(defn)
+    everything = (all_files() if inside is None else inside) - excluded
     owned: dict[str, list[str]] = {}
     for b in defn["blocks"]:
         for f in git_files(b.get("paths", [])) - excluded:
@@ -1214,15 +1278,28 @@ def cmd_coverage(args) -> int:
     for f in sorted(owned):
         lines.append(f"{f}\t{','.join(owned[f])}")
     # `--no-write` — gate mode: CI checks that there are no unowned files without touching the tree.
+    # The map says it is partial in its own first line: `check` reads past `#` lines, and a
+    # consumer of the file alone must not take it for the whole repository's map.
+    defn = blocks()
+    partial = scope_line(defn, "en")
+    if partial:
+        lines.insert(0, f"# {partial}")
     if not args.no_write:
         COVERAGE_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    total = len(owned) + len(unassigned)
-    print(f"covered:     {len(owned)}/{total} files")
+    inside = scope_files(defn)
+    # Under a scope a block may own files outside it (a block's `paths` are wider than this
+    # run); the count is taken inside the scope, the denominator the gate uses.
+    n_owned = len(owned) if inside is None else len(set(owned) & inside)
+    total = n_owned + len(unassigned)
+    if partial:
+        print(partial)
+    print(f"covered:     {n_owned}/{total} files{' of the declared scope' if partial else ''}")
     print(f"excluded:    {len(excluded)} (with a reason in blocks.json)")
     print(f"map:         docs/review/coverage.tsv{' (not rewritten: --no-write)' if args.no_write else ''}")
     if unassigned:
-        print(f"\nNOT COVERED: {len(unassigned)} files — the review is incomplete:")
+        print(f"\nNOT COVERED: {len(unassigned)} files{' inside the declared scope' if partial else ''}"
+              f" — the review is incomplete:")
         for f in sorted(unassigned)[: args.limit]:
             print(f"  {f}")
         if len(unassigned) > args.limit:
@@ -2222,6 +2299,11 @@ def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
              total=len(defn["blocks"]), total_f=len(rows), fixed=by_status["fixed"],
              rejected=by_status["rejected"], deferred=by_status["deferred"],
              dups=by_status["duplicate"], open=by_status["open"]), ""]
+    # A partial review says so before anything else: the file outlives docs/review/, and a
+    # reader who meets it a year later must not take one area's review for the whole.
+    partial = scope_line(defn, review_lang())
+    if partial:
+        out[1:1] = [f"> **{partial}**", ""]
     out += [T("sum_blocks"), "", T("sum_blocks_head"), "|---|---|---|---|---|---|---|"]
     for b in defn["blocks"]:
         s = st["blocks"].get(b["id"], {})
@@ -2276,7 +2358,8 @@ def render_summary(defn: dict, st: dict, rows: list[dict]) -> str:
                     [(x.split("\t")[0], x.split("\t")[1]), (x.split("\t")[2], x.split("\t")[3])])
                     + f" ({x.split(chr(9))[4]}×)" for x in lines[:50]]
             out.append("")
-    machine = {"base": sha, "blocks": {b["id"]: {"title": b["title"], "paths": b.get("paths", [])}
+    machine = {"base": sha, **({"scope": review_scope(defn)} if review_scope(defn) else {}),
+               "blocks": {b["id"]: {"title": b["title"], "paths": b.get("paths", [])}
                                         for b in defn["blocks"]}}
     out += [T("sum_machine"), "", SUMMARY_MARK + json.dumps(machine, ensure_ascii=False) + " -->", ""]
     return "\n".join(out)
@@ -2411,6 +2494,15 @@ def render_sarif(defn: dict, rows: list[dict]) -> dict:
         classes.setdefault(sarif_rule_id(f), []).append(f)
     rule_ids = sorted(classes)
     rules = []
+    scope = review_scope(defn)
+
+    def help_text(ids: str) -> str:
+        # "Found by a whole-repository review" on a partial one is the one sentence of the
+        # alert that would be false; the scope and its reason replace it.
+        if not scope:
+            return T("sarif_rule_help", ids=ids)
+        return T("sarif_rule_help_partial", ids=ids, reason=str(scope.get("reason") or "").strip() or "—",
+                 paths=", ".join(f"`{p}`" for p in scope["paths"]))
     for rid in rule_ids:
         items = classes[rid]
         first = items[0]
@@ -2429,7 +2521,7 @@ def render_sarif(defn: dict, rows: list[dict]) -> dict:
             "id": rid,
             "shortDescription": {"text": sarif_text(short)},
             "fullDescription": {"text": sarif_text(full)},
-            "help": {"text": T("sarif_rule_help", ids=", ".join(f.get("id", "?") for f in items))},
+            "help": {"text": help_text(", ".join(f.get("id", "?") for f in items))},
             "helpUri": KIT_URI,
             "defaultConfiguration": {"level": SARIF_LEVEL[SEVERITIES[worst]]},
             "properties": {"tags": ["finetooth", "review"]},
@@ -2497,6 +2589,11 @@ def render_sarif(defn: dict, rows: list[dict]) -> dict:
                                 "semanticVersion": VERSION, "informationUri": KIT_URI,
                                 "rules": rules}},
             "results": results,
+            # The run's property bag (SARIF §3.8, "property bags"): a consumer reading the file
+            # without the rules' help still sees that the review was partial, and of what.
+            **({"properties": {"coverage": "partial", "scope": {
+                "paths": list(scope["paths"]),
+                "reason": str(scope.get("reason") or "").strip()}}} if scope else {}),
         }],
     }
 
@@ -4854,6 +4951,27 @@ def cmd_check(args) -> int:
                             "the block silently shrank"
                         )
 
+    # 8a. the declared partial scope. Its reason is what tells a reader of the summary why
+    #     the rest was not read; a scope pattern that matches nothing makes the coverage gate
+    #     pass over files that are not there — the same silent shrinking as a block's.
+    sc = review_scope(defn)
+    if sc is not None:
+        if not isinstance(sc.get("reason"), str) or not sc["reason"].strip():
+            gates.refuse(
+                "scope/no-reason",
+                "blocks.json: `scope` has no `reason` — a partial review is published as "
+                "partial, with the reason the rest was not read (a trial run, a release gate, "
+                "one risky area); write it in `scope.reason`"
+            )
+        for spec in sc["paths"]:
+            if not git_files([spec]):
+                gates.refuse(
+                    "scope/matches-nothing",
+                    f"blocks.json: `scope` pattern `{spec}` matches no tracked file — the "
+                    f"coverage gate would check nothing there; fix the pattern (they are git "
+                    f"pathspecs, like a block's `paths`) or remove it"
+                )
+
     # 9. coverage
     _, _, unassigned = coverage_map()
     if unassigned:
@@ -5313,7 +5431,9 @@ Next — by hand, and this is not a formality:
    changes: for each of the top ones write a hypothesis on what one side assumes about the
    other — nobody else joins them, and the hunter gets the same list in its prompt.
 4. `{cli} init`, then `{cli} coverage` — and deal with the unowned files until there are
-   none left. This is where everything forgotten surfaces.
+   none left. This is where everything forgotten surfaces. Reviewing only a part on purpose
+   (a trial run, a release gate, one risky area)? Declare `"scope": {{"paths": [...], "reason": "..."}}`
+   in blocks.json instead of excluding the rest: coverage counts inside it, and every report says the review is partial.
 5. `{cli} log <ID> "what was decided and why"` — from the first decision on: findings a
    re-run recovers, decisions it does not. What a useful line looks like: {asset(ASSET_JOURNAL, lang)}
 6. The banner in the root instructions file ({asset(ASSET_BANNER, lang)}), otherwise a new session

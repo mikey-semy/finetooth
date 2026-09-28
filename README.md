@@ -294,7 +294,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-478 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
+487 scenarios, about nine minutes, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -359,6 +359,17 @@ Next comes the work nobody will do for you:
    everything forgotten surfaces: for the author — a whole microservice, for us — 89 route
    files. `sizes` shows the blocks above the ceiling — split them by subject, not
    alphabetically.
+
+   **Reviewing only a part on purpose** — a trial run of the kit, a release gate, one risky
+   area — declare it instead of excluding the rest:
+   `"scope": {"paths": ["src/billing/**"], "reason": "release gate: billing only"}` in
+   `blocks.json`. The paths are git pathspecs, like a block's `paths`; the reason is
+   required. Coverage is then counted inside the scope only (a file without a block there is
+   refused as before, a file outside is not), and `coverage`, `status`, `summary` and `sarif`
+   (the run's `properties`) say the review is partial, name the scope and the reason — so it
+   is never taken for a whole one. `check` refuses a scope without a reason and a scope
+   pattern that matches no tracked file. The first live run needed 183 exclusions for one
+   block; the scope is one line.
 5. Add the `make` targets (or `package.json` scripts) and the banner to the project's root
    instructions file — without the banner a new session will not know the review is in
    progress and will start its own in parallel.
@@ -472,7 +483,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 478 scenarios
+tests/                            tests of the tool and the skill format: 487 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
