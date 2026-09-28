@@ -4968,7 +4968,18 @@ class SeamsTest(unittest.TestCase):
             "const helper = require('./helper')\n"))
         self.s.write("src/api/helper.ts", "export const h = 1\n")
         self.s.write("src/api/ghost.ts", "export const ghost = 1\n")
-        self.s.write("src/api/esm.ts", "import { h } from './helper.js'\nimport type { T } from '.'\n")
+        self.s.write("src/api/esm.ts", "import { h } from './helper.js'\nimport type { T } from '.'\n"
+                                       "import { x } from './both.js'\n")
+        self.s.write("src/api/both.ts", "export const x = 1\n")
+        self.s.write("src/api/both.js", "exports.x = 1\n")
+        self.s.write("src/api/plain.js", "const { x } = require('./both.js')\n")
+        self.s.write("src/api/dead.ts", (
+            "// const old = require('./old1')\n"
+            "/* const m = await import('./old2')\n   require('./old3') */\n"
+            "const s = \"import('./old4')\", t = `require('./old5')`\n"
+            "const live = require('./helper')\n"))
+        for k in range(1, 6):
+            self.s.write(f"src/api/old{k}.ts", "export const o = 1\n")
         self.s.write("src/api/index.d.ts", "export type T = string\n")
         self.s.blocks(paths=["src/**", "tsconfig.json"])
         self.s.manifest(hypotheses=1)
@@ -4996,6 +5007,14 @@ class SeamsTest(unittest.TestCase):
         self.assertIn("aliases: tsconfig.json: @/* → src/*", out,
                       "вывод обязан назвать конфиг, из которого прочитан алиас")
         self.assertNotIn("ghost", out, "импорт в комментарии — не импорт")
+        self.assertNotRegex(out, r"old\d", "`require`/`import()` в комментарии `//`, `/* */` и в "
+                                     "строке — не связь")
+        self.assertIn("import src/api/dead.ts → src/api/helper.ts: *", out,
+                      "настоящий `require` рядом с мёртвыми обязан остаться")
+        self.assertIn("import src/api/esm.ts → src/api/both.ts: x", out,
+                      "из .ts TypeScript берёт исходник раньше собранного .js")
+        self.assertIn("import src/api/plain.js → src/api/both.js: x", out,
+                      "из .js написанное расширение и есть файл")
         self.assertRegex(out, r"1 not resolved", "пакет `react` не разрешается и считается")
 
     def test_алиас_без_конфига_не_угадывается(self):

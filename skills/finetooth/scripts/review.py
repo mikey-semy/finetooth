@@ -1656,12 +1656,18 @@ SEAMS_TOP = 10
 JS_EXTS = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
 # A specifier written with the emitted extension names the source file: TypeScript's ESM
 # rule (`./x.js` resolves to `./x.ts`).
-JS_EMITTED = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
+# From a TypeScript importer the source extensions are tried BEFORE the written one: with
+# both `x.ts` and a built `x.js` beside it, the compiler reads `x.ts`.
+JS_EMITTED = {".js": (".ts", ".tsx", ".d.ts"), ".jsx": (".tsx", ".d.ts"), ".mjs": (".mts", ".d.mts"),
+              ".cjs": (".cts", ".d.cts")}
+TS_IMPORTERS = (".ts", ".tsx", ".mts", ".cts")
 PY_EXTS = (".py",)
 TS_CONFIGS = ("tsconfig.json", "jsconfig.json")
 
-# Static forms are anchored at the start of a line: a `// import …` or a ` * import …` in a
-# comment does not start with the keyword. `require(…)` and `import(…)` are calls and can
+# All five are searched in the text with comments and string contents blanked
+# (`js_code_mask`) — that, not the pattern, is what keeps a commented-out `require(…)` or a
+# string holding `import(…)` from counting. Static forms are also anchored at the start of a
+# statement's line, as they are written; `require(…)` and `import(…)` are calls and can
 # stand anywhere.
 JS_IMPORT = re.compile(
     r"^[ \t]*import\s+(?:type\s+)?(?P<clause>[\w$*{},\s]+?)\s+from\s*(['\"])(?P<spec>[^'\"\n]+)\2",
@@ -1674,6 +1680,46 @@ JS_REQUIRE = re.compile(
     r"(?:(?:const|let|var)\s+(?P<bind>\{[^}]*\}|[\w$]+)\s*=\s*)?"
     r"\brequire\s*\(\s*(['\"])(?P<spec>[^'\"\n]+)\2\s*\)")
 JS_DYNAMIC = re.compile(r"\bimport\s*\(\s*(['\"])(?P<spec>[^'\"\n]+)\1\s*\)")
+
+
+def js_code_mask(text: str) -> str:
+    """The text with comments and the CONTENTS of string literals replaced by spaces — same
+    length, same line breaks, the quote characters kept.
+
+    Not a parser: a regex literal holding a quote (`/'/`) opens a "string", and a `'`/`"`
+    string is closed at the end of its line, so the damage stays on that one line. A template
+    literal is blanked whole, `${…}` included.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            for j in range(i, end):
+                if text[j] != "\n":
+                    out[j] = " "
+            i = end
+            continue
+        if c in "'\"`":
+            i += 1
+            while i < n and text[i] != c and not (c != "`" and text[i] == "\n"):
+                if text[i] == "\\" and i + 1 < n:
+                    out[i] = " "
+                    i += 1
+                if text[i] != "\n":
+                    out[i] = " "
+                i += 1
+            i += 1
+            continue
+        i += 1
+    return "".join(out)
 
 
 def jsonc(text: str):
@@ -1807,26 +1853,29 @@ class Imports:
                 return self.configs[d]
             d = posixpath.dirname(d)
 
-    def file_of(self, base: str, exts: tuple[str, ...], index: str) -> str | None:
+    def file_of(self, base: str, exts: tuple[str, ...], index: str,
+                source_first: bool = False) -> str | None:
         if base.startswith("..") or base.startswith("/"):
             return None
         tries = [base]
         stem, ext = posixpath.splitext(base)
         if exts == JS_EXTS:
             # `./x.js` names `./x.ts`; `./types` may be a declaration file only
-            tries += [stem + e for e in JS_EMITTED.get(ext, ())]
+            emitted = [stem + e for e in JS_EMITTED.get(ext, ())]
+            tries = emitted + tries if source_first else tries + emitted
             exts = exts + (".d.ts",)
         tries += [base + e for e in exts]
         tries += [posixpath.normpath(posixpath.join(base, index + e)) for e in exts]
         return next((t for t in tries if t in self.tracked), None)
 
     def js_target(self, rel: str, spec: str) -> str | None:
+        ts = rel.endswith(TS_IMPORTERS)
         if spec.startswith("."):
             return self.file_of(posixpath.normpath(posixpath.join(posixpath.dirname(rel), spec)),
-                                JS_EXTS, "index")
+                                JS_EXTS, "index", ts)
         conf = self.config_for(rel)
         for cand in (conf.candidates(spec) if conf else []):
-            hit = self.file_of(cand, JS_EXTS, "index")
+            hit = self.file_of(cand, JS_EXTS, "index", ts)
             if hit:
                 return hit
         return None
@@ -1849,19 +1898,24 @@ class Imports:
         return names
 
     def js_edges(self, rel: str, text: str) -> list[tuple[str, list[str]]]:
+        # The forms are searched in the MASKED text (comments and string contents blanked,
+        # offsets kept) and the specifier is read back from the original at the same span:
+        # `// const old = require('./x')` or a string holding `import('./x')` is not a link.
+        code = js_code_mask(text)
+        spec = lambda m: text[m.start("spec"):m.end("spec")]
         found: list[tuple[str, list[str]]] = []
-        for m in JS_IMPORT.finditer(text):
-            found.append((m["spec"], self.js_names(m["clause"])))
-        for m in JS_BARE_IMPORT.finditer(text):
-            found.append((m["spec"], []))
-        for m in JS_REEXPORT.finditer(text):
-            found.append((m["spec"], self.js_names(m["clause"])))
-        for m in JS_REQUIRE.finditer(text):
+        for m in JS_IMPORT.finditer(code):
+            found.append((spec(m), self.js_names(m["clause"])))
+        for m in JS_BARE_IMPORT.finditer(code):
+            found.append((spec(m), []))
+        for m in JS_REEXPORT.finditer(code):
+            found.append((spec(m), self.js_names(m["clause"])))
+        for m in JS_REQUIRE.finditer(code):
             bind = m["bind"] or ""
-            found.append((m["spec"], self.js_names(bind) if bind.startswith("{")
+            found.append((spec(m), self.js_names(bind) if bind.startswith("{")
                           else (["*"] if bind else [])))
-        for m in JS_DYNAMIC.finditer(text):
-            found.append((m["spec"], []))
+        for m in JS_DYNAMIC.finditer(code):
+            found.append((spec(m), []))
         return [(t, names) for spec, names in found if (t := self.counted(self.js_target(rel, spec)))]
 
     def counted(self, target: str | None) -> str | None:
