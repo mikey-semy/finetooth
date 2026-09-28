@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-28T06:10:40Z",
+  "updated_at": "2026-09-28T06:58:24Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -8,10 +8,10 @@
       "finished": "2026-09-25T02:22:21Z",
       "reports": [],
       "note": "",
-      "reviewed_sha": "bfdaac4bee24da85",
-      "refs_sha": "f80cadb4bf01c44b",
+      "reviewed_sha": "dde80f38474135d4",
+      "refs_sha": "89be1d1584a1012f",
       "hypotheses_sha": "4ab68e42761325b3",
-      "restamped_at": "2026-09-28T06:10:39Z",
+      "restamped_at": "2026-09-28T06:58:23Z",
       "read_lines": 5639
     },
     "T2": {
@@ -21,9 +21,9 @@
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
       "reviewed_sha": "2920b49b8812fd14",
-      "refs_sha": "9456d2f2cae56d65",
+      "refs_sha": "53d8c9656be164df",
       "hypotheses_sha": "1d5450e8e739f769",
-      "restamped_at": "2026-09-28T06:10:40Z",
+      "restamped_at": "2026-09-28T06:58:23Z",
       "read_lines": 3236
     },
     "T3": {
@@ -32,10 +32,10 @@
       "finished": "2026-09-25T18:55:37Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "a7e9b69c013ec22e",
-      "refs_sha": "9456d2f2cae56d65",
+      "reviewed_sha": "ecaec86f54d02e92",
+      "refs_sha": "53d8c9656be164df",
       "hypotheses_sha": "fcbe3731d494ce45",
-      "restamped_at": "2026-09-28T06:10:40Z"
+      "restamped_at": "2026-09-28T06:58:23Z"
     },
     "T4": {
       "status": "closed",
@@ -43,10 +43,10 @@
       "finished": "2026-09-25T18:55:38Z",
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
-      "reviewed_sha": "c29a2f941550a754",
+      "reviewed_sha": "c1adb54ae50b6b4f",
       "refs_sha": "a9f968fbcdf6e6bb",
       "hypotheses_sha": "779f2bec72a0a16a",
-      "restamped_at": "2026-09-28T06:10:40Z",
+      "restamped_at": "2026-09-28T06:58:24Z",
       "read_lines": 3463
     }
   }
