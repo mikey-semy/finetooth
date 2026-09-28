@@ -116,8 +116,8 @@ one of your own:
    `--confidence`, `rejected --reason`, `duplicate --dup-of`) — run them. Rejected findings
    are not deleted — they stay with the reason. The draft then holds only the verifier's new
    findings: `review import <ID> --append`. (Both roles check their draft first with
-   `review import <ID> --dry-run`: the limits, the vocabularies and the rejection reasons,
-   row by row, nothing written — their templates say so.) Then `review set-status <ID> verified`:
+   `review import <ID> --dry-run`: every row as `import` would write it, asked by `check`'s
+   own gates, nothing written — their templates say so.) Then `review set-status <ID> verified`:
    `verified` and `closed` are refused while the draft holds rows the register does not, and
    `check` refuses the same for a block past verification — unimported findings are
    invisible to the summary and the fix gate. (Importing only after the verifier works too:

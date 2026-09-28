@@ -3888,53 +3888,19 @@ def location_problems(f: dict, tracked: set[str]) -> dict[str, str]:
 
 
 def draft_problems(block: str, numbered: list) -> list[str]:
-    """What `import` and then `check` would refuse in a block's draft, row by row — every
-    row, not the first: the role that wrote the draft fixes it in one pass.
-
-    The row-level rules only, and the same ones: the length limits `import` holds, the
-    vocabularies, required fields and the place (`location_problems`) `check` holds, a
-    rejection with no reason. What depends
-    on the register (whether a plain import would overwrite a recorded decision) is the
-    lead's question at import time, not the draft's."""
+    """What is wrong with the draft's rows before `import` can even plan them — every row,
+    not the first: a line that is not a JSON object, and a row whose `block` names another
+    block (the plain import would file it there without a word). Everything else a row can
+    get wrong is asked by `import_dry_run` of the rows `import` would write, by `import`'s
+    own refusals and `check`'s own gates — not by a copy of them here."""
     out = []
-    tracked = all_files()
     for n, row in numbered:
         at = f"line {n}"
         if not isinstance(row, dict):
             out.append(f"{at}: not a JSON object — one finding per line, as `{{...}}`")
             continue
-        for field in ("severity", "file", "claim", "scenario"):
-            # `"file": 0` or `[]` is not an empty file but a value that is not a path, and
-            # `location_problems` names it as that; one row, one message.
-            if field == "file" and file_problem(row):
-                continue
-            if not str(row.get(field) or "").strip():
-                out.append(f"{at}: `{field}` is empty — `check` refuses a finding without it")
         if row.get("block") not in (None, block):
             out.append(f"{at}: `block` is {row.get('block')!r} — this is the draft of {block}")
-        if isinstance(row.get("id"), str) and (m := re.fullmatch(r"(.+)-(\d+)", row["id"])) \
-                and m.group(1) != block:
-            out.append(f"{at}: id {row['id']} is numbered for another block")
-        for field, vocab in (("severity", SEVERITIES), ("confidence", CONFIDENCE),
-                             ("status", FINDING_STATUS)):
-            if row.get(field) not in (None, "", *vocab):
-                out.append(f"{at}: {field}={row.get(field)!r} is not one of {', '.join(vocab)}")
-        for field, limit in (("claim", CLAIM_MAX), ("scenario", SCENARIO_MAX)):
-            if len(str(row.get(field) or "")) > limit:
-                out.append(f"{at}: {field} is {len(str(row[field]))} characters against a limit "
-                           f"of {limit} — shorten it; the evidence belongs in the report")
-        if row.get("status") == "rejected":
-            if row.get("confidence") != "rejected":
-                out.append(f"{at}: status rejected needs \"confidence\":\"rejected\" too")
-            if not reject_reason_of(row):
-                out.append(f"{at}: rejected with no reason — write it into \"reject_reason\": "
-                           f"what exactly rules the scenario out")
-        # Where the row points, by the rule `check` holds — with the status `import` gives a
-        # row that names none.
-        out += [f"{at}: {msg}" for msg in
-                location_problems({"status": "open", **row}, tracked).values()]
-        if row.get("status") == "duplicate" and not row.get("dup_of"):
-            out.append(f"{at}: duplicate with no \"dup_of\" — name the primary finding's id")
     return out
 
 
@@ -4105,7 +4071,6 @@ def cmd_import(args) -> int:
                 f"a diff against the working tree changes under it")
         found_in = {"role": "fixreview", "round": args.round, "diff": pinned}
 
-    incoming = []
     try:
         numbered = read_draft(src)
     except ValueError as exc:
@@ -4114,37 +4079,88 @@ def cmd_import(args) -> int:
             return 1
         die(str(exc))
     if args.dry_run:
-        # The role's own check of its draft before it hands it in: a verifier draft with a
-        # claim past the limit had the whole block refused at import, and a rejection with no
-        # reason turned `check` red — both found by the lead, after the role was gone (#46).
-        # Nothing is written: not the register, not the draft.
-        problems = draft_problems(args.block, numbered)
-        rel = src.relative_to(ROOT)
-        if problems:
-            print(f"{rel}: {len(problems)} problem(s) — fix them in the draft and run this again:")
-            for p in problems:
-                print(f"  {p}")
-            return 1
-        print(f"{rel}: {len(numbered)} row(s), nothing `import` or `check` would refuse")
+        return import_dry_run(args.block, src, numbered, append=args.append, force=args.force,
+                              found_in=found_in)
+    try:
+        incoming, merged, new = import_plan(args.block, src.name, numbered, findings(),
+                                            append=args.append, force=args.force,
+                                            found_in=found_in)
+    except ImportRefused as exc:
+        die(str(exc))
+    if args.append:
+        # The numbers are written back into the block's file — as with the regular import.
+        # A repeated run recognises them and appends nothing; renaming the file as
+        # "consolidated" is unnecessary, and that rename used to carry the whole block's
+        # file away.
+        with FINDINGS_FILE.open("a", encoding="utf-8") as fh:
+            for f in new:
+                fh.write(json.dumps(f, ensure_ascii=False) + "\n")
+        src.write_text(
+            "\n".join(json.dumps(f, ensure_ascii=False) for f in incoming) + "\n",
+            encoding="utf-8",
+        )
+        print(f"{args.block}: appended {len(new)} findings (top-up import)")
+        print(f"do not forget: {CLI} findings && {CLI} check")
         return 0
+    # Write the assigned ids back into the block's own file. Ids are handed out by
+    # POSITION, so without this a finding appended later — one the fixer turned up
+    # while working — would renumber everything under it on the next import, and
+    # every id already quoted in the journal, in a commit message and in another
+    # block's report would start pointing at a different defect.
+    src.write_text(
+        "\n".join(json.dumps(f, ensure_ascii=False) for f in incoming) + "\n",
+        encoding="utf-8",
+    )
+    with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
+        for f in merged:
+            fh.write(json.dumps(f, ensure_ascii=False) + "\n")
+    live = sum(1 for f in incoming if f.get("status") == "open")
+    print(f"{args.block}: imported {len(incoming)} records, {live} of them open")
+    print(f"do not forget: {CLI} findings && {CLI} check")
+    return 0
+
+
+class ImportRefused(Exception):
+    """`import` does not take the draft; the message names why and the way out."""
+
+
+class ImportWouldReplace(ImportRefused):
+    """The plain `import` would erase or overturn what the register holds of the block."""
+
+
+def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, append: bool,
+                force: bool, found_in: dict | None = None,
+                hold_rows: bool = True) -> tuple[list, list[dict], list[dict]]:
+    """What `import` writes, computed without writing it: (the rows of the block's file after
+    the import, the register after it, the rows of the register that are new or rewritten).
+    Raises ImportRefused where `import` refuses. ONE place: `import` writes what this returns,
+    and `import --dry-run` asks `check`'s gates (`finding_gates`) of the same rows, so the dry
+    run sees the defaults `import` fills in and the rejection it normalises — asked of the row
+    as written, a `"confidence": null` or a `rejected` confidence with no reason passed the
+    dry run and was refused by `check` a minute later (fix review of the 0.8.0 candidate).
+    `hold_rows=False` is the dry run's: `check` holds the same two limits and the same rule
+    for `file` (`file_problem`, the empty-field gate) and names every row that breaks them,
+    where `import` stops at the first."""
+    incoming = []
     for n, row in numbered:
         # The limits `check` holds are held here too: a draft that `import` accepted and
         # `check` then refused made every later gate red on a row nobody could fix through
         # the tool (the kit's own review hit it three times).
         for field, limit in (("claim", CLAIM_MAX), ("scenario", SCENARIO_MAX)):
-            if isinstance(row, dict) and len(str(row.get(field) or "")) > limit:
-                die(f"{src.name} line {n}: {field} is {len(str(row[field]))} characters against a "
+            if hold_rows and isinstance(row, dict) and len(str(row.get(field) or "")) > limit:
+                raise ImportRefused(
+                    f"{name} line {n}: {field} is {len(str(row[field]))} characters against a "
                     f"limit of {limit} — shorten it in the draft; the evidence belongs in the report")
-        # So is the file, in the words of the dry run: a row whose `file` is written but is
-        # not a path went into the register, and every command that read it after that died
+        # So is the file, in the words of `check`: a row whose `file` is written but is not
+        # a path went into the register, and every command that read it after that died
         # with a traceback or `check` refused a record the lead could fix only by hand. A row
         # with no `file` key at all is left as before — `check` names the empty field.
-        if isinstance(row, dict) and "file" in row:
-            why = file_problem(row) or ("`file` is empty — `check` refuses a finding without it"
+        if hold_rows and isinstance(row, dict) and "file" in row:
+            why = file_problem(row) or ("field file is empty — `check` refuses a finding without it"
                                         if not finding_file(row).strip() else None)
             if why:
-                die(f"{src.name} line {n}: {why}; `{CLI} import {args.block} --dry-run` "
-                    f"lists every problem of the draft at once")
+                raise ImportRefused(f"{name} line {n}: {why}; `{CLI} import {block} --dry-run` "
+                                    f"lists every problem of the draft at once")
         incoming.append(row)
 
     # A row numbered for ANOTHER block (`V2-001` in the file of H1) is refused on every
@@ -4152,20 +4168,20 @@ def cmd_import(args) -> int:
     # file it under this block with a foreign number (the kit author's review, 24.09).
     other = [f.get("id") for f in incoming
              if isinstance(f.get("id"), str) and (m := re.fullmatch(r"(.+)-(\d+)", f["id"]))
-             and m.group(1) != args.block]
+             and m.group(1) != block]
     if other:
-        die(f"{src.name}: rows numbered for another block — {', '.join(other)}; a block's file "
+        raise ImportRefused(
+            f"{name}: rows numbered for another block — {', '.join(other)}; a block's file "
             f"holds that block's findings only: remove the rows or import them with their own block")
 
-    existing = findings()
-    if args.append:
+    if append:
         # TOP-UP IMPORT: findings found on top of what is already recorded. The regular
         # import replaces the block's findings wholesale, and for a block where part is
         # already fixed that would erase the fix marks — a neighbouring project got burnt
         # by this and started a separate consolidator. Here we only append, with the
         # block's next free numbers.
-        taken = [n for f in existing if f.get("block") == args.block
-                 and (n := finding_number(args.block, f.get("id"))) is not None]
+        taken = [n for f in existing if f.get("block") == block
+                 and (n := finding_number(block, f.get("id"))) is not None]
         next_n = max(taken, default=0) + 1
         added = []
         # After the previous import the block's file holds the already recorded findings
@@ -4174,10 +4190,11 @@ def cmd_import(args) -> int:
         # does not override it. "Recorded" is decided in one place, `unimported_rows`, which
         # `set-status` and `check` ask too.
         for f in unimported_rows(incoming, existing):
-            f.setdefault("block", args.block)
-            if f["block"] != args.block:
-                die(f"the top-up file holds a finding of another block {f['block']} — the import is stopped")
-            f["id"] = finding_id(args.block, next_n)
+            f.setdefault("block", block)
+            if f["block"] != block:
+                raise ImportRefused(f"the top-up file holds a finding of another block {f['block']} "
+                                    f"— the import is stopped")
+            f["id"] = finding_id(block, next_n)
             next_n += 1
             f.setdefault("status", "open")
             f.setdefault("confidence", "plausible")
@@ -4189,23 +4206,10 @@ def cmd_import(args) -> int:
             put_fingerprint(f, code_fingerprint(finding_file(f), f.get("line"))
                             or {"code_sha": None})
             added.append(f)
-        with FINDINGS_FILE.open("a", encoding="utf-8") as fh:
-            for f in added:
-                fh.write(json.dumps(f, ensure_ascii=False) + "\n")
-        # The numbers are written back into the block's file — as with the regular import.
-        # A repeated run recognises them and appends nothing; renaming the file as
-        # "consolidated" is unnecessary, and that rename used to carry the whole block's
-        # file away.
-        src.write_text(
-            "\n".join(json.dumps(f, ensure_ascii=False) for f in incoming) + "\n",
-            encoding="utf-8",
-        )
-        print(f"{args.block}: appended {len(added)} findings (top-up import)")
-        print(f"do not forget: {CLI} findings && {CLI} check")
-        return 0
+        return incoming, existing + added, added
 
-    mine = [f for f in existing if f.get("block") == args.block]
-    if mine and not args.force:
+    mine = [f for f in existing if f.get("block") == block]
+    if mine and not force:
         # The plain import REPLACES the block's set with the file. A finding can be recorded
         # against the block before its pass — handed over by another block's fixer, left by
         # an earlier pass — and replacing wiped it: its id went to the hunter's new finding
@@ -4232,12 +4236,13 @@ def cmd_import(args) -> int:
                 parts.append(f"recorded but not in the file: {', '.join(missing)}")
             if overturned:
                 parts.append(f"decided in the register, decided otherwise in the file: {', '.join(overturned)}")
-            die(f"block {args.block}: the plain import would replace what is recorded — "
-                f"{'; '.join(parts)}. Add the new findings with `{CLI} import {args.block} --append` "
+            raise ImportWouldReplace(
+                f"block {block}: the plain import would replace what is recorded — "
+                f"{'; '.join(parts)}. Add the new findings with `{CLI} import {block} --append` "
                 f"(what is recorded stays, new rows get the next free numbers), or replace the "
                 f"whole set deliberately with --force")
 
-    kept = [f for f in existing if f.get("block") != args.block]
+    kept = [f for f in existing if f.get("block") != block]
     before = {f["id"]: f for f in mine if f.get("id")}
     # Ids used to be handed out by POSITION in the file, so a finding inserted ABOVE the
     # numbered rows took an id that already existed: the register then held two H1-001,
@@ -4250,17 +4255,18 @@ def cmd_import(args) -> int:
     for f in incoming:
         fid = f.get("id")
         if fid and fid in seen_here:
-            die(f"{src.name}: two rows carry the id {fid} — an id is unique within a block; "
+            raise ImportRefused(
+                f"{name}: two rows carry the id {fid} — an id is unique within a block; "
                 f"delete the id field of the row that is new and the import will hand out a "
                 f"free number")
         if fid:
             seen_here.add(fid)
-    numbered = [n for fid in taken if (n := finding_number(args.block, fid)) is not None]
-    next_n = max(numbered, default=0) + 1
+    numbered_ids = [n for fid in taken if (n := finding_number(block, fid)) is not None]
+    next_n = max(numbered_ids, default=0) + 1
     for f in incoming:
-        f.setdefault("block", args.block)
+        f.setdefault("block", block)
         if not f.get("id"):
-            f["id"] = finding_id(args.block, next_n)
+            f["id"] = finding_id(block, next_n)
             next_n += 1
         f.setdefault("status", "open")
         f.setdefault("confidence", "plausible")
@@ -4293,22 +4299,67 @@ def cmd_import(args) -> int:
                             or {"code_sha": None})
         if f.get("confidence") == "rejected":
             f["status"] = "rejected"
-    merged = kept + incoming
-    # Write the assigned ids back into the block's own file. Ids are handed out by
-    # POSITION, so without this a finding appended later — one the fixer turned up
-    # while working — would renumber everything under it on the next import, and
-    # every id already quoted in the journal, in a commit message and in another
-    # block's report would start pointing at a different defect.
-    src.write_text(
-        "\n".join(json.dumps(f, ensure_ascii=False) for f in incoming) + "\n",
-        encoding="utf-8",
-    )
-    with FINDINGS_FILE.open("w", encoding="utf-8") as fh:
+    return incoming, kept + incoming, incoming
+
+
+def import_dry_run(block: str, src: Path, numbered: list, *, append: bool, force: bool,
+                   found_in: dict | None) -> int:
+    """`import --dry-run`: the role's own check of its draft before it hands it in. A verifier
+    draft with a claim past the limit had the whole block refused at import, and a rejection
+    with no reason turned `check` red — both found by the lead, after the role was gone (#46).
+
+    Not a second copy of the rules: the draft goes through `import_plan` — what `import`
+    would write, defaults filled in, ids handed out — and every row it would write is asked
+    `check`'s own gates (`finding_gates`) against the register it would leave. Every row is
+    named at once; nothing is written, not the register, not the draft.
+
+    One refusal of `import` is not the draft's to fix: whether a plain import may replace
+    what the register already holds of the block is the lead's call at import time
+    (`--append` or `--force`). It is named as a note, and the rows are asked as `--append`
+    would write them — the path SKILL.md gives a draft that holds only new findings on top of
+    recorded ones."""
+    rel = src.relative_to(ROOT)
+    problems = draft_problems(block, numbered)
+    rows = [(n, row) for n, row in numbered if isinstance(row, dict)]
+    line_of = {id(row): n for n, row in rows}
+    note = ""
+    try:
+        try:
+            _, merged, new = import_plan(block, src.name, rows, findings(), append=append,
+                                         force=force, found_in=found_in, hold_rows=False)
+        except ImportWouldReplace as exc:
+            note = str(exc)
+            _, merged, new = import_plan(block, src.name, rows, findings(), append=True,
+                                         force=force, found_in=found_in, hold_rows=False)
+    except ImportRefused as exc:
+        problems.append(f"`import` refuses the file as a whole — {exc}; the rows are checked "
+                        f"once it takes the file")
+    else:
+        asked = {id(f) for f in new}
+        idx, tracked, seen = block_index(blocks()), all_files(), set()
         for f in merged:
-            fh.write(json.dumps(f, ensure_ascii=False) + "\n")
-    live = sum(1 for f in incoming if f.get("status") == "open")
-    print(f"{args.block}: imported {len(incoming)} records, {live} of them open")
-    print(f"do not forget: {CLI} findings && {CLI} check")
+            if id(f) not in asked:
+                # A row the import leaves as it is: not the draft's to answer for, but its
+                # id is taken, which the duplicate-id gate asks of the rows after it.
+                seen.add(f.get("id", "<no id>"))
+                continue
+            gates = Refusals()
+            finding_gates(gates, f, merged, idx, tracked, seen)
+            # `check` names the finding by the id `import` would give it; the draft's author
+            # knows the row by its line.
+            own = f"finding {f.get('id')}: "
+            problems += [f"line {line_of[id(f)]}: {m.removeprefix(own)}" for m in gates.problems]
+    if note:
+        print(f"note, the lead's call at import time: {note}; the rows are checked as "
+              f"`--append` would write them")
+    if problems:
+        print(f"{rel}: {len(problems)} problem(s) — fix them in the draft and run this again "
+              f"(the messages are `check`'s after the import; fix the row in the draft):")
+        for p in problems:
+            print(f"  {p}")
+        return 1
+    print(f"{rel}: {len(numbered)} row(s), nothing `import` or `check` would refuse"
+          + (" in the rows" if note else ""))
     return 0
 
 
@@ -5405,35 +5456,58 @@ def verdict_records(text: str, block_id: str = "") -> list[tuple[str, str, int]]
 CONFIRM_WORDS = tuple(w for w, v in VERDICT_WORDS
                       if v == CHECKED and ("подтвер" in w or "confirm" in w)
                       and not w.startswith(("не ", "not ")))
-# A confirmation word is negated by what stands shortly before it in the same sentence: "не
-# подтвердилась бы", "не была подтверждена", "was not confirmed", "could not be confirmed".
-# A list of whole phrases missed every one of those (Codex on #60); the question is
-# nearness, not wording. The window is the widest of those forms — "could not be confirmed"
-# puts the negation three words before the word — and it looks only backwards: "подтверждена,
-# не только X, но и Y" is still a confirmation. A confirmation word inside a longer word
-# ("unconfirmed") is not the word.
+# A confirmation word is negated only when the negation is ITS OWN: the negator stands right
+# before the word, or right before the auxiliaries of the word's own verb phrase — "не
+# подтвердилась бы", "не была подтверждена", "не до конца подтверждена", "was not confirmed",
+# "could not be confirmed", "has not yet been confirmed", "wasn't confirmed". A list of whole
+# phrases missed most of those (Codex on #60). A window of the few words before the word
+# caught them, and caught as well the negator of a neighbouring clause: "there is no guard,
+# confirmed by running it", "узды нет, подтверждена потеря флага", "no doubt confirmed by the
+# run" — the commonest shape of a hunter's proof states an absence first — and those
+# confirmations went unrefused (fix review of the 0.8.0 candidate). So the walk back from the
+# word skips only the auxiliaries and degree words of its own phrase and stops at anything
+# else: a punctuation mark ends the phrase ("нет, подтверждена"), a word of another phrase
+# ("doubt", "guard") means the negator negates that word, not the confirmation. It looks only
+# backwards: "подтверждена, не только X, но и Y" is still a confirmation. A confirmation word
+# inside a longer word ("unconfirmed") is not the word; emphasis and code marks are
+# transparent ("**not** confirmed").
 CONFIRM_NEGATORS = frozenset({"не", "ни", "нельзя", "нет", "not", "no", "never", "cannot",
                               "failed"})
-# Three words: the widest negated form measured, "could not be confirmed", puts the negation
-# three words before the confirmation word ("не была подтверждена" — two, "was not" — one).
-CONFIRM_NEG_WINDOW = 3
+# The words a negation may stand behind and still be the confirmation's own: the auxiliaries,
+# modals and degree words of the negated forms above, in both languages. A word missing here
+# errs towards refusing (the gate asks for a finding, the hunter rewords), never towards
+# silence.
+CONFIRM_PHRASE_WORDS = frozenset({
+    "be", "been", "being", "is", "are", "was", "were", "am", "has", "have", "had", "do", "does",
+    "did", "can", "could", "will", "would", "shall", "should", "may", "might", "must", "to",
+    "get", "got", "yet", "ever", "even", "fully", "entirely", "completely", "really",
+    "actually", "quite",
+    "был", "была", "было", "были", "быть", "будет", "будут", "бы", "б", "ещё", "еще", "пока",
+    "даже", "до", "конца", "полностью", "вполне", "окончательно", "вообще"})
 CONFIRM_AT = re.compile(rf"(?<!\w)(?:{'|'.join(re.escape(w) for w in CONFIRM_WORDS)})(?!\w)")
-SENTENCE_END = re.compile(r"[.!?;](?:\s|$)")
+PHRASE_TOKEN = re.compile(r"[\w'’]+|[^\w\s*`]")
 
 
 def negated_before(low: str, at: int) -> bool:
-    """A negation among the few words before position `at`, within the same sentence."""
-    start = max((m.end() for m in SENTENCE_END.finditer(low, 0, at)), default=0)
-    words = re.findall(r"[\w'’]+", low[start:at])[-CONFIRM_NEG_WINDOW:]
-    return any(w in CONFIRM_NEGATORS or w.endswith(("n't", "n’t")) for w in words)
+    """The confirmation word at `at` is negated by its own phrase: a negator right before it,
+    or right before the auxiliaries and degree words that lead up to it (see
+    CONFIRM_PHRASE_WORDS). A punctuation mark or any other word in between ends the search."""
+    for tok in reversed(PHRASE_TOKEN.findall(low[:at])):
+        if tok in CONFIRM_NEGATORS or tok.endswith(("n't", "n’t")):
+            return True
+        if tok not in CONFIRM_PHRASE_WORDS:
+            return False
+    return False
 
 
-def says_confirmed(line: str) -> bool:
-    """The verdict line CONFIRMS the hypothesis: an affirmative confirmation word in it that
-    no nearby negation turns round (`negated_before`). "проверена и подтверждена как
-    дефект" confirms; "refuted: the guard is there", "was not confirmed" and "не подтвердилась
-    бы" do not. A word quoted alone in backticks is a quotation, as for the parser."""
-    low = unquote_verdicts(line).lower()
+def says_confirmed(passage: str) -> bool:
+    """The verdict CONFIRMS the hypothesis: its passage (`verdict_passage` — the same lines
+    its finding id is read from) carries an affirmative confirmation word that no negation of
+    its own phrase turns round (`negated_before`). "проверена и подтверждена как дефект"
+    confirms, and so does "there is no guard, confirmed by running it"; "refuted: the guard
+    is there", "was not confirmed" and "не подтвердилась бы" do not. A word quoted alone in
+    backticks is a quotation, as for the parser."""
+    low = unquote_verdicts(passage).lower()
     return any(not negated_before(low, m.start()) for m in CONFIRM_AT.finditer(low))
 
 
@@ -5469,10 +5543,17 @@ def confirmed_without_finding(text: str, block_id: str, known: set[str],
     records = verdict_records(text, block_id)
     starts = {at for _, _, at in records}
     for h, verdict, at in records:
-        if verdict != CHECKED or (h, at) in seen or not says_confirmed(lines[at]):
+        if verdict != CHECKED or (h, at) in seen:
             continue
         seen.add((h, at))
-        named = ref.findall(verdict_passage(lines, at, starts))
+        # One passage for both questions: the word that confirms and the id that names the
+        # finding are looked for over the same lines. Asked of the verdict line alone, a
+        # confirmation hard-wrapped onto the next line, or written in the proof indented under
+        # it (as the templates allow), was no confirmation at all, while its id was read there.
+        passage = verdict_passage(lines, at, starts)
+        if not says_confirmed(passage):
+            continue
+        named = ref.findall(passage)
         if any(n in known for n in named):
             continue
         out.append((h, list(dict.fromkeys(n for n in named if n not in known))))
@@ -5574,6 +5655,183 @@ def names_file(text: str, rel: str) -> bool:
     diffed = re.compile(r"(?<![A-Za-z0-9_./-])[ab]/" + re.escape(rel) + tail)
     return any(diffed.search(line, m.end())
                for line in text.split("\n") if (m := DIFF_HEADER.search(line)))
+
+
+def finding_gates(gates: "Refusals", f: dict, rows: list[dict], idx: dict,
+                  tracked: set[str], seen_ids: set[str]) -> None:
+    """The gates `check` holds on one finding of the register `rows` — and the ONE place
+    they are written: `import --dry-run` asks them of the rows the import would write, so a
+    draft the dry run passed cannot be refused by `check` right after the import (fix review
+    of the 0.8.0 candidate: the dry run asked a copy of some of these rules of the row as
+    written, and `"confidence": null`, a `rejected` confidence with no reason, a `fixed`
+    status with no commit were all called clean and refused a minute later). `seen_ids`
+    carries the ids already met, for the duplicate-id gate."""
+    fid = f.get("id", "<no id>")
+    if fid in seen_ids:
+        gates.refuse("finding/duplicate-id", f"finding {fid}: duplicate id")
+    seen_ids.add(fid)
+    for field in ("id", "block", "severity", "confidence", "status", "file", "claim", "scenario"):
+        # A `file` that is falsy but not a string (0, false, [], {}) is refused below as
+        # not a path — by what was written, not as an empty field on top of that.
+        if field == "file" and file_problem(f):
+            continue
+        if not f.get(field):
+            gates.refuse("finding/empty-field", f"finding {fid}: field {field} is empty")
+    if f.get("block") not in idx:
+        gates.refuse("finding/unknown-block",
+                     f"finding {fid}: refers to nonexistent block {f.get('block')}")
+    if f.get("severity") not in SEVERITIES:
+        gates.refuse("finding/severity-unknown",
+                     f"finding {fid}: severity={f.get('severity')} is not in the vocabulary "
+                     f"({', '.join(SEVERITIES)})")
+    if f.get("confidence") not in CONFIDENCE:
+        gates.refuse("finding/confidence-unknown",
+                     f"finding {fid}: confidence={f.get('confidence')} is not in the vocabulary "
+                     f"({', '.join(CONFIDENCE)})")
+    if f.get("status") not in FINDING_STATUS:
+        gates.refuse("finding/status-unknown",
+                     f"finding {fid}: status={f.get('status')} is not in the vocabulary "
+                     f"({', '.join(FINDING_STATUS)})")
+    place = location_problems(f, tracked)
+    if "file-not-a-string" in place:
+        gates.refuse("finding/file-not-a-string", f"finding {fid}: {place['file-not-a-string']}")
+    if "file-missing" in place:
+        gates.refuse("finding/file-missing", f"finding {fid}: {place['file-missing']}")
+    # A deferred finding does not count as open and therefore survives the whole
+    # review unnoticed. The reason is what turns it from silence into a decision: the
+    # summary publishes deferred findings as accepted risks, by that reason and no
+    # other text. The message used to demand that every deferral be resolved before
+    # the end, which is not what the tool holds and not what the summary does with it.
+    if f.get("status") == "deferred" and not (f.get("defer_reason") or "").strip():
+        gates.refuse(
+            "finding/deferred-without-reason",
+            f"finding {fid}: deferred without a reason — `{CLI} set-finding {fid} deferred "
+            f"--reason '...'`; a deferral is an accepted risk, and the summary publishes it by that reason"
+        )
+    if f.get("status") == "fixed" and f.get("fix_commit") and ":" in str(f["fix_commit"]):
+        # A fix in a NEIGHBOURING repository: `<repository>:<commit>`. It is not here and
+        # cannot be, there is nothing to check — but the mark must be explicit. Without
+        # it such a commit looks like our own, and the check honestly reports that it
+        # does not exist; that is what happened with the finding about the other core.
+        repo, _, sha = str(f["fix_commit"]).partition(":")
+        if not repo or not sha:
+            gates.refuse(
+                "finding/external-fix-malformed",
+                f"finding {fid}: an external fix is written as `<repository>:<commit>`"
+            )
+    elif f.get("status") == "fixed" and f.get("fix_commit"):
+        # The fix commit must exist and touch the finding's file. Two marks in a
+        # neighbouring project pointed at a commit that did not touch the named file at
+        # all: the fix was made in another module, and the record stayed as it was. By
+        # hand nobody checks that — and nobody did for half a year.
+        # The paths are compared as git prints them for `ls-files`: raw and
+        # NUL-separated. C-quoted, a Cyrillic name matched nothing, and no finding on
+        # such a file could ever be marked fixed — the gate stayed red on a truthful
+        # state for ever.
+        touched = git("show", "--name-only", "--format=", f["fix_commit"])
+        if touched.code != 0:
+            gates.refuse("finding/commit-missing",
+                         f"finding {fid}: commit {f['fix_commit']} is not in the repository")
+        elif finding_file(f) and not ({finding_file(f), *f.get("fixed_in", [])}
+                                      & set(touched.fields)):
+            gates.refuse(
+                "finding/commit-does-not-touch",
+                f"finding {fid}: commit {f['fix_commit']} does not touch {finding_file(f)} — "
+                f"either the mark belongs to another finding, or the fix was made elsewhere: "
+                f"then name it (`{CLI} set-finding {fid} fixed --commit <sha> "
+                f"--fixed-in <path>`)"
+            )
+    if f.get("status") == "fixed" and not f.get("fix_commit"):
+        gates.refuse("finding/fixed-without-commit",
+                     f"finding {fid}: marked fixed, but no fix commit is given")
+    if f.get("status") == "duplicate" and not f.get("dup_of"):
+        gates.refuse("finding/duplicate-without-target",
+                     f"finding {fid}: marked duplicate, but not of what exactly")
+    elif f.get("status") == "duplicate" and (why := dup_problem(fid, f["dup_of"], rows)):
+        gates.refuse("finding/duplicate-target-unusable", why)
+    if f.get("confidence") == "rejected" and f.get("status") == "open":
+        gates.refuse("finding/rejected-but-open",
+                     f"finding {fid}: rejected by the verifier, but still open")
+    if f.get("status") == "rejected" and f.get("confidence") != "rejected":
+        gates.refuse(
+            "finding/rejected-without-confidence",
+            f"finding {fid}: status rejected but confidence {f.get('confidence')} — "
+            f"the register claims 'rejected' and 'not rejected' at once"
+        )
+    # The code under the finding moved on — so either it was already fixed, or the
+    # description is stale. Both demand action, not silence: a finding that is not
+    # moved makes the next pass argue with nonexistent code.
+    if (f.get("status") in ("open", "deferred") and not f.get("code_sha")
+            and not f.get("region_sha") and file_sha(finding_file(f))):
+        gates.refuse(
+            "finding/no-code-fingerprint",
+            f"finding {fid}: no code fingerprint — changes in {finding_file(f)} under it are not "
+            f"tracked; `{CLI} backfill`"
+        )
+    # The region form (#37): only the lines around the finding count, wherever they have
+    # moved. The whole-file form is read as before, so a register written by an older
+    # kit keeps its meaning until `restamp` moves each record over.
+    if (f.get("status") in ("open", "deferred") and f.get("region_sha")
+            and file_sha(finding_file(f))):
+        lines = text_lines(finding_file(f))
+        at = locate_region(f, lines) if lines is not None else None
+        if at is None:
+            gates.refuse(
+                "finding/region-changed",
+                f"finding {fid}: the code around {finding_file(f)}:{f.get('line')} changed since "
+                f"it was stamped — re-check: either it is already closed (`{CLI} set-finding "
+                f"{fid} fixed --commit <sha>`), or the description is stale, or the defect is "
+                f"still there (`{CLI} restamp {fid}`, with `--line <N>` if it now sits elsewhere)"
+            )
+        # Found on another line — nothing to say. Every display shows the line the window
+        # sits on now (`shown_lines`), so a shift above the finding is not a stale record;
+        # the warning that used to name it (`finding/line-moved`) came on every PR that
+        # touched an actively edited file and asked for a `restamp` that changed nothing
+        # but a display. The recorded line is still read in one place — to pick the
+        # nearest copy when the window repeats in its file — and no cited window repeated
+        # from K=2 on in the measurement behind REGION_K, so a drifting record costs
+        # nothing measured; a "large shift" threshold would be a number from the head.
+    elif f.get("status") in ("open", "deferred") and f.get("code_sha"):
+        fresh = file_sha(finding_file(f))
+        if fresh and fresh != f["code_sha"]:
+            gates.refuse(
+                "finding/code-changed",
+                f"finding {fid}: code in {finding_file(f)} changed since import — "
+                f"re-check: either it is already closed (`{CLI} set-finding {fid} fixed "
+                f"--commit <sha>`), or the description is stale, or the defect is still there "
+                f"(`{CLI} restamp {fid}`"
+                + (" — for a finding with a line it also moves the record to a fingerprint "
+                   "of the lines around it, which edits elsewhere in the file leave alone)"
+                   if f.get("line") is not None else ")")
+            )
+    if "line-not-a-number" in place:
+        gates.refuse("finding/line-not-a-number", f"finding {fid}: {place['line-not-a-number']}")
+    if "line-past-end" in place:
+        gates.refuse("finding/line-past-end", f"finding {fid}: {place['line-past-end']}")
+    # A rejected finding stays in the register for the sake of the reject reason —
+    # without it the record is useless: the next review finds the same thing and
+    # spends the time again. The review's completion condition demanded a reason for
+    # every rejected finding from the start, but there was no check, and the field stayed empty.
+    if f.get("status") == "rejected":
+        if not reject_reason_of(f):
+            gates.refuse(
+                "finding/rejected-without-reason",
+                f"finding {fid}: rejected, but the reject reason is not recorded — "
+                f"`{CLI} set-finding {fid} rejected --reason '...'` (in a draft not yet imported, "
+                f"the field `reject_reason`) or a claim that starts with 'Rejected: …' (in the "
+                f"review language)"
+            )
+    if len(f.get("claim") or "") > CLAIM_MAX:
+        gates.refuse(
+            "finding/claim-too-long",
+            f"finding {fid}: claim is {len(f['claim'])} characters against a limit of {CLAIM_MAX} — "
+            "it is a headline for the summary table, the evidence goes into the block report"
+        )
+    if len(f.get("scenario") or "") > SCENARIO_MAX:
+        gates.refuse(
+            "finding/scenario-too-long",
+            f"finding {fid}: scenario is {len(f['scenario'])} characters against a limit of {SCENARIO_MAX}"
+        )
 
 
 class Refusals:
@@ -5756,168 +6014,7 @@ def cmd_check(args) -> int:
     tracked = all_files()
     seen_ids: set[str] = set()
     for f in rows:
-        fid = f.get("id", "<no id>")
-        if fid in seen_ids:
-            gates.refuse("finding/duplicate-id", f"finding {fid}: duplicate id")
-        seen_ids.add(fid)
-        for field in ("id", "block", "severity", "confidence", "status", "file", "claim", "scenario"):
-            # A `file` that is falsy but not a string (0, false, [], {}) is refused below as
-            # not a path — by what was written, not as an empty field on top of that.
-            if field == "file" and file_problem(f):
-                continue
-            if not f.get(field):
-                gates.refuse("finding/empty-field", f"finding {fid}: field {field} is empty")
-        if f.get("block") not in idx:
-            gates.refuse("finding/unknown-block",
-                         f"finding {fid}: refers to nonexistent block {f.get('block')}")
-        if f.get("severity") not in SEVERITIES:
-            gates.refuse("finding/severity-unknown",
-                         f"finding {fid}: severity={f.get('severity')} is not in the vocabulary")
-        if f.get("confidence") not in CONFIDENCE:
-            gates.refuse("finding/confidence-unknown",
-                         f"finding {fid}: confidence={f.get('confidence')} is not in the vocabulary")
-        if f.get("status") not in FINDING_STATUS:
-            gates.refuse("finding/status-unknown",
-                         f"finding {fid}: status={f.get('status')} is not in the vocabulary")
-        place = location_problems(f, tracked)
-        if "file-not-a-string" in place:
-            gates.refuse("finding/file-not-a-string", f"finding {fid}: {place['file-not-a-string']}")
-        if "file-missing" in place:
-            gates.refuse("finding/file-missing", f"finding {fid}: {place['file-missing']}")
-        # A deferred finding does not count as open and therefore survives the whole
-        # review unnoticed. The reason is what turns it from silence into a decision: the
-        # summary publishes deferred findings as accepted risks, by that reason and no
-        # other text. The message used to demand that every deferral be resolved before
-        # the end, which is not what the tool holds and not what the summary does with it.
-        if f.get("status") == "deferred" and not (f.get("defer_reason") or "").strip():
-            gates.refuse(
-                "finding/deferred-without-reason",
-                f"finding {fid}: deferred without a reason — `{CLI} set-finding {fid} deferred "
-                f"--reason '...'`; a deferral is an accepted risk, and the summary publishes it by that reason"
-            )
-        if f.get("status") == "fixed" and f.get("fix_commit") and ":" in str(f["fix_commit"]):
-            # A fix in a NEIGHBOURING repository: `<repository>:<commit>`. It is not here and
-            # cannot be, there is nothing to check — but the mark must be explicit. Without
-            # it such a commit looks like our own, and the check honestly reports that it
-            # does not exist; that is what happened with the finding about the other core.
-            repo, _, sha = str(f["fix_commit"]).partition(":")
-            if not repo or not sha:
-                gates.refuse(
-                    "finding/external-fix-malformed",
-                    f"finding {fid}: an external fix is written as `<repository>:<commit>`"
-                )
-        elif f.get("status") == "fixed" and f.get("fix_commit"):
-            # The fix commit must exist and touch the finding's file. Two marks in a
-            # neighbouring project pointed at a commit that did not touch the named file at
-            # all: the fix was made in another module, and the record stayed as it was. By
-            # hand nobody checks that — and nobody did for half a year.
-            # The paths are compared as git prints them for `ls-files`: raw and
-            # NUL-separated. C-quoted, a Cyrillic name matched nothing, and no finding on
-            # such a file could ever be marked fixed — the gate stayed red on a truthful
-            # state for ever.
-            touched = git("show", "--name-only", "--format=", f["fix_commit"])
-            if touched.code != 0:
-                gates.refuse("finding/commit-missing",
-                             f"finding {fid}: commit {f['fix_commit']} is not in the repository")
-            elif finding_file(f) and not ({finding_file(f), *f.get("fixed_in", [])}
-                                          & set(touched.fields)):
-                gates.refuse(
-                    "finding/commit-does-not-touch",
-                    f"finding {fid}: commit {f['fix_commit']} does not touch {finding_file(f)} — "
-                    f"either the mark belongs to another finding, or the fix was made elsewhere: "
-                    f"then name it (`{CLI} set-finding {fid} fixed --commit <sha> "
-                    f"--fixed-in <path>`)"
-                )
-        if f.get("status") == "fixed" and not f.get("fix_commit"):
-            gates.refuse("finding/fixed-without-commit",
-                         f"finding {fid}: marked fixed, but no fix commit is given")
-        if f.get("status") == "duplicate" and not f.get("dup_of"):
-            gates.refuse("finding/duplicate-without-target",
-                         f"finding {fid}: marked duplicate, but not of what exactly")
-        elif f.get("status") == "duplicate" and (why := dup_problem(fid, f["dup_of"], rows)):
-            gates.refuse("finding/duplicate-target-unusable", why)
-        if f.get("confidence") == "rejected" and f.get("status") == "open":
-            gates.refuse("finding/rejected-but-open",
-                         f"finding {fid}: rejected by the verifier, but still open")
-        if f.get("status") == "rejected" and f.get("confidence") != "rejected":
-            gates.refuse(
-                "finding/rejected-without-confidence",
-                f"finding {fid}: status rejected but confidence {f.get('confidence')} — "
-                f"the register claims 'rejected' and 'not rejected' at once"
-            )
-        # The code under the finding moved on — so either it was already fixed, or the
-        # description is stale. Both demand action, not silence: a finding that is not
-        # moved makes the next pass argue with nonexistent code.
-        if (f.get("status") in ("open", "deferred") and not f.get("code_sha")
-                and not f.get("region_sha") and file_sha(finding_file(f))):
-            gates.refuse(
-                "finding/no-code-fingerprint",
-                f"finding {fid}: no code fingerprint — changes in {finding_file(f)} under it are not "
-                f"tracked; `{CLI} backfill`"
-            )
-        # The region form (#37): only the lines around the finding count, wherever they have
-        # moved. The whole-file form is read as before, so a register written by an older
-        # kit keeps its meaning until `restamp` moves each record over.
-        if (f.get("status") in ("open", "deferred") and f.get("region_sha")
-                and file_sha(finding_file(f))):
-            lines = text_lines(finding_file(f))
-            at = locate_region(f, lines) if lines is not None else None
-            if at is None:
-                gates.refuse(
-                    "finding/region-changed",
-                    f"finding {fid}: the code around {finding_file(f)}:{f.get('line')} changed since "
-                    f"it was stamped — re-check: either it is already closed (`{CLI} set-finding "
-                    f"{fid} fixed --commit <sha>`), or the description is stale, or the defect is "
-                    f"still there (`{CLI} restamp {fid}`, with `--line <N>` if it now sits elsewhere)"
-                )
-            # Found on another line — nothing to say. Every display shows the line the window
-            # sits on now (`shown_lines`), so a shift above the finding is not a stale record;
-            # the warning that used to name it (`finding/line-moved`) came on every PR that
-            # touched an actively edited file and asked for a `restamp` that changed nothing
-            # but a display. The recorded line is still read in one place — to pick the
-            # nearest copy when the window repeats in its file — and no cited window repeated
-            # from K=2 on in the measurement behind REGION_K, so a drifting record costs
-            # nothing measured; a "large shift" threshold would be a number from the head.
-        elif f.get("status") in ("open", "deferred") and f.get("code_sha"):
-            fresh = file_sha(finding_file(f))
-            if fresh and fresh != f["code_sha"]:
-                gates.refuse(
-                    "finding/code-changed",
-                    f"finding {fid}: code in {finding_file(f)} changed since import — "
-                    f"re-check: either it is already closed (`{CLI} set-finding {fid} fixed "
-                    f"--commit <sha>`), or the description is stale, or the defect is still there "
-                    f"(`{CLI} restamp {fid}`"
-                    + (" — for a finding with a line it also moves the record to a fingerprint "
-                       "of the lines around it, which edits elsewhere in the file leave alone)"
-                       if f.get("line") is not None else ")")
-                )
-        if "line-not-a-number" in place:
-            gates.refuse("finding/line-not-a-number", f"finding {fid}: {place['line-not-a-number']}")
-        if "line-past-end" in place:
-            gates.refuse("finding/line-past-end", f"finding {fid}: {place['line-past-end']}")
-        # A rejected finding stays in the register for the sake of the reject reason —
-        # without it the record is useless: the next review finds the same thing and
-        # spends the time again. The review's completion condition demanded a reason for
-        # every rejected finding from the start, but there was no check, and the field stayed empty.
-        if f.get("status") == "rejected":
-            if not reject_reason_of(f):
-                gates.refuse(
-                    "finding/rejected-without-reason",
-                    f"finding {fid}: rejected, but the reject reason is not recorded — "
-                    f"`{CLI} set-finding {fid} rejected --reason '...'` or a claim that starts "
-                    f"with 'Rejected: …' (in the review language)"
-                )
-        if len(f.get("claim") or "") > CLAIM_MAX:
-            gates.refuse(
-                "finding/claim-too-long",
-                f"finding {fid}: claim is {len(f['claim'])} characters against a limit of {CLAIM_MAX} — "
-                "it is a headline for the summary table, the evidence goes into the block report"
-            )
-        if len(f.get("scenario") or "") > SCENARIO_MAX:
-            gates.refuse(
-                "finding/scenario-too-long",
-                f"finding {fid}: scenario is {len(f['scenario'])} characters against a limit of {SCENARIO_MAX}"
-            )
+        finding_gates(gates, f, rows, idx, tracked, seen_ids)
 
     # 7. findings.md agrees with findings.jsonl. Compared by CONTENT, not by
     #    mtime: a clone or a `git checkout` stamps every file with the moment it

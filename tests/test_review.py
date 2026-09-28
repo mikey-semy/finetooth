@@ -6316,7 +6316,8 @@ class GateCoverageTest(unittest.TestCase):
         на обоих путях."""
         self._green()
         draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
-        for value, said, refusal in ((None, "`file` is empty", "field file is empty"),
+        # Пробный прогон печатает сообщения самого `check` (одни ворота на оба пути).
+        for value, said, refusal in ((None, "field file is empty", "field file is empty"),
                                      (12, "file=12 is not a path", "file=12 is not a path")):
             with self.subTest(file=value):
                 row = {"block": "H1", "severity": "low", "confidence": "confirmed",
@@ -6379,7 +6380,7 @@ class GateCoverageTest(unittest.TestCase):
         register.write_text("", encoding="utf-8")
         draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
         for value in self.NOT_A_PATH:
-            said = "`file` is empty" if value is None else f"file={value!r} is not a path"
+            said = "field file is empty" if value is None else f"file={value!r} is not a path"
             for flags in (("--dry-run",), (), ("--force",), ("--append",)):
                 with self.subTest(file=value, flags=flags):
                     row = {"block": "H1", "severity": "low", "confidence": "confirmed",
@@ -6393,7 +6394,7 @@ class GateCoverageTest(unittest.TestCase):
                                      out.stdout + out.stderr)
                     self.assertIn(f"line 1: {said}", out.stdout + out.stderr)
                     if value is not None:
-                        self.assertNotIn("`file` is empty", out.stdout + out.stderr)
+                        self.assertNotIn("field file is empty", out.stdout + out.stderr)
                     self.assertEqual(register.read_text(encoding="utf-8"), "")
 
     def test_число_в_пределах_файла_по_прежнему_проходит(self):
@@ -10290,7 +10291,11 @@ class ConfirmedIsFindingTest(unittest.TestCase):
                      "- H1.1 — checked: the loss was not confirmed on any input",
                      "- H1.1 — checked: it could not be confirmed, the guard holds",
                      "- H1.1 — checked: it wasn't confirmed by the run",
-                     "- H1.1 — checked: unconfirmed, the guard holds"):
+                     "- H1.1 — checked: unconfirmed, the guard holds",
+                     # отрицание перед вспомогательными словами своего оборота
+                     "- H1.1 — checked: it could not have been confirmed on any input",
+                     "- H1.1 — проверена: не до конца подтверждена, нужна живая база",
+                     "- H1.1 — checked: **not** confirmed, the guard holds"):
             with self.subTest(line=line):
                 self.new_stand()
                 check = self.stand(line)
@@ -10300,6 +10305,31 @@ class ConfirmedIsFindingTest(unittest.TestCase):
         for h1 in ("- H1.1 — подтверждена: флаг теряется на втором\n  сохранении — H1-001",
                    "H1.1 — подтверждена: флаг теряется на втором\nсохранении, оформлено как H1-001",
                    "- H1.1 — подтверждена: флаг теряется\n    - доказательство и находка H1-001"):
+            with self.subTest(h1=h1):
+                self.new_stand()
+                check = self.stand(h1, self.row("флаг теряется"))
+                self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_слово_подтверждения_ищется_в_том_же_отрывке_что_и_номер(self):
+        """Номер находки ищется по всему отрывку вердикта — продолжению абзаца и вложенным
+        пунктам, — а слово подтверждения искалось только в строке вердикта: подтверждение,
+        перенесённое на следующую строку или записанное в доказательстве под вердиктом (как
+        разрешают шаблоны), проходило мимо ворот (ревью кандидата 0.8.0). Отрывок один на оба
+        вопроса — и за его границей слово не засчитывается."""
+        refused_forms = (
+            "- H1.1 — checked: see the proof below.\n  The defect is confirmed, the flag is lost",
+            "- H1.1 — проверена: смотри доказательство\n    - подтверждена потеря флага, узды нет",
+            "H1.1 — проверена: смотри ниже\nподтверждена потеря флага")
+        for h1 in refused_forms:
+            with self.subTest(h1=h1):
+                self.new_stand()
+                check = self.stand(h1, self.row("другой дефект"))
+                self.assertIn("подтверждает гипотезу H1.1, но не называет", refused(check))
+        passing_forms = (
+            "- H1.1 — проверена: смотри доказательство\n    - подтверждена потеря флага, H1-001",
+            "- H1.1 — опровергнута: гард на месте\n  не подтвердилась ни на одном входе",
+            "- H1.1 — проверена: смотри ниже\n\nподтверждена в другом блоке, не здесь")
+        for h1 in passing_forms:
             with self.subTest(h1=h1):
                 self.new_stand()
                 check = self.stand(h1, self.row("флаг теряется"))
@@ -10332,6 +10362,21 @@ class ConfirmedIsFindingTest(unittest.TestCase):
         for line in ("- H1.1 — подтверждена, не только флаг теряется, но и счётчик",
                      "- H1.1 — confirmed, and not only on the first save",
                      "- H1.1 — форма не дефект. Подтверждена потеря флага"):
+            with self.subTest(line=line):
+                self.new_stand()
+                check = self.stand(line, self.row("другой дефект"))
+                self.assertIn("подтверждает гипотезу H1.1, но не называет", refused(check))
+
+    def test_отрицание_соседнего_оборота_подтверждение_не_отменяет(self):
+        """Отрицание относится к слову подтверждения, только если стоит перед ним самим или
+        перед вспомогательными словами его оборота. Доказательство охотника чаще всего сначала
+        называет отсутствие — «узды нет», «there is no guard», — и окно из трёх слов читало такой
+        вердикт как опровержение: `check` молчал ровно о том, ради чего ворота (ревью
+        кандидата 0.8.0)."""
+        for line in ("- H1.1 — checked: there is no guard, confirmed by running it.",
+                     "- H1.1 — проверена: узды нет, подтверждена потеря флага",
+                     "- H1.1 — checked: no doubt confirmed by the run",
+                     "- `H1.1 — checked: there is no guard, confirmed by running it.`"):
             with self.subTest(line=line):
                 self.new_stand()
                 check = self.stand(line, self.row("другой дефект"))
@@ -13100,8 +13145,8 @@ class FieldRun46Test(unittest.TestCase):
         self.assertIn("4 problem(s)", out.stdout, out.stdout)
         self.assertIn("line 2: claim is 221 characters", out.stdout)
         self.assertIn("line 3: scenario is 701 characters", out.stdout)
-        self.assertIn("line 4: rejected with no reason", out.stdout)
-        self.assertIn("line 5: severity='огромная'", out.stdout)
+        self.assertIn("line 4: rejected, but the reject reason is not recorded", out.stdout)
+        self.assertIn("line 5: severity=огромная is not in the vocabulary (critical, high", out.stdout)
         self.assertNotIn("line 1", out.stdout, "верная строка названа плохой")
         self.assertEqual(register.read_bytes() if register.exists() else None, before, "реестр записан")
         self.assertEqual(draft.read_text(encoding="utf-8"), text, "черновик переписан")
@@ -13153,6 +13198,81 @@ class FieldRun46Test(unittest.TestCase):
                       self.s.run("import", "H1", "--dry-run").stdout)
         draft.write_text(json.dumps(good, ensure_ascii=False) + "\n", encoding="utf-8")
         self.assertEqual(self.s.run("import", "H1", "--dry-run").returncode, 0)
+
+    def test_import_dry_run_спрашивает_строки_такими_какими_их_запишет_import(self):
+        """Пробный прогон спрашивал строку такой, какой её написали, а `import` дописывает
+        умолчания и превращает `confidence: rejected` в статус: `"confidence": null`,
+        отвергнутая без причины, отложенная без причины, исправленная без коммита, два
+        одинаковых номера — всё это пробный прогон называл чистым, а `import` или `check`
+        отказывали минутой позже (ревью кандидата 0.8.0). Теперь строки идут через тот же
+        план, что пишет `import`, и спрашиваются воротами самого `check`."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        register = self.s.root / "docs/review/findings.jsonl"
+        good = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"}
+        no_status = {k: v for k, v in good.items() if k != "status"}
+        # (строки черновика, ключ импорта, что называет пробный прогон и затем check)
+        cases = {
+            "confidence null": ([dict(good, confidence=None)], (), "field confidence is empty"),
+            "confidence пустая": ([dict(good, confidence="")], (), "field confidence is empty"),
+            "status null": ([dict(good, status=None)], (), "field status is empty"),
+            "status пустой": ([dict(good, status="")], (), "field status is empty"),
+            "block null": ([dict(good, block=None)], (), "field block is empty"),
+            "отвергнута уверенностью, открыта": (
+                [dict(good, confidence="rejected")], (),
+                "rejected, but the reject reason is not recorded"),
+            "отвергнута уверенностью, без статуса": (
+                [dict(no_status, confidence="rejected")], (),
+                "rejected, but the reject reason is not recorded"),
+            "отвергнута уверенностью, дозапись": (
+                [dict(good, confidence="rejected")], ("--append",),
+                "rejected by the verifier, but still open"),
+            "отложена без причины": ([dict(good, status="deferred")], (),
+                                     "deferred without a reason"),
+            "исправлена без коммита": ([dict(good, status="fixed")], (),
+                                       "marked fixed, but no fix commit is given"),
+        }
+        for why, (rows, flags, said) in cases.items():
+            with self.subTest(случай=why):
+                register.write_text("", encoding="utf-8")
+                draft.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                                 encoding="utf-8")
+                out = self.s.run("import", "H1", "--dry-run", *flags)
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn(f"line 1: {said}", out.stdout)
+                self.assertNotIn("nothing `import` or `check` would refuse", out.stdout)
+                # Обещание в обе стороны: то же самое `check` отказывает после импорта.
+                self.assertEqual(self.s.run("import", "H1", *flags).returncode, 0)
+                self.s.run("findings")
+                self.assertIn(said, refused(self.s.run("check")))
+        with self.subTest(случай="два одинаковых номера"):
+            register.write_text("", encoding="utf-8")
+            draft.write_text("".join(json.dumps(dict(good, id="H1-001"), ensure_ascii=False) + "\n"
+                                     for _ in range(2)), encoding="utf-8")
+            out = self.s.run("import", "H1", "--dry-run")
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("two rows carry the id H1-001", out.stdout)
+            real = self.s.run("import", "H1")
+            self.assertEqual(real.returncode, 2, real.stdout + real.stderr)
+            self.assertIn("two rows carry the id H1-001", real.stderr)
+        # Обратная сторона: заменит ли простой импорт записанное — решение ведущего, не
+        # черновика. Оно названо заметкой, строки спрошены, чистый черновик проходит.
+        with self.subTest(случай="в реестре уже есть строки блока"):
+            register.write_text("", encoding="utf-8")
+            draft.write_text(json.dumps(good, ensure_ascii=False) + "\n", encoding="utf-8")
+            self.assertEqual(self.s.run("import", "H1").returncode, 0)
+            draft.write_text(json.dumps(dict(good, claim="другой"), ensure_ascii=False) + "\n",
+                             encoding="utf-8")
+            out = self.s.run("import", "H1", "--dry-run")
+            self.assertEqual(out.returncode, 0, out.stdout)
+            self.assertIn("note, the lead's call at import time", out.stdout)
+            self.assertIn("nothing `import` or `check` would refuse in the rows", out.stdout)
+            draft.write_text(json.dumps(dict(good, claim="другой", status="fixed"),
+                                        ensure_ascii=False) + "\n", encoding="utf-8")
+            out = self.s.run("import", "H1", "--dry-run")
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("line 1: marked fixed, but no fix commit is given", out.stdout)
 
     # ------------------------------------------------------ файлы итога — не «код»
 
