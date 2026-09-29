@@ -13239,6 +13239,48 @@ class FieldRun46Test(unittest.TestCase):
                 self.assertIn(said, real.stderr)
                 self.assertEqual(register.read_text(encoding="utf-8"), "", "реестр записан")
 
+    def test_import_dry_run_одна_проблема_одно_сообщение(self):
+        """Пробный прогон печатает отказы самого `import` и ворота `check` — и одна беда
+        строки называлась дважды: чужой `block` — черновиком и воротами «нет такого блока»,
+        а при `--append` ещё и отказом всего файла, после которого прочие строки не
+        спрашивались; пустая `severity` — как пустое поле и как «вне словаря»; одинаковый
+        номер — планом и воротами «повтор номера». Черновик с тремя разными бедами даёт
+        ровно три строки вывода под заголовком, на каждом пути."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        register = self.s.root / "docs/review/findings.jsonl"
+        good = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"}
+        lines = [json.dumps(dict(good, id="H1-001"), ensure_ascii=False),
+                 '{"block": "H1",, "severity": "low"}',
+                 json.dumps(dict(good, block="X9"), ensure_ascii=False),
+                 json.dumps(dict(good, severity=None), ensure_ascii=False)]
+        cases = {(): lines, ("--force",): lines, ("--append",): lines,
+                 # Одинаковый номер — беда простого импорта; дозапись номера раздаёт сама.
+                 ("один номер",): lines[:1] + lines[:1]}
+        for flags, rows in cases.items():
+            with self.subTest(ключи=flags):
+                register.write_text("", encoding="utf-8")
+                draft.write_text("".join(r + "\n" for r in rows), encoding="utf-8")
+                args = () if flags == ("один номер",) else flags
+                out = self.s.run("import", "H1", "--dry-run", *args)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                named = [l.strip() for l in out.stdout.splitlines() if l.startswith("  ")]
+                want = (["line 2: two rows carry the id H1-001"] if flags == ("один номер",) else
+                        ["line 2: not JSON", "line 3: `block` is 'X9'", "line 4: field severity is empty"])
+                self.assertEqual(len(named), len(want), out.stdout)
+                self.assertIn(f"{len(want)} problem(s)", out.stdout)
+                for said, line in zip(want, named):
+                    self.assertTrue(line.startswith(said), f"{said!r} ≠ {line!r}")
+        # Пустое поле словаря — одна строка, и в `check` по реестру тоже.
+        for field in ("block", "severity", "confidence", "status"):
+            with self.subTest(пустое=field):
+                register.write_text("", encoding="utf-8")
+                draft.write_text(json.dumps(dict(good, **{field: None})) + "\n", encoding="utf-8")
+                out = self.s.run("import", "H1", "--dry-run")
+                named = [l.strip() for l in out.stdout.splitlines() if l.startswith("  ")]
+                self.assertEqual(named, [f"line 1: field {field} is empty"], out.stdout)
+
     def test_import_dry_run_проверяет_место_находки_как_check(self):
         """Место правдоподобное, но неверное — файла нет, строка текстом, строка за концом
         файла: пробный прогон обещал, что импорт пройдёт, а `check` сразу после импорта

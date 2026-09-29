@@ -4361,8 +4361,13 @@ def import_dry_run(block: str, src: Path, numbered: list[tuple[int, dict]],
     problems: list[tuple[int, str]] = list(unreadable)
     # A row whose `block` names another block: the plain import would file it there without
     # a word.
-    problems += [(n, f"`block` is {row.get('block')!r} — this is the draft of {block}")
-                 for n, row in numbered if row.get("block") not in (None, block)]
+    for n, row in numbered:
+        if row.get("block") not in (None, block):
+            problems.append((n, f"`block` is {row['block']!r} — this is the draft of {block}"))
+            # Asked below as it will be once fixed: named once here, not again by `check`
+            # as a nonexistent block, nor by the top-up plan as a refusal of the whole file
+            # that left every other row unasked.
+            row["block"] = block
     rows = numbered
     line_of = {id(row): n for n, row in rows}
     note = ""
@@ -5727,18 +5732,21 @@ def finding_gates(gates: "Refusals", f: dict, rows: list[dict], idx: dict,
             continue
         if not f.get(field):
             gates.refuse("finding/empty-field", f"finding {fid}: field {field} is empty")
-    if f.get("block") not in idx:
+    # An empty field is named above and nowhere else: `"severity": null` used to be refused
+    # twice, as empty and as `severity=None is not in the vocabulary`, and the dry run printed
+    # both for one row (one message per problem, fix review of the 0.8.0 candidate).
+    if f.get("block") and f.get("block") not in idx:
         gates.refuse("finding/unknown-block",
                      f"finding {fid}: refers to nonexistent block {f.get('block')}")
-    if f.get("severity") not in SEVERITIES:
+    if f.get("severity") and f.get("severity") not in SEVERITIES:
         gates.refuse("finding/severity-unknown",
                      f"finding {fid}: severity={f.get('severity')} is not in the vocabulary "
                      f"({', '.join(SEVERITIES)})")
-    if f.get("confidence") not in CONFIDENCE:
+    if f.get("confidence") and f.get("confidence") not in CONFIDENCE:
         gates.refuse("finding/confidence-unknown",
                      f"finding {fid}: confidence={f.get('confidence')} is not in the vocabulary "
                      f"({', '.join(CONFIDENCE)})")
-    if f.get("status") not in FINDING_STATUS:
+    if f.get("status") and f.get("status") not in FINDING_STATUS:
         gates.refuse("finding/status-unknown",
                      f"finding {fid}: status={f.get('status')} is not in the vocabulary "
                      f"({', '.join(FINDING_STATUS)})")
