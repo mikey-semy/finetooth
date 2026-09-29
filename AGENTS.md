@@ -27,8 +27,9 @@ standard library, no dependencies. A module per concern, in layers declared once
 `finetooth/__init__.py` (`LAYERS`): a module imports only the layers before its own, command
 modules (`commands/`) do not import each other, and `PackageLayerTest` holds it. A new command:
 its function goes to the `commands/` file of its group, its arguments to `cli.py`, and whatever
-another command also needs goes down to the lowest module that can hold it. A new module gets
-its place in `LAYERS`. The skill lives apart from
+another command also needs goes down to the lowest module that can hold it. A new gate of `check` is a function in the `checks/`
+file of its subject, added to `CHECKS` in `commands/check.py` where its message belongs; it
+fills the container and returns nothing. A new module gets its place in `LAYERS`. The skill lives apart from
 the repository under review — in its `.claude/skills/`, in the home directory, anywhere — so
 everything the tool can do must work in someone else's tree, with someone else's branch names
 and directory layout, and the project root is taken from the working directory, not from the

@@ -6742,6 +6742,12 @@ def _own_verdict(source: str | None = None) -> list[str]:
     ни записи, ни теста, ни мутации — и снять их можно при зелёном прогоне. Поэтому у
     команды ровно один выход, и он приговор контейнера; `die` тоже не годится — это код 2,
     «ошибка вызова», а красное состояние это код 1.
+
+    Ворота живут не только в `cmd_check`: каждая проверка из кортежа `CHECKS` — функция,
+    которая пополняет контейнер и ничего не возвращает (`cmd_check` возвращаемое не читает).
+    Выход из неё через `die` или `exit` — тот же приговор мимо контейнера, а `return` со
+    значением — приговор, который просто пропадёт. Проверки узнаются по кортежу, а не по
+    файлу: правило переживает перенос проверки в другой модуль.
     """
     if source is None:
         source = tool_source()
@@ -6763,6 +6769,25 @@ def _own_verdict(source: str | None = None) -> list[str]:
                       else getattr(node.func, "id", ""))
             if called in ("exit", "die"):
                 out.append(f"выход `{ast.unparse(node)[:40]}` мимо контейнера")
+    listed = {e.id for node in ast.walk(vals.tree)
+              if isinstance(node, ast.Assign)
+              and [getattr(t, "id", None) for t in node.targets] == ["CHECKS"]
+              and isinstance(node.value, (ast.Tuple, ast.List))
+              for e in node.value.elts if isinstance(e, ast.Name)}
+    for check in (n for n in ast.walk(vals.tree)
+                  if isinstance(n, ast.FunctionDef) and n.name in listed):
+        for node in ast.walk(check):
+            if vals.scope_of(node) is not check:
+                continue
+            if isinstance(node, ast.Return) and node.value is not None:
+                out.append(f"проверка {check.name}: `return {ast.unparse(node.value)[:30]}` — "
+                           f"приговор, который пропадёт")
+            if isinstance(node, ast.Call):
+                called = (node.func.attr if isinstance(node.func, ast.Attribute)
+                          else getattr(node.func, "id", ""))
+                if called in ("exit", "die"):
+                    out.append(f"проверка {check.name}: выход `{ast.unparse(node)[:40]}` "
+                               f"мимо контейнера")
     return sorted(out)
 
 
@@ -6985,6 +7010,26 @@ class GateRegistryTest(unittest.TestCase):
             '    if bad:\n'
             '        die("role is reserved")\n'
             '    return gates.report()\n',
+        "проверка выходит через die":
+            'CHECKS = (one,)\n'
+            'def one(defn, st, rows, gates):\n'
+            '    if bad:\n'
+            '        die("role is reserved")\n'
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    for check_one in CHECKS:\n'
+            '        check_one(defn, st, rows, gates)\n'
+            '    return gates.report()\n',
+        "проверка возвращает код":
+            'CHECKS = (one,)\n'
+            'def one(defn, st, rows, gates):\n'
+            '    if bad:\n'
+            '        return 1\n'
+            'def cmd_check(args):\n'
+            '    gates = Refusals()\n'
+            '    for check_one in CHECKS:\n'
+            '        check_one(defn, st, rows, gates)\n'
+            '    return gates.report()\n',
     }
 
     def test_узда_видит_приговор_мимо_контейнера(self):
@@ -6992,7 +7037,12 @@ class GateRegistryTest(unittest.TestCase):
             with self.subTest(форма=how):
                 self.assertNotEqual(_own_verdict(source), [],
                                     f"узда не увидела приговор «{how}»")
-        good = ('def cmd_check(args):\n'
+        good = ('CHECKS = (one,)\n'
+                'def one(defn, st, rows, gates):\n'
+                '    if not rows:\n'
+                '        return\n'                   # проверке нечего смотреть — не приговор
+                '    gates.warn("findings/none", "no findings")\n'
+                'def cmd_check(args):\n'
                 '    gates = Refusals()\n'
                 '    def local(b):\n'
                 '        if not b:\n'
@@ -9309,6 +9359,13 @@ def _check_verdict_of_its_own(source: str) -> str:
                     '    print("CHECK FAILED: no blocks at all")\n'
                     '    return 1\n').body[0]
     fn.body.insert(1, own)
+    # и в первой проверке из CHECKS — ворота, которые выходят сами
+    listed = next(node.value.elts for node in ast.walk(vals.tree)
+                  if isinstance(node, ast.Assign)
+                  and [getattr(t, "id", None) for t in node.targets] == ["CHECKS"])
+    check = next(n for n in ast.walk(vals.tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == listed[0].id)
+    check.body.insert(1, ast.parse('if not defn:\n    die("no blocks at all")\n').body[0])
     return _rewritten(vals)
 
 
@@ -10064,7 +10121,9 @@ def _layer_violations(files: dict[str, str]) -> list[str]:
         return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
 
     def layer(mod: str) -> str:
-        return "commands" if mod.startswith("commands.") else mod
+        # a package named in LAYERS is one layer: `commands.check` stands where `commands` does
+        head = mod.split(".")[0]
+        return head if head in layers and head != mod else mod
 
     modules = [name(rel) for rel in files
                if rel.startswith("finetooth/") and not rel.endswith("__init__.py")]
