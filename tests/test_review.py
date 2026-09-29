@@ -10430,6 +10430,50 @@ class ConfirmedIsFindingTest(unittest.TestCase):
                 self.assertNotIn("подтверждает гипотезу", check.stdout)
                 self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
 
+    def test_отказ_называет_выход_для_опровержения_и_для_скопированного_образца(self):
+        """Отказ советовал одно — «оформите находку» — там, где это неверный ход (ревью
+        кандидата 0.8.0, R12-004). Опровержение, в доказательстве которого стоит слово
+        подтверждения («гард на месте — подтверждена тестом», «no defect was confirmed»), —
+        не дефект: выход в том, чтобы переписать вердикт как «опровергнута» без этого слова и
+        в строке, и под ней. Образец шаблона, скопированный как есть, ни на что не отвечает:
+        выход — проверить гипотезу, а не выдумать находку. Отказ обязан назвать все три
+        выхода и сказать, когда какой, — на языке ревью."""
+        cases = (
+            ("ru", "- H1.1 — опровергнута: гард на месте — подтверждена тестом",
+             "- H1.2 — опровергнута: предикат совпадает с каноном"),
+            ("ru", "- H1.1 — подтверждена: H1-NNN — <чем именно доказано>",
+             "- H1.2 — опровергнута: <чем именно доказано, что код прав>"),
+            ("en", "- H1.1 — checked: no defect was confirmed",
+             "- H1.2 — refuted: the predicate matches"),
+            ("en", "- H1.1 — refuted: the guard is there, confirmed by the test at line 9",
+             "- H1.2 — refuted: the predicate matches"),
+            ("en", "- H1.1 — confirmed: H1-NNN — <what exactly proves it>",
+             "- H1.2 — refuted: <what exactly proves the code is right>"))
+        wanted = {
+            "ru": ("подтверждает гипотезу H1.1, но не называет ни одной находки",
+                   "Дефект есть: подтверждённая гипотеза есть дефект",
+                   "H1.1 — подтверждена: H1-NNN — <чем доказано>",
+                   "Дефекта нет, а слово стоит только в доказательстве",
+                   "H1.1 — опровергнута: <почему это не дефект>",
+                   "без слова «подтверждена» ни в строке, ни в доказательстве под ней",
+                   "Строка — образец шаблона, скопированный как есть",
+                   "проверьте гипотезу и запишите вердикт"),
+            "en": ("confirms hypothesis H1.1 but names no finding",
+                   "The defect is there: a confirmed hypothesis is a defect",
+                   "H1.1 — confirmed: H1-NNN — <what proves it>",
+                   "It is not a defect, and the word only stands in the proof",
+                   "H1.1 — refuted: <why it is not a defect>",
+                   "with no word confirmed on its line or in the proof under it",
+                   "The line is the template's sample copied as it stands",
+                   "check the hypothesis and write the verdict you reached")}
+        for lang, h1, h2 in cases:
+            with self.subTest(h1=h1):
+                self.new_stand()
+                check = self.stand(h1, self.row("другой дефект"), h2=h2, lang=lang)
+                failed = " ".join(refused(check).split())
+                for phrase in wanted[lang]:
+                    self.assertIn(phrase, failed)
+
     def test_отказ_по_английски_в_английском_ревью(self):
         check = self.stand("- H1.1 — confirmed: the flag is lost", self.row("defect"),
                            h2="- H1.2 — refuted: the predicate matches", lang="en")
