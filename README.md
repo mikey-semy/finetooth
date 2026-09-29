@@ -339,7 +339,9 @@ by the operator, on 0.7.0 with the roles as agents inside one session): 5–8 ag
 tokens each, continued after the plan's limit, took 15–20% of a five-hour window within a
 minute, and the limit itself came within the hour. The state of a review is on disk, so a role
 cut off is started anew on its block — `run-role.sh` never continues a session — and two or
-three roles at once is what a plan's window holds.
+three roles at once is what a plan's window holds, with one writing role (`fix`, `fixreview`)
+per checkout: two writers in one tree commit each other's edits, so a second one gets a
+worktree of its own.
 
 The per-role tool lists the runner passes are pre-approvals, not limits: they add to what the
 operator's own permission settings allow. What a run must not reach goes into `ROLE_DENY`,

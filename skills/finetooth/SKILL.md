@@ -190,7 +190,9 @@ context again at full price: in a field run (29.09, reported by the operator) 5�
 a minute. Everything a role needs is on disk — the manifest, its draft, the reports — so a role
 cut off is started anew on its block (`run-role.sh` never continues a session), and it reads the
 block again for a fraction of that. Run as many roles at once as the plan's window holds, not
-as many as the machine does — two or three; a role whose context passes a few hundred thousand
+as many as the machine does — two or three, and only one that writes (`fix`, `fixreview`) per
+checkout: hunters and verifiers only read, two writers in one tree commit each other's edits,
+so a second writer gets a worktree of its own. A role whose context passes a few hundred thousand
 tokens is reading outside its block or keeping test output, and its report says which.
 
 ## Rules not to break
