@@ -55,7 +55,7 @@
         "examples/**"
       ],
       "ref_paths": [
-        "skills/finetooth/scripts/review.py"
+        "skills/finetooth/scripts/**"
       ]
     },
     {
@@ -70,7 +70,7 @@
         "tests/**"
       ],
       "ref_paths": [
-        "skills/finetooth/scripts/review.py"
+        "skills/finetooth/scripts/**"
       ]
     },
     {

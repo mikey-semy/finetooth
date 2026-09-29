@@ -212,7 +212,8 @@ without a fix review; a block and a finding closed on a different version of the
 older than the fingerprints; a finding's fingerprint is the lines around its line, so only an
 edit there fails; an edit above it that only moved it is not reported — findings.md, SARIF,
 the summary and the prompts show the line it sits on now, `review restamp <ID>` records it,
-`--line <N>` re-anchors a defect that now sits elsewhere); a finding without a rejection
+`--line <N>` re-anchors a defect that now sits elsewhere, `--file <path>` one whose code
+moved to another file); a finding without a rejection
 reason, a fix commit that does not touch the file, a duplicate of a nonexistent finding, a
 guard at a nonexistent path; a draft left outside the register; a scope without a reason; a
 tree more than a week behind the server; the loop signal without a recorded decision (a

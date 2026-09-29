@@ -22,7 +22,13 @@ installed into the agent lives in `skills/finetooth/` — `SKILL.md`, `scripts/r
 `references/`, `assets/`. The rest of the repository (documents, tests, the plan) is not
 installed into the agent.
 
-The tool is a single file on the standard library, no dependencies. The skill lives apart from
+The tool is `scripts/review.py`, a thin command over the `finetooth` package next to it, on the
+standard library, no dependencies. A module per concern, in layers declared once in
+`finetooth/__init__.py` (`LAYERS`): a module imports only the layers before its own, command
+modules (`commands/`) do not import each other, and `PackageLayerTest` holds it. A new command:
+its function goes to the `commands/` file of its group, its arguments to `cli.py`, and whatever
+another command also needs goes down to the lowest module that can hold it. A new module gets
+its place in `LAYERS`. The skill lives apart from
 the repository under review — in its `.claude/skills/`, in the home directory, anywhere — so
 everything the tool can do must work in someone else's tree, with someone else's branch names
 and directory layout, and the project root is taken from the working directory, not from the
@@ -78,7 +84,7 @@ The design and intent are in [`README.md`](README.md), the check against world p
 python3 -m unittest discover -s tests
 ```
 
-552 scenarios, about a quarter of an hour (measured on the author's machine; the number of scenarios
+559 scenarios, about a quarter of an hour (measured on the author's machine; the number of scenarios
 is held by a test, the time is not). The tests create temporary git repositories and call the tool
 from the skill folder — internals are deliberately not imported: a move survives the external
 contract, not the internal structure. The skill format:

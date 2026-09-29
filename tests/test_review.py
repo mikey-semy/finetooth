@@ -38,6 +38,69 @@ SKILL = KIT / "skills" / "finetooth"
 TOOL = Path(os.environ.get("FINETOOTH_TOOL", SKILL / "scripts" / "review.py"))
 
 
+def tool_files(scripts: Path | None = None) -> dict[str, Path]:
+    """Исходники инструмента по пути от `scripts/`: команда и все модули её пакета.
+
+    Инструмент — не один файл (#56): `review.py` только зовёт пакет `finetooth` рядом с собой.
+    Правила, которые читают код, спрашивают список здесь: правило, смотревшее в один
+    `review.py`, после разбиения смотрело бы в пустой фасад и оставалось зелёным.
+    """
+    scripts = scripts or TOOL.parent
+    paths = [scripts / TOOL.name, *sorted((scripts / "finetooth").rglob("*.py"))]
+    return {p.relative_to(scripts).as_posix(): p for p in paths}
+
+
+def tool_source(scripts: Path | None = None) -> str:
+    """Весь код инструмента одним текстом — для правил о том, ЧТО написано, а не где.
+
+    Каждый файл начинается строкой `# file: <путь от scripts/>` (TOOL_FILE_MARK): правилу о
+    том, кто кого импортирует, граница файла нужна, и `_tool_parts` восстанавливает по ней
+    файлы из склейки — в том числе из испорченной мутацией. Строки `from __future__`
+    выброшены: в склейке они стояли бы посреди текста, а там их не принимает компилятор, —
+    правила, которые портят текст и компилируют порчу, падали бы на склейке, а не на порче.
+    Ни одно правило этих строк не читает."""
+    return "\n".join(line for rel, p in tool_files(scripts).items()
+                     for line in [f"{TOOL_FILE_MARK}{rel}", *p.read_text(encoding="utf-8").split("\n")]
+                     if not line.startswith("from __future__ import"))
+
+
+TOOL_FILE_MARK = "# file: "
+
+
+def _tool_parts(source: str) -> dict[str, str]:
+    """Склейка `tool_source` обратно по файлам: путь от `scripts/` → текст."""
+    out, rel = {}, None
+    for line in source.split("\n"):
+        if line.startswith(TOOL_FILE_MARK):
+            rel = line[len(TOOL_FILE_MARK):]
+            out[rel] = ""
+        elif rel is not None:
+            out[rel] += line + "\n"
+    return out
+
+
+def tool_module(name: str):
+    """Модуль пакета инструмента (`text`, `verdicts`…) — того, на который указывает TOOL:
+    на копии скилла мутационная узда проверяет копию, а не оригинал."""
+    import importlib
+    scripts = str(TOOL.parent)
+    if sys.path[:1] != [scripts]:
+        sys.path.insert(0, scripts)
+    return importlib.import_module(f"finetooth.{name}")
+
+
+def subn_tool(scripts: Path, pattern: str, repl: str, flags: int = 0) -> int:
+    """Правка кода в КОПИИ скилла: замена во всех модулях сразу; возвращает число замен.
+    Правящему незачем знать, в каком модуле живёт константа, — это знание устаревает."""
+    total = 0
+    for path in tool_files(scripts).values():
+        text, n = re.subn(pattern, repl, path.read_text(encoding="utf-8"), flags=flags)
+        if n:
+            path.write_text(text, encoding="utf-8")
+        total += n
+    return total
+
+
 def tracked(*args: str) -> list[str]:
     """Файлы набора — у git, по пути от корня. Список, разделённый NUL: имя файла может
     содержать что угодно, кроме NUL, и разбор по строкам на первом же таком имени лжёт."""
@@ -3507,7 +3570,7 @@ class LanguageTest(unittest.TestCase):
         Подстановки сверяются заодно: перевод с другим именем поля падает тем же
         образом, только уже в `format`.
         """
-        table = self._msg_tables(TOOL.read_text(encoding="utf-8"))
+        table = self._msg_tables(tool_source())
         self.assertEqual(sorted(table), ["en", "ru"], "языков стало больше — правило сверяет все")
         self.assertEqual(self._msg_mismatch(table), [])
 
@@ -3687,7 +3750,7 @@ class SkillFormatTest(unittest.TestCase):
             self.assertTrue((SKILL / target).exists(), target)
 
     def test_версия_в_шапке_равна_версии_инструмента(self):
-        tool = TOOL.read_text(encoding="utf-8")
+        tool = tool_source()
         ver = re.search(r'^VERSION = "([^"]+)"', tool, re.M).group(1)
         self.assertIn(f'version: "{ver}"', (SKILL / "SKILL.md").read_text(encoding="utf-8"))
 
@@ -3737,7 +3800,7 @@ class SetupTest(unittest.TestCase):
         self.assertNotIn("{{", readme, "в точке входа не осталось подстановок")
         bj = json.loads((self.root / "docs/review/blocks.json").read_text(encoding="utf-8"))
         self.assertEqual(bj["cli"], "npm run review --")
-        ver = re.search(r'^VERSION = "([^"]+)"', TOOL.read_text(encoding="utf-8"), re.M).group(1)
+        ver = re.search(r'^VERSION = "([^"]+)"', tool_source(), re.M).group(1)
         self.assertEqual(bj["kit_version"], ver)
 
         run = lambda *a: subprocess.run([sys.executable, str(TOOL), *a], cwd=self.root,
@@ -5065,7 +5128,9 @@ class IdempotenceTest(unittest.TestCase):
         out = self.s.run("restamp", "H1-001")
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertNotIn("Traceback", out.stderr)
-        self.assertIn("set-finding", out.stderr, "отказ обязан говорить, что делать")
+        # выход, который механизм даёт: у `set-finding` переноса находки нет, а у
+        # `restamp` есть `--file` (#56)
+        self.assertIn("restamp H1-001 --file <path>", out.stderr, "отказ обязан говорить, что делать")
         self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8"),
                          before, "реестр остался прежним")
 
@@ -6625,11 +6690,12 @@ class GateWithoutKey(Exception):
 
 
 # Ворота: где они написаны (первая и последняя строка ЦЕЛОГО оператора — мутация вырезает
-# его целиком), каким глаголом отказ добавлен и под каким ключом.
-Gate = collections.namedtuple("Gate", "lineno end_lineno verb key")
+# его целиком), в каком файле инструмента, каким глаголом отказ добавлен и под каким ключом.
+# Файл — путь от `scripts/`; у выдуманного исходника, переданного строкой, его нет.
+Gate = collections.namedtuple("Gate", "path lineno end_lineno verb key")
 
 
-def _check_gates(source: str | None = None) -> list[Gate]:
+def _check_gates(source: str | None = None, path: str | None = None) -> list[Gate]:
     """Все ворота инструмента — по вызовам контейнера отказов, ГДЕ БЫ ОНИ НИ СТОЯЛИ.
 
     Три круга подряд реестр узнавал ворота по ВИДУ строки: сначала `problems.append(...)`,
@@ -6645,7 +6711,8 @@ def _check_gates(source: str | None = None) -> list[Gate]:
     назвать, и это отказ, а не молчание — см. GateWithoutKey.
     """
     if source is None:
-        source = TOOL.read_text(encoding="utf-8")
+        return sorted(g for rel, p in tool_files().items()
+                      for g in _check_gates(p.read_text(encoding="utf-8"), rel))
     vals = _Values(source)
     out = []
     for node in ast.walk(vals.tree):
@@ -6664,7 +6731,7 @@ def _check_gates(source: str | None = None) -> list[Gate]:
         stmt = node
         while not isinstance(stmt, ast.stmt) and stmt in vals.parent:
             stmt = vals.parent[stmt]
-        out.append(Gate(stmt.lineno, stmt.end_lineno, node.func.attr, key.value))
+        out.append(Gate(path, stmt.lineno, stmt.end_lineno, node.func.attr, key.value))
     return sorted(out)
 
 
@@ -6677,7 +6744,7 @@ def _own_verdict(source: str | None = None) -> list[str]:
     «ошибка вызова», а красное состояние это код 1.
     """
     if source is None:
-        source = TOOL.read_text(encoding="utf-8")
+        source = tool_source()
     vals = _Values(source)
     fn = next((n for n in ast.walk(vals.tree)
                if isinstance(n, ast.FunctionDef) and n.name == "cmd_check"), None)
@@ -6960,31 +7027,34 @@ class GateMutationTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.lines = TOOL.read_text(encoding="utf-8").split("\n")
+        cls.lines = {rel: path.read_text(encoding="utf-8").split("\n")
+                     for rel, path in tool_files().items()}
         cls.gates = _check_gates()
         cls.registered = dict(GateRegistryTest.GATES)
 
-    def _silenced(self, gate: Gate) -> str:
+    def _silenced(self, gate: Gate) -> tuple[str, str]:
         """Ворота сняты: оператор целиком заменён на `pass` — мутант обязан собираться,
         иначе «ни одного упавшего теста» читается как «тест не зависит от ворот»."""
-        head = self.lines[gate.lineno - 1]
+        lines = self.lines[gate.path]
+        head = lines[gate.lineno - 1]
         indent = head[:len(head) - len(head.lstrip())]
-        return "\n".join(self.lines[:gate.lineno - 1] + [indent + "pass"]
-                         + self.lines[gate.end_lineno:])
+        return gate.path, "\n".join(lines[:gate.lineno - 1] + [indent + "pass"]
+                                    + lines[gate.end_lineno:])
 
-    def _flipped(self, gate: Gate) -> str:
+    def _flipped(self, gate: Gate) -> tuple[str, str]:
         """Ворота сменили строгость: отказ стал предупреждением или наоборот."""
         other = "warn" if gate.verb == "refuse" else "refuse"
-        lines = list(self.lines)
+        lines = list(self.lines[gate.path])
         for i in range(gate.lineno - 1, gate.end_lineno):
             if f".{gate.verb}(" in lines[i]:
                 lines[i] = lines[i].replace(f".{gate.verb}(", f".{other}(", 1)
                 break
-        return "\n".join(lines)
+        return gate.path, "\n".join(lines)
 
     @staticmethod
-    def _run_on_copy(source: str | None, *names: str) -> subprocess.CompletedProcess:
-        """Прогоняет названные тесты на КОПИИ СКИЛЛА, где инструмент заменён на `source`.
+    def _run_on_copy(mutant: tuple[str, str] | None, *names: str) -> subprocess.CompletedProcess:
+        """Прогоняет названные тесты на КОПИИ СКИЛЛА, где один файл инструмента заменён
+        мутантом `(путь от scripts/, текст)`.
 
         Копируется скилл целиком, а не один файл: инструмент берёт у себя под боком
         `references/` и `assets/`, и на копии одного файла краснели бы тесты, которым
@@ -6996,15 +7066,16 @@ class GateMutationTest(unittest.TestCase):
             skill = Path(d, SKILL.name)
             shutil.copytree(SKILL, skill, ignore=shutil.ignore_patterns("__pycache__"))
             tool = skill / "scripts" / "review.py"
-            if source is not None:
-                tool.write_text(source, encoding="utf-8")
+            if mutant is not None:
+                rel, text = mutant
+                (skill / "scripts" / rel).write_text(text, encoding="utf-8")
             argv = [sys.executable, "-m", "unittest", "discover", "-s", str(KIT / "tests")]
             for name in names:
                 argv += ["-k", name]
             return subprocess.run(argv, cwd=KIT, capture_output=True, text=True,
                                   env=child_env(FINETOOTH_TOOL=str(tool)))
 
-    def _goes_red(self, gate: Gate, mutant: str) -> str:
+    def _goes_red(self, gate: Gate, mutant: tuple[str, str]) -> str:
         """Прогоняет названный рядом с воротами тест на мутанте. Возвращает пустую строку,
         если тест покраснел (так и надо), и жалобу, если прогон остался зелёным."""
         name = self.registered.get(gate.key)
@@ -7039,7 +7110,7 @@ class GateMutationTest(unittest.TestCase):
             verdicts = list(pool.map(lambda g: self._goes_red(g, mutate(g)), self.gates))
         for gate, complaint in zip(self.gates, verdicts):
             with self.subTest(gate=gate.key):
-                self.assertEqual(complaint, "", f"{TOOL.name}:{gate.lineno}: {complaint}")
+                self.assertEqual(complaint, "", f"{gate.path}:{gate.lineno}: {complaint}")
 
     def test_названный_тест_краснеет_когда_ворота_сняты(self):
         self._all(self._silenced)
@@ -7960,7 +8031,7 @@ class RepositoryContractTest(unittest.TestCase):
         описывают отсечки `coupling` словами; если константа в коде изменится, а текст —
         нет, прогон краснеет. Каждый порог спрашивается у тех файлов, которые его
         называют: README говорит про отбор, CHANGELOG — про все пороги команды."""
-        source = TOOL.read_text(encoding="utf-8")
+        source = tool_source()
         for name, files, wording in self.QUOTED_CONSTANTS:
             m = re.search(rf"^{name} = ([0-9.]+)$", source, re.M)
             self.assertTrue(m, f"{name} не найдена в инструменте")
@@ -8124,7 +8195,7 @@ jobs:
         сперва «Ломающее». Выпуск, где поле появилось впервые (самый старый раздел, который
         его называет), обязан назвать в «Ломающем» и поле, и команду, которой ревью его
         получает, и `sizes`, которым ищут блок под отказ, — на обоих языках."""
-        field = re.search(r'^READ_LINES_KEY = "(\w+)"$', TOOL.read_text(encoding="utf-8"), re.M)
+        field = re.search(r'^READ_LINES_KEY = "(\w+)"$', tool_source(), re.M)
         self.assertTrue(field, "в инструменте нет READ_LINES_KEY — правило смотрит не туда")
         for rel, heading in (("CHANGELOG.md", "Breaking"), ("CHANGELOG.ru.md", "Ломающее")):
             text = (KIT / rel).read_text(encoding="utf-8")
@@ -8400,7 +8471,7 @@ class SourceRuleTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.SOURCE = TOOL.read_text(encoding="utf-8")
+        cls.SOURCE = tool_source()
 
     # Единственная функция инструмента, которой позволено запускать процесс. Всё, что
     # нужно знать о чтении git — репозиторий, `-z` там, где в выводе пути, разбор этого
@@ -9727,6 +9798,28 @@ def _v_sweeps(source: str) -> list[str]:
     return _sweeps_without_body_check(source)
 
 
+def _v_layers(source: str) -> list[str]:
+    return _layer_violations(_tool_parts(source))
+
+
+def _import_up(source: str) -> str:
+    """Дефект правила слоёв: нижний модуль импортирует верхний."""
+    return source.replace(f"{TOOL_FILE_MARK}finetooth/base.py\n",
+                          f"{TOOL_FILE_MARK}finetooth/base.py\nfrom .cli import main\n", 1)
+
+
+def _imports_respelled(source: str, how: str) -> str:
+    """Те же относительные импорты другой записью: в скобках на несколько строк или модулем
+    целиком (`from ..report import sarif` вместо `from ..report.sarif import …`)."""
+    def one(m: re.Match) -> str:
+        dots, mod, names = m.group(1), m.group(2), m.group(3)
+        if how == "в скобках":
+            return f"from {dots}{mod} import (\n    {names},\n)"
+        head, _, last = mod.rpartition(".")
+        return f"from {dots}{head} import {last}"
+    return re.sub(r"^from (\.+)([\w.]+) import ([^(\n]+)$", one, source, flags=re.M)
+
+
 def _v_file_rules(source: str) -> list[str]:
     return SourceRuleTest._file_rules_without_samples(source)
 
@@ -9811,6 +9904,11 @@ SOURCE_MUTATIONS = {
         "как написано": _reparsed,
         "список команд в имени": _hoist_iters,
     }, True),
+    "_layer_violations": Mutated(_v_layers, _import_up, {
+        "как написано": lambda s: s,
+        "импорт в скобках": lambda s: _imports_respelled(s, "в скобках"),
+        "модуль целиком": lambda s: _imports_respelled(s, "модуль целиком"),
+    }, False),
     "_file_rules_without_samples": Mutated(_v_file_rules, _file_rule_without_sample, {
         "как написано": _reparsed,
         "файл сначала в имени": _file_read_into_a_name,
@@ -9840,7 +9938,7 @@ class SourceMutationTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.TOOL_SOURCE = TOOL.read_text(encoding="utf-8")
+        cls.TOOL_SOURCE = tool_source()
         cls.SUITE_SOURCE = Path(__file__).read_text(encoding="utf-8")
 
     def _clean(self, rule) -> str:
@@ -9916,10 +10014,7 @@ class QuotationMapTest(unittest.TestCase):
     }
 
     def test_карта_цитат_в_обе_стороны(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = tool_module("text")
         for name, (doc, want) in self.CASES.items():
             got = "".join("Q" if q else "." for q in mod.quoted_lines(doc.split("\n")))
             self.assertEqual(got, want, name)
@@ -9928,27 +10023,122 @@ class QuotationMapTest(unittest.TestCase):
         """R5-001: для отчёта сомнение трактуется в сторону «цитата» — иначе скелет шаблона в
         незакрытой ограде закрывает гипотезы; для манифеста — в сторону «текст»."""
         doc = "````\n- H1.1 — checked\n```\nafter".split("\n")
-        mod = self._mod()
+        mod = tool_module("text")
         self.assertEqual("".join("Q" if q else "." for q in mod.quoted_lines(doc, "quoted")), "QQQQ")
         self.assertEqual("".join("Q" if q else "." for q in mod.quoted_lines(doc, "text")), "....")
 
     def test_раздел_охвата_в_незакрытой_ограде_пуст(self):
         """R6-004: раздел «Границы охвата» отчёта, целиком внутри незакрытой ограды, — цитата,
         а не ответ: гейт обязан счесть раздел пустым."""
-        mod = self._mod()
+        text, verdicts = tool_module("text"), tool_module("verdicts")
         md = "# report\n````\n## Coverage limits\n- nothing was skipped\n"
-        self.assertIsNone(mod.section_body(md, mod.LIMITS_HEADING, "quoted"))
+        self.assertIsNone(text.section_body(md, verdicts.LIMITS_HEADING, "quoted"))
         # a manifest read the same way keeps its section: there doubt means "text"
-        self.assertIsNotNone(mod.section_body(md, mod.LIMITS_HEADING, "text"))
-
-    def _mod(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
+        self.assertIsNotNone(text.section_body(md, verdicts.LIMITS_HEADING, "text"))
 
 
+
+
+def _layers(init_text: str) -> tuple[str, ...]:
+    """LAYERS из `finetooth/__init__.py` — прочитанный, а не импортированный: правило не
+    должно зависеть от того, собирается ли пакет."""
+    for node in ast.parse(init_text).body:
+        if isinstance(node, ast.Assign) and [t.id for t in node.targets] == ["LAYERS"]:
+            return tuple(ast.literal_eval(node.value))
+    return ()
+
+
+def _layer_violations(files: dict[str, str]) -> list[str]:
+    """Импорты пакета против порядка слоёв: модуль стоит только на слоях ДО своего.
+
+    Файлы — по пути от `scripts/`, как их отдаёт `tool_files`; порядок — LAYERS из
+    `finetooth/__init__.py` среди них же. Модули команд — один слой `commands` и друг друга
+    не импортируют. Модуль, которого нет в LAYERS, и слой без модуля — тоже нарушения:
+    иначе новый модуль жил бы вне правила, а порядок описывал бы не тот пакет.
+    """
+    layers = _layers(files.get("finetooth/__init__.py", ""))
+    if not layers:
+        return ["в finetooth/__init__.py нет LAYERS — правилу нечем мерить"]
+    def name(rel: str) -> str:
+        parts = rel.removeprefix("finetooth/").removesuffix(".py").split("/")
+        return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+    def layer(mod: str) -> str:
+        return "commands" if mod.startswith("commands.") else mod
+
+    modules = [name(rel) for rel in files
+               if rel.startswith("finetooth/") and not rel.endswith("__init__.py")]
+    packages = {name(rel) for rel in files
+                if rel.startswith("finetooth/") and rel.endswith("/__init__.py")}
+    out = [f"{lay}: слой в LAYERS без модуля" for lay in layers
+           if lay not in {layer(m) for m in modules}]
+    for rel, text in sorted(files.items()):
+        if not rel.startswith("finetooth/") or rel.endswith("__init__.py"):
+            continue
+        me = name(rel)
+        if layer(me) not in layers:
+            out.append(f"{me}: модуля нет в LAYERS")
+            continue
+        package = me.split(".")[:-1]
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                base = package[:len(package) - (node.level - 1)]
+                where = ".".join(base + ([node.module] if node.module else []))
+                # `from ..report import sarif` берёт ПОДМОДУЛЬ: из пакета импортируют модули
+                targets = ([f"{where}.{a.name}".lstrip(".") for a in node.names]
+                           if not node.module or where in packages else [where])
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                        else [node.module or ""])
+                out += [f"{me} → {m}: пакет импортирует сам себя по абсолютному имени"
+                        for m in mods if m.split(".")[0] == "finetooth"]
+                continue
+            else:
+                continue
+            for target in targets:
+                t = layer(target)
+                if t not in layers:
+                    out.append(f"{me} → {target}: модуля нет в LAYERS")
+                elif layers.index(t) >= layers.index(layer(me)):
+                    out.append(f"{me} → {target}: импорт не вниз по слоям")
+    return out
+
+
+class PackageLayerTest(unittest.TestCase):
+    """Разбиение инструмента на модули (#56) держится правилом, а не памятью: модуль стоит
+    только на слоях до своего, команды друг друга не зовут. Порядок объявлен один раз — в
+    `finetooth/__init__.py`; тест читает его и каждый импорт пакета."""
+
+    def test_импорты_пакета_идут_только_вниз_по_слоям(self):
+        files = {rel: p.read_text(encoding="utf-8") for rel, p in tool_files().items()}
+        self.assertEqual(_layer_violations(files), [])
+
+    def test_правило_слоёв_краснеет_на_каждой_форме_нарушения(self):
+        init = {"finetooth/__init__.py": 'LAYERS = ("base", "git", "commands", "cli")\n',
+                "finetooth/cli.py": "", "finetooth/commands/a.py": "", "finetooth/commands/b.py": ""}
+        bad = {
+            "импорт вверх": {"finetooth/base.py": "from .git import git\n"},
+            "команда зовёт команду": {"finetooth/commands/a.py": "from .b import run\n"},
+            "импорт пакета через точку": {"finetooth/base.py": "from . import git\n"},
+            "подмодуль из пакета": {"finetooth/git.py": "from .commands import a\n"},
+            "модуль вне LAYERS": {"finetooth/extra.py": "x = 1\n"},
+            "цель вне LAYERS": {"finetooth/git.py": "from .extra import x\n"},
+            "абсолютное имя пакета": {"finetooth/git.py": "from finetooth.cli import main\n"},
+            "из команды — наверх": {"finetooth/commands/a.py": "from ..cli import main\n"},
+            "слой без модуля": {"finetooth/base.py": None},
+            "нет LAYERS": {"finetooth/__init__.py": "\n"},
+        }
+        good = {**init, "finetooth/base.py": "", "finetooth/git.py": "from .base import die\n",
+                "finetooth/commands/a.py": "from ..git import git\nfrom ..base import die\n",
+                "finetooth/cli.py": "from .commands.a import run\nfrom .commands import b\n",
+                "finetooth/commands/__init__.py": "",
+                "review.py": "from finetooth.cli import main\n"}
+        self.assertEqual(_layer_violations(good), [], "правило придирается к верному")
+        for form, change in bad.items():
+            files = {**good, **change}
+            files = {rel: text for rel, text in files.items() if text is not None}
+            with self.subTest(форма=form):
+                self.assertNotEqual(_layer_violations(files), [], form)
 
 
 class RecordedFindingsImportTest(unittest.TestCase):
@@ -10583,7 +10773,7 @@ class TemplateContractTest(unittest.TestCase):
                    for b in bodies.values() for para in re.split(r"\n\s*\n", b))
 
     def test_каждое_поле_реестра_названо_в_шаблоне_или_проставлено_инструментом(self):
-        unknown = (self._register_fields(TOOL.read_text(encoding="utf-8"))
+        unknown = (self._register_fields(tool_source())
                    - self.TOOL_FIELDS - self.AGENT_FIELDS)
         self.assertEqual(
             sorted(unknown), [],
@@ -11089,7 +11279,11 @@ class NamedExitTest(unittest.TestCase):
 
     @classmethod
     def _sources(cls) -> dict:
-        return {name: (SKILL / name).read_text(encoding="utf-8") for name in cls.ENTRY_POINTS}
+        """Точки входа по имени; под именем команды — весь её пакет: флаги объявляет
+        `finetooth/cli.py`, сообщения живут в модулях, а `review.py` только зовёт их."""
+        out = {name: (SKILL / name).read_text(encoding="utf-8") for name in cls.ENTRY_POINTS}
+        out["scripts/review.py"] = tool_source(SKILL / "scripts")
+        return out
 
     @classmethod
     def _documents(cls) -> dict:
@@ -11202,8 +11396,8 @@ class NamedExitTest(unittest.TestCase):
         который единственный и уменьшает. Правило накрывает и то, что ещё не написано:
         строки инструмента и документы скилла целиком, а не четыре найденных места.
         """
-        offenders = [f"{TOOL.name}:{n}"
-                     for n, _ in self._scope_without_diff(TOOL.read_text(encoding="utf-8"))]
+        offenders = [f"{rel}:{n}" for rel, path in tool_files().items()
+                     for n, _ in self._scope_without_diff(path.read_text(encoding="utf-8"))]
         for path in sorted(SKILL.rglob("*.md")):
             for para in re.split(r"\n\s*\n", path.read_text(encoding="utf-8")):
                 if "--scope" in para and "--diff" not in para:
@@ -11596,7 +11790,7 @@ class DocumentedSurfaceTest(unittest.TestCase):
         # Названа — значит показана КОМАНДОЙ: слова `version` и `hypotheses` встречаются в
         # прозе сами по себе, и правило, читающее их как упоминание команды, пропустило бы
         # обе (измерено на прежнем SKILL.md).
-        missing = [c for c in self.subcommands(TOOL.read_text(encoding="utf-8"))
+        missing = [c for c in self.subcommands(tool_source())
                    if not re.search(rf"review(?:\.py)?\s+{re.escape(c)}\b", text)]
         self.assertEqual(
             missing, [],
@@ -11844,7 +12038,7 @@ class CliContractTest(unittest.TestCase):
     """
 
     def test_документация_не_предлагает_make_как_значение_cli(self):
-        for name, path in (("SKILL.md", SKILL / "SKILL.md"), ("review.py", TOOL)):
+        for name, path in (("SKILL.md", SKILL / "SKILL.md"), *tool_files().items()):
             with self.subTest(file=name):
                 self.assertNotRegex(
                     path.read_text(encoding="utf-8"), r"`make review`",
@@ -12471,6 +12665,97 @@ class RegionFingerprintTest(unittest.TestCase):
         # один якорь, и черновик охотника помнит строку, какой она была до сдвига.
         self.assertEqual(self.s.run("import", "H1", "--force").returncode, 0)
         self.assertEqual(self._row()["line"], 23)
+
+    def _carry(self, body: list[str], changed: bool = False) -> None:
+        """Строки 15–25 уезжают из `src/one.ts` в новый `src/two.ts` под чужую шапку —
+        так переносят функцию в другой модуль. `changed` — по дороге правится строка 20."""
+        moved = body[14:25]
+        if changed:
+            moved = moved[:5] + ["строка 20, переписанная"] + moved[6:]
+        self.s.write("src/two.ts", self._text(["шапка 1", "шапка 2"] + moved))
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self._edit(body[:14] + body[25:], "перенос в другой модуль")
+        self.s.run("coverage")          # карта считает файлы git, поэтому после коммита
+        self.s.commit("карта покрытия")
+
+    def test_находка_переезжает_в_файл_куда_ушёл_её_код(self):
+        """#56: код переносят в другой модуль — находка обязана уехать за ним, а не
+        закрыться и не править реестр руками. Окно ищется в новом файле по содержимому."""
+        body = self._stand()
+        self._carry(body)
+        self.assertNotEqual(self.s.run("check").returncode, 0, "окно ушло из файла находки")
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("moved from src/one.ts", out.stdout)
+        self.assertIn("anchored at line 8 (was line 20)", out.stdout)
+        row = self._row()
+        self.assertEqual((row["file"], row["line"]), ("src/two.ts", 8))
+        self.s.run("findings")
+        self.s.commit("находка уехала за кодом")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_код_изменился_по_дороге_переезд_требует_строки(self):
+        body = self._stand()
+        self._carry(body, changed=True)
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("restamp H1-001 --file src/two.ts --line <N>", out.stderr)
+        self.assertEqual(self._row()["file"], "src/one.ts", "отказ ничего не записал")
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts", "--line", "8")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((self._row()["file"], self._row()["line"]), ("src/two.ts", 8))
+
+    def test_отказ_на_исчезнувший_файл_называет_существующий_выход(self):
+        """Прежний отказ звал переносить находку `set-finding`, у которого такого флага нет:
+        названный выход, которого механизм не даёт."""
+        body = self._stand()
+        self.s.write("src/two.ts", self._text(body))
+        (self.s.root / "src/one.ts").unlink()
+        self.s.blocks(paths=["src/two.ts"])
+        self.s.commit("файл переименован")
+        out = self.s.run("restamp", "H1-001")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("restamp H1-001 --file <path>", out.stderr)
+        self.assertNotIn("set-finding", out.stderr)
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((self._row()["file"], self._row()["line"]), ("src/two.ts", 20))
+
+    def test_находка_без_строки_переезжает_с_отпечатком_всего_файла(self):
+        """Находка о файле целиком (без строки) окна не имеет: переезд берёт отпечаток нового
+        файла целиком, строки не требует (замечание Codex к #70)."""
+        body = self._stand(line=None)
+        self.assertIn("code_sha", self._row())
+        self.s.write("src/two.ts", self._text(body))
+        (self.s.root / "src/one.ts").unlink()
+        self.s.blocks(paths=["src/two.ts"])
+        self.s.commit("файл переименован")
+        self.s.run("coverage")
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        row = self._row()
+        self.assertEqual(row["file"], "src/two.ts")
+        self.assertNotIn("line", row)
+        self.assertIn("code_sha", row)
+        self.s.run("findings")
+        self.s.commit("находка уехала")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_переезд_отказывает_без_файла_и_на_блоке(self):
+        self._stand()
+        # файл есть на диске, но git его не ведёт: `check` такую находку отверг бы следом
+        self.s.write("src/untracked.ts", "x\n")
+        for argv, said in ((("H1-001", "--file", "src/none.ts"), "src/none.ts is not in the repository"),
+                           (("H1-001", "--file", "src/untracked.ts"), "src/untracked.ts is not in the repository"),
+                           (("H1-001", "--file", "src/one.ts"), "already points at src/one.ts"),
+                           (("H1", "--file", "src/one.ts"), "--file belongs to a finding")):
+            with self.subTest(argv=argv):
+                out = self.s.run("restamp", *argv)
+                self.assertEqual(out.returncode, 2, out.stdout)
+                self.assertIn(said, out.stderr)
+        self.assertEqual(self._row()["file"], "src/one.ts")
 
     def _shown(self) -> dict[str, str]:
         """Где находку показывает каждый показ: findings.md, SARIF, итог, промпты, `roots`."""
@@ -13177,11 +13462,9 @@ class FieldRun46Test(unittest.TestCase):
             skill = Path(d, "finetooth")
             shutil.copytree(tool_dir, skill, ignore=shutil.ignore_patterns("__pycache__"))
             tool = skill / "scripts" / "review.py"
-            src = tool.read_text(encoding="utf-8")
             for name, value in (("CLAIM_MAX", "173"), ("SCENARIO_MAX", "611")):
-                src, n = re.subn(rf"^{name} = \d+$", f"{name} = {value}", src, flags=re.M)
+                n = subn_tool(tool.parent, rf"^{name} = \d+$", f"{name} = {value}", re.M)
                 self.assertEqual(n, 1, f"{name} не найдена в инструменте")
-            tool.write_text(src, encoding="utf-8")
             for lang in ("ru", "en"):
                 self.s.blocks(paths=["src/one.ts"], lang=lang)
                 for role in ("hunter", "verify"):

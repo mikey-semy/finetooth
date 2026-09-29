@@ -83,7 +83,8 @@ way to switch that off: it says on record that the new text was seen. `backfill`
 the fingerprints of records written before fingerprints existed. A finding's fingerprint is
 the lines around its line, looked for by content: an edit elsewhere in the file does not
 touch it, one that only moved it is a warning naming the new line (`restamp <ID>` records
-it), and when the defect now sits elsewhere, `restamp <ID> --line <N>` anchors it there.
+it), and when the defect now sits elsewhere, `restamp <ID> --line <N>` anchors it there — in
+another file, `restamp <ID> --file <path>`.
 
 ## Fixing rules
 

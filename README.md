@@ -218,7 +218,7 @@ Every command of `review.py`; `review <command> --help` has the flags.
 | `decide <ID> "<text>"` | record a human's decision on a block — the answer to the loop signal |
 | `hypotheses <ID>` | the block's hypotheses and where each got its verdict |
 | `roots [ID]` | defect classes: instances, and which guard each instance carries |
-| `restamp <ID>` | confirm that changes under a block or a finding were reviewed (`--line` for a finding that moved) |
+| `restamp <ID>` | confirm that changes under a block or a finding were reviewed (`--line` for a finding that moved, `--file` for one whose code went to another file) |
 | `backfill` | stamp fingerprints on records written before fingerprints existed |
 | `refs` | finding ids of the register named in the code outside `docs/review/` and the summary files |
 | `findings` | regenerate `findings.md` from `findings.jsonl` |
@@ -590,7 +590,7 @@ reasoning behind the core.
   on now, and the register keeps the recorded one until `restamp`. An edit inside the window
   fails the check — either the defect has already been fixed, or the description is stale,
   or it is still there and `restamp <finding-ID>` confirms it (`--line <N>` if it now sits
-  elsewhere). A finding without a line keeps the fingerprint of the whole file. The window
+  elsewhere, `--file <path>` if its code moved to another file). A finding without a line keeps the fingerprint of the whole file. The window
   size is measured on the kit's own review, not chosen: the note next to `REGION_K` in
   `review.py` has the numbers. Records stamped by an older version (`code_sha`, the whole
   file) are checked as before, and `restamp` moves each one to the window;
@@ -681,7 +681,7 @@ carried over — details in [`CHANGELOG.md`](CHANGELOG.md), 0.5.0):
 python3 -m unittest discover -s tests
 ```
 
-552 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
+559 scenarios, about a quarter of an hour, no dependencies other than `git`. Each one creates a fresh temporary
 repository and calls the tool **from the skill folder**, with the working directory in that
 repository — the way the agent calls it. Behaviour is checked through the command line, not by
 importing internals. A separate class checks the skill itself against the specification: the
@@ -698,7 +698,26 @@ it and a test that goes red on that change.
 skills/finetooth/                THE SKILL — this is what gets installed into the agent
   SKILL.md                        when to apply and the order of work (read by the agent)
   LICENSE                         terms — travel with the skill
-  scripts/review.py               the tool: every command in the table under "Commands"
+  scripts/review.py               the command: every command in the table under "Commands";
+                                  the code is the `finetooth/` package next to it
+  scripts/finetooth/              the tool, one module per concern; a module imports only
+                                  modules listed before it here, never one after
+    base.py, git.py               the skill's location, version, errors; git.py is the ONE
+                                  place a process is started
+    workspace.py, model.py        where the review lives on disk; statuses, roles, limits
+    i18n.py, text.py              messages en/ru; reading markdown: quoted vs said, sections
+    fingerprint.py, blocks.py     fingerprints of code; blocks, their state and stamps
+    register.py, verdicts.py      the findings register; hypotheses and their verdicts
+    coverage.py, history.py       who owns which file, freshness; co-change, churn, order
+    seams.py, journal.py          seams between blocks; the journal and the loop signal
+    gates.py, importing.py        refusals and the gates of a finding row; importing a draft
+    roles.py, settings.py         pieces of a role prompt; the project's own deny rules
+    report/sarif.py, summary.py,  SARIF export, the markdown and the HTML summary
+    report/html.py, refs.py       finding ids left in code and documents
+    commands/*.py                 the commands, a file per group: setup.py, status.py,
+                                  coverage.py, history.py, findings.py, prompt.py,
+                                  report.py, check.py
+    cli.py, __init__.py           arguments and dispatch; __init__.py marks each package
   scripts/axes.py                 the spend of a headless run, broken down by axis
   references/hunter.md            hunter: reads the block's files and raises findings
   references/verify.md            verifier: its own independent pass, three verdicts
@@ -724,7 +743,7 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
   assets/guard-grep.sh            grep-gate engine: allowance by line number
   assets/run-role.sh              runs a role headless through `claude -p` and writes the
                                   spend to the journal — the one part that leaves the machine
-tests/                            tests of the tool and the skill format: 552 scenarios
+tests/                            tests of the tool and the skill format: 559 scenarios
   test_verdict_corpus.py          the verdict parser on real reports (tests/corpus/verdicts)
 examples/toy                      a real docs/review/ after one block, on a toy app
 .github/                          CI (tests on 3.12 and 3.14, skills-ref validate, the DCO
