@@ -218,7 +218,7 @@ Every command of `review.py`; `review <command> --help` has the flags.
 | `decide <ID> "<text>"` | record a human's decision on a block — the answer to the loop signal |
 | `hypotheses <ID>` | the block's hypotheses and where each got its verdict |
 | `roots [ID]` | defect classes: instances, and which guard each instance carries |
-| `restamp <ID>` | confirm that changes under a block or a finding were reviewed (`--line` for a finding that moved) |
+| `restamp <ID>` | confirm that changes under a block or a finding were reviewed (`--line` for a finding that moved, `--file` for one whose code went to another file) |
 | `backfill` | stamp fingerprints on records written before fingerprints existed |
 | `refs` | finding ids of the register named in the code outside `docs/review/` and the summary files |
 | `findings` | regenerate `findings.md` from `findings.jsonl` |
@@ -590,7 +590,7 @@ reasoning behind the core.
   on now, and the register keeps the recorded one until `restamp`. An edit inside the window
   fails the check — either the defect has already been fixed, or the description is stale,
   or it is still there and `restamp <finding-ID>` confirms it (`--line <N>` if it now sits
-  elsewhere). A finding without a line keeps the fingerprint of the whole file. The window
+  elsewhere, `--file <path>` if its code moved to another file). A finding without a line keeps the fingerprint of the whole file. The window
   size is measured on the kit's own review, not chosen: the note next to `REGION_K` in
   `review.py` has the numbers. Records stamped by an older version (`code_sha`, the whole
   file) are checked as before, and `restamp` moves each one to the window;

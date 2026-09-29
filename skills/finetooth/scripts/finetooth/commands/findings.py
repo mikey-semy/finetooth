@@ -252,9 +252,10 @@ def cmd_restamp(args) -> int:
     defn, st = blocks(), state()
     idx = block_index(defn)
     if args.block not in idx:
-        return restamp_finding(args.block, args.line)
-    if args.line is not None:
-        die(f"--line belongs to a finding, not to a block: {args.block} is a block — its "
+        return restamp_finding(args.block, args.line, args.file)
+    if args.line is not None or args.file is not None:
+        flag = "--line" if args.line is not None else "--file"
+        die(f"{flag} belongs to a finding, not to a block: {args.block} is a block — its "
             f"fingerprint covers all its files, there is no line to anchor")
     s = st["blocks"].get(args.block, {})
     if s.get("status") not in POST_VERIFY:

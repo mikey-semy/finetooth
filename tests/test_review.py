@@ -12612,6 +12612,73 @@ class RegionFingerprintTest(unittest.TestCase):
         self.assertEqual(self.s.run("import", "H1", "--force").returncode, 0)
         self.assertEqual(self._row()["line"], 23)
 
+    def _carry(self, body: list[str], changed: bool = False) -> None:
+        """Строки 15–25 уезжают из `src/one.ts` в новый `src/two.ts` под чужую шапку —
+        так переносят функцию в другой модуль. `changed` — по дороге правится строка 20."""
+        moved = body[14:25]
+        if changed:
+            moved = moved[:5] + ["строка 20, переписанная"] + moved[6:]
+        self.s.write("src/two.ts", self._text(["шапка 1", "шапка 2"] + moved))
+        self.s.blocks(paths=["src/one.ts", "src/two.ts"])
+        self._edit(body[:14] + body[25:], "перенос в другой модуль")
+        self.s.run("coverage")          # карта считает файлы git, поэтому после коммита
+        self.s.commit("карта покрытия")
+
+    def test_находка_переезжает_в_файл_куда_ушёл_её_код(self):
+        """#56: код переносят в другой модуль — находка обязана уехать за ним, а не
+        закрыться и не править реестр руками. Окно ищется в новом файле по содержимому."""
+        body = self._stand()
+        self._carry(body)
+        self.assertNotEqual(self.s.run("check").returncode, 0, "окно ушло из файла находки")
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("moved from src/one.ts", out.stdout)
+        self.assertIn("anchored at line 8 (was line 20)", out.stdout)
+        row = self._row()
+        self.assertEqual((row["file"], row["line"]), ("src/two.ts", 8))
+        self.s.run("findings")
+        self.s.commit("находка уехала за кодом")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_код_изменился_по_дороге_переезд_требует_строки(self):
+        body = self._stand()
+        self._carry(body, changed=True)
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("restamp H1-001 --file src/two.ts --line <N>", out.stderr)
+        self.assertEqual(self._row()["file"], "src/one.ts", "отказ ничего не записал")
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts", "--line", "8")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((self._row()["file"], self._row()["line"]), ("src/two.ts", 8))
+
+    def test_отказ_на_исчезнувший_файл_называет_существующий_выход(self):
+        """Прежний отказ звал переносить находку `set-finding`, у которого такого флага нет:
+        названный выход, которого механизм не даёт."""
+        body = self._stand()
+        self.s.write("src/two.ts", self._text(body))
+        (self.s.root / "src/one.ts").unlink()
+        self.s.blocks(paths=["src/two.ts"])
+        self.s.commit("файл переименован")
+        out = self.s.run("restamp", "H1-001")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("restamp H1-001 --file <path>", out.stderr)
+        self.assertNotIn("set-finding", out.stderr)
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((self._row()["file"], self._row()["line"]), ("src/two.ts", 20))
+
+    def test_переезд_отказывает_без_файла_и_на_блоке(self):
+        self._stand()
+        for argv, said in ((("H1-001", "--file", "src/none.ts"), "src/none.ts is not in the repository"),
+                           (("H1-001", "--file", "src/one.ts"), "already points at src/one.ts"),
+                           (("H1", "--file", "src/one.ts"), "--file belongs to a finding")):
+            with self.subTest(argv=argv):
+                out = self.s.run("restamp", *argv)
+                self.assertEqual(out.returncode, 2, out.stdout)
+                self.assertIn(said, out.stderr)
+        self.assertEqual(self._row()["file"], "src/one.ts")
+
     def _shown(self) -> dict[str, str]:
         """Где находку показывает каждый показ: findings.md, SARIF, итог, промпты, `roots`."""
         self.assertEqual(self.s.run("findings").returncode, 0)

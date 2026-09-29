@@ -368,7 +368,7 @@ def findings_md_matches(text: str, rows: list[dict]) -> bool:
     return re.fullmatch(pattern, text) is not None
 
 
-def restamp_finding(fid: str, line: int | None = None) -> int:
+def restamp_finding(fid: str, line: int | None = None, to_file: str | None = None) -> int:
     """Confirm that an open finding is still alive on a changed file.
 
     The file under a finding changes not only by its fix: a neighbouring finding gets fixed
@@ -384,6 +384,13 @@ def restamp_finding(fid: str, line: int | None = None) -> int:
     of the whole-file form is moved to the region form here, and its window is taken from
     the version of the file its old fingerprint names, if git still has it: the line was
     cited on THAT version, and the current file may have moved it.
+
+    `--file` moves the finding to the file its code went to — a split, a rename, a function
+    carried to another module. Without it the only ways out were to close a live defect or
+    edit the register by hand, and the refusal for a vanished file named a `set-finding`
+    that has no such option. The window is looked for by content in the new file, so code
+    moved verbatim keeps its fingerprint and gets its new line; code that changed on the
+    way needs `--line`, the same as within one file.
     """
     rows = findings()
     hit = [f for f in rows if f.get("id") == fid]
@@ -395,8 +402,18 @@ def restamp_finding(fid: str, line: int | None = None) -> int:
     rel = finding_file(f)
     if why := file_problem(f):
         die(f"finding {fid}: {why} — `{CLI} check` names every such record")
-    if not file_sha(rel):
-        die(f"file {rel} does not exist — a finding is moved (`{CLI} set-finding`), not stamped")
+    moved_from = None
+    if to_file is not None:
+        new = to_file.removeprefix("./")
+        if new == rel:
+            die(f"{fid} already points at {rel} — drop --file to stamp it where it is")
+        if not file_sha(new):
+            die(f"file {new} is not in the repository — --file names the file the finding's "
+                f"code is in now, relative to the repository root")
+        moved_from, rel = rel, new
+    elif not file_sha(rel):
+        die(f"file {rel} does not exist — if the finding's code moved to another file, say "
+            f"where: `{CLI} restamp {fid} --file <path>`")
     lines = text_lines(rel)
     was = f.get("line")
     if line is not None:
@@ -407,16 +424,26 @@ def restamp_finding(fid: str, line: int | None = None) -> int:
                    f"— drop --line" if lines is None else ""))
         at = line
     elif lines is not None and f.get("region_sha"):
-        at = locate_region(f, lines) or was
+        at = locate_region(f, lines)
+        if at is None and moved_from:
+            die(f"{fid}: its code is not in {rel} as it was in {moved_from} — it changed on "
+                f"the way; read it and say where the defect sits: "
+                f"`{CLI} restamp {fid} --file {rel} --line <N>`")
+        at = at or was
+    elif moved_from:
+        die(f"{fid} has no window to look for in {rel} — say where the defect sits: "
+            f"`{CLI} restamp {fid} --file {rel} --line <N>`")
     elif lines is not None and f.get("code_sha"):
         at = cited_line_now(f, lines)
     else:
         at = was
     fp = code_fingerprint(rel, at)
-    if at == was and all(f.get(k) == fp.get(k) for k in CODE_FINGERPRINT_FIELDS):
+    if not moved_from and at == was and all(f.get(k) == fp.get(k) for k in CODE_FINGERPRINT_FIELDS):
         print(f"{fid}: the fingerprint already matches {rel} — nothing to stamp")
         return 0
     put_fingerprint(f, fp)
+    if moved_from:
+        f["file"] = rel
     if "region_sha" in fp:
         f["line"] = at
     f["restamped_at"] = now()
@@ -424,7 +451,8 @@ def restamp_finding(fid: str, line: int | None = None) -> int:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
-    print(f"{fid}: code fingerprint re-taken — the defect is confirmed on the current version of {rel}")
+    print(f"{fid}: code fingerprint re-taken — the defect is confirmed on the current version of {rel}"
+          + (f" (moved from {moved_from})" if moved_from else ""))
     if "region_sha" in fp:
         above, below = fp["region_span"]
         text = lines[at - 1].decode("utf-8", "replace").strip()

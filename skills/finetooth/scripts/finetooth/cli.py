@@ -120,6 +120,8 @@ def main() -> int:
     c.add_argument("block", help="block (H1) or finding (H1-003)")
     c.add_argument("--line", type=int,
                    help="a finding only: the line the defect sits on now, when the code moved away from the cited one")
+    c.add_argument("--file",
+                   help="a finding only: the file its code is in now, when it moved to another file")
 
     sub.add_parser("backfill", help="stamp fingerprints on old blocks and findings (with a journal entry)")
 
