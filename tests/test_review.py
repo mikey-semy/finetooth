@@ -3888,6 +3888,16 @@ class ProjectDenyRulesTest(unittest.TestCase):
         self.assertIn("hits `pytest` (roles: hunter, verify, fix, fixreview)", text)
         self.assertIn("python3 -m pytest", text, "совет называет рабочую форму команды")
 
+    def test_запрет_оболочки_назван_как_запрет_скрипта_перечня(self):
+        """Скрипт перечня роли запускают `bash docs/review/sweeps/…`; правило роли кончается
+        путём со звёздочкой, а не `prefix *`, и прежде в сверку не попадало: проект с запретом
+        `Bash(bash *)` не узнавал, что перечень не запустится (замечание Codex к #73)."""
+        self._settings("settings.json", json.dumps({"permissions": {"deny": ["Bash(bash *)"]}}))
+        out = self._setup()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("hits `bash docs/review/sweeps/` (roles: hunter, verify, fix, fixreview)",
+                      out.stdout)
+
     def test_обёртка_с_аргументами_опций_снимается_целиком(self):
         """Обёртку Claude Code снимает до сравнения, и снимать её надо вместе с аргументами
         её опций и позиционными: иначе `timeout -s KILL 5 pytest` читался как `KILL 5
