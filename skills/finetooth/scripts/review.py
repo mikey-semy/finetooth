@@ -4502,7 +4502,12 @@ def render_decisions_for(block_id: str) -> str:
 
 
 def journal(block: str, text: str) -> None:
-    """Append a dated line to the journal — the log a human reads."""
+    """Append a dated line to the journal — the log a human reads. Every line the tool writes
+    comes through here (`log`, `decide`, `backfill`; `run-role.sh` calls `log`), and it only
+    appends, stamped now, so the tool cannot put a line out of time order. A journal edited on
+    two branches can: resolving the merge keeps each branch's lines as a block, and in the kit's
+    own review four such merges put a later line above an earlier one (fix review of the 0.8.0
+    candidate) — merging a journal, keep its lines in time order."""
     if not JOURNAL_FILE.exists():
         JOURNAL_FILE.write_text(T("journal_head"), encoding="utf-8")
     with JOURNAL_FILE.open("a", encoding="utf-8") as fh:
@@ -5150,10 +5155,7 @@ def cmd_backfill(args) -> int:
                 fh.write(json.dumps(f, ensure_ascii=False) + "\n")
         FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
     note = T("backfill_note", head=head, blocks=", ".join(stamped_blocks) or "—", n=len(stamped_findings))
-    if not JOURNAL_FILE.exists():
-        JOURNAL_FILE.write_text(T("journal_head"), encoding="utf-8")
-    with JOURNAL_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(f"- **{now()}** · `backfill` — {note}\n")
+    journal("backfill", note)
     print(note)
     return 0
 
