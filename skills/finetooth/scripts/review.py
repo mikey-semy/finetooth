@@ -3887,41 +3887,62 @@ def location_problems(f: dict, tracked: set[str]) -> dict[str, str]:
     return out
 
 
-def draft_problems(block: str, numbered: list) -> list[str]:
-    """What is wrong with the draft's rows before `import` can even plan them — every row,
-    not the first: a line that is not a JSON object, and a row whose `block` names another
-    block (the plain import would file it there without a word). Everything else a row can
-    get wrong is asked by `import_dry_run` of the rows `import` would write, by `import`'s
-    own refusals and `check`'s own gates — not by a copy of them here."""
-    out = []
-    for n, row in numbered:
-        at = f"line {n}"
-        if not isinstance(row, dict):
-            out.append(f"{at}: not a JSON object — one finding per line, as `{{...}}`")
-            continue
-        if row.get("block") not in (None, block):
-            out.append(f"{at}: `block` is {row.get('block')!r} — this is the draft of {block}")
-    return out
-
-
 def block_findings_path(b: dict) -> Path:
     return REVIEW / "reports" / f"{b['id']}-findings.jsonl"
 
 
-def read_draft(src: Path) -> list[tuple[int, object]]:
-    """The rows of a block's draft as `import` reads them, with their line numbers: blank
-    lines and `#` comments are not rows. A line that is not JSON raises ValueError — `import`
-    stops on it, the gate below names it."""
-    rows = []
+def draft_lines(src: Path):
+    """The lines of a block's draft that are rows, with their numbers: blank lines and `#`
+    comments are not rows."""
     for n, line in enumerate(src.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
-        if not line or line.startswith("#"):
-            continue
+        if line and not line.startswith("#"):
+            yield n, line
+
+
+def not_json(exc: json.JSONDecodeError) -> str:
+    """What is wrong with a draft line JSON cannot read — and the way out, for someone
+    seeing the draft format for the first time."""
+    return (f"not JSON — {exc}; one finding per line, as `{{...}}`: keys and strings in double "
+            f"quotes, no trailing comma")
+
+
+NOT_AN_OBJECT = "not a JSON object — one finding per line, as `{...}`"
+
+
+def read_draft(src: Path) -> list[tuple[int, object]]:
+    """The rows of a block's draft as `check` reads them, with their line numbers. A line that
+    is not JSON raises ValueError naming it — the gate below names it; `import` reads the
+    draft with `draft_rows`, which names every such line."""
+    rows = []
+    for n, line in draft_lines(src):
         try:
             rows.append((n, json.loads(line)))
         except json.JSONDecodeError as exc:
-            raise ValueError(f"{src.name} line {n}: not JSON — {exc}") from None
+            raise ValueError(f"{src.name} line {n}: {not_json(exc)}") from None
     return rows
+
+
+def draft_rows(src: Path) -> tuple[list[tuple[int, dict]], list[tuple[int, str]]]:
+    """The draft as `import` reads it on every path: (the rows that are JSON objects, with
+    their line numbers; a (line, message) for every line that is not). ONE rule for the
+    plain import, `--append`, `--force` and `--dry-run`. A line that was JSON but not an
+    object (`[1,2]`, `"text"`, `42`) reached the plan and the plain import died with a
+    traceback on `.get`, while the dry run named it; a line that was not JSON stopped the
+    dry run on itself, so a draft with three broken lines took three runs (fix review of the
+    0.8.0 candidate, R13-003)."""
+    rows, bad = [], []
+    for n, line in draft_lines(src):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            bad.append((n, not_json(exc)))
+            continue
+        if isinstance(row, dict):
+            rows.append((n, row))
+        else:
+            bad.append((n, NOT_AN_OBJECT))
+    return rows, bad
 
 
 def unimported_rows(rows: list, register: list[dict]) -> list:
@@ -4071,16 +4092,14 @@ def cmd_import(args) -> int:
                 f"a diff against the working tree changes under it")
         found_in = {"role": "fixreview", "round": args.round, "diff": pinned}
 
-    try:
-        numbered = read_draft(src)
-    except ValueError as exc:
-        if args.dry_run:
-            print(f"{src.relative_to(ROOT)}: {exc}")
-            return 1
-        die(str(exc))
+    numbered, unreadable = draft_rows(src)
     if args.dry_run:
-        return import_dry_run(args.block, src, numbered, append=args.append, force=args.force,
-                              found_in=found_in)
+        return import_dry_run(args.block, src, numbered, unreadable, append=args.append,
+                              force=args.force, found_in=found_in)
+    if unreadable:
+        die(f"{src.name}: " + "; ".join(f"line {n}: {why}" for n, why in unreadable)
+            + f" — nothing is imported; `{CLI} import {args.block} --dry-run` lists every "
+              f"problem of the draft at once")
     try:
         incoming, merged, new = import_plan(args.block, src.name, numbered, findings(),
                                             append=args.append, force=args.force,
@@ -4128,8 +4147,8 @@ class ImportWouldReplace(ImportRefused):
     """The plain `import` would erase or overturn what the register holds of the block."""
 
 
-def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, append: bool,
-                force: bool, found_in: dict | None = None,
+def import_plan(block: str, name: str, numbered: list[tuple[int, dict]], existing: list[dict],
+                *, append: bool, force: bool, found_in: dict | None = None,
                 hold_rows: bool = True) -> tuple[list, list[dict], list[dict]]:
     """What `import` writes, computed without writing it: (the rows of the block's file after
     the import, the register after it, the rows of the register that are new or rewritten).
@@ -4147,7 +4166,7 @@ def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, 
         # `check` then refused made every later gate red on a row nobody could fix through
         # the tool (the kit's own review hit it three times).
         for field, limit in (("claim", CLAIM_MAX), ("scenario", SCENARIO_MAX)):
-            if hold_rows and isinstance(row, dict) and len(str(row.get(field) or "")) > limit:
+            if hold_rows and len(str(row.get(field) or "")) > limit:
                 raise ImportRefused(
                     f"{name} line {n}: {field} is {len(str(row[field]))} characters against a "
                     f"limit of {limit} — shorten it in the draft; the evidence belongs in the report")
@@ -4155,7 +4174,7 @@ def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, 
         # a path went into the register, and every command that read it after that died
         # with a traceback or `check` refused a record the lead could fix only by hand. A row
         # with no `file` key at all is left as before — `check` names the empty field.
-        if hold_rows and isinstance(row, dict) and "file" in row:
+        if hold_rows and "file" in row:
             why = file_problem(row) or ("field file is empty — `check` refuses a finding without it"
                                         if not finding_file(row).strip() else None)
             if why:
@@ -4302,7 +4321,8 @@ def import_plan(block: str, name: str, numbered: list, existing: list[dict], *, 
     return incoming, kept + incoming, incoming
 
 
-def import_dry_run(block: str, src: Path, numbered: list, *, append: bool, force: bool,
+def import_dry_run(block: str, src: Path, numbered: list[tuple[int, dict]],
+                   unreadable: list[tuple[int, str]], *, append: bool, force: bool,
                    found_in: dict | None) -> int:
     """`import --dry-run`: the role's own check of its draft before it hands it in. A verifier
     draft with a claim past the limit had the whole block refused at import, and a rejection
@@ -4319,8 +4339,12 @@ def import_dry_run(block: str, src: Path, numbered: list, *, append: bool, force
     would write them — the path SKILL.md gives a draft that holds only new findings on top of
     recorded ones."""
     rel = src.relative_to(ROOT)
-    problems = draft_problems(block, numbered)
-    rows = [(n, row) for n, row in numbered if isinstance(row, dict)]
+    problems = [f"line {n}: {why}" for n, why in unreadable]
+    # A row whose `block` names another block: the plain import would file it there without
+    # a word.
+    problems += [f"line {n}: `block` is {row.get('block')!r} — this is the draft of {block}"
+                 for n, row in numbered if row.get("block") not in (None, block)]
+    rows = numbered
     line_of = {id(row): n for n, row in rows}
     note = ""
     try:

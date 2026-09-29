@@ -13162,6 +13162,41 @@ class FieldRun46Test(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertIn("1 row(s), nothing `import` or `check` would refuse", out.stdout)
 
+    def test_строка_json_но_не_объект_отказ_с_номером_на_каждом_пути(self):
+        """Строка черновика `[1,2]`, `"текст"` или `42` — это JSON, но не находка: пробный
+        прогон называл её, а настоящий `import` (простой, `--force`, `--append`) падал с
+        трейсбеком на `.get`. Проверка одна на все четыре пути: отказ называет строку по
+        номеру, реестр и черновик не тронуты. Строка, которая не JSON вовсе, названа рядом с
+        ней, а не вместо неё."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        register = self.s.root / "docs/review/findings.jsonl"
+        good = json.dumps({"block": "H1", "severity": "low", "confidence": "confirmed",
+                           "status": "open", "file": "src/one.ts", "claim": "дефект",
+                           "scenario": "x делает y"}, ensure_ascii=False)
+        register.write_text("", encoding="utf-8")
+        for bad in ('[1, 2]', '"текст"', '42', 'null'):
+            for flags in (("--dry-run",), (), ("--force",), ("--append",)):
+                with self.subTest(строка=bad, ключи=flags):
+                    text = f"{good}\n{bad}\n"
+                    draft.write_text(text, encoding="utf-8")
+                    out = self.s.run("import", "H1", *flags)
+                    said = out.stdout + out.stderr
+                    self.assertNotIn("Traceback", out.stderr, out.stderr)
+                    self.assertEqual(out.returncode, 1 if flags == ("--dry-run",) else 2, said)
+                    self.assertIn("line 2: not a JSON object", said)
+                    self.assertNotIn("line 1", said, "верная строка названа плохой")
+                    self.assertEqual(register.read_text(encoding="utf-8"), "", "реестр записан")
+                    self.assertEqual(draft.read_text(encoding="utf-8"), text, "черновик переписан")
+        draft.write_text(f"{good}\n{{ не json\n[1, 2]\n", encoding="utf-8")
+        for flags in (("--dry-run",), ()):
+            with self.subTest(обе_формы=flags):
+                out = self.s.run("import", "H1", *flags)
+                said = out.stdout + out.stderr
+                self.assertIn("line 2: not JSON", said)
+                self.assertIn("line 3: not a JSON object", said)
+                self.assertEqual(register.read_text(encoding="utf-8"), "", "реестр записан")
+
     def test_import_dry_run_проверяет_место_находки_как_check(self):
         """Место правдоподобное, но неверное — файла нет, строка текстом, строка за концом
         файла: пробный прогон обещал, что импорт пройдёт, а `check` сразу после импорта
