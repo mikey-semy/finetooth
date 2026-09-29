@@ -208,7 +208,8 @@ refuses the whole block at once — proof and line numbers belong in the report.
 holds no `rejected` rows: rejecting is the verifier's, and a rejection needs its reason in
 `reject_reason`. **Check the draft before you finish:** `{{CLI}} import {{BLOCK_ID}} --dry-run`
 reads it row by row as `import` and `check` will, writes nothing, and names every row to fix
-(the messages are `check`'s, as it would print them after the import — fix the row in the draft).
+in one run (the messages are `import`'s and those `check` would print after it — fix the row
+in the draft).
 
 Severity scale:
 - **critical** — data leak or corruption, permission bypass, loss of the user's work, no way to recover.

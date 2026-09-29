@@ -205,8 +205,9 @@ reason is recorded nowhere.
 
 **Check the file before you finish:** `{{CLI}} import {{BLOCK_ID}} --dry-run` reads it row by
 row as `import` and `check` will — the limits above, the vocabularies, the reason of every
-rejection and the `dup_of` of every duplicate — writes nothing, and names every row to fix; the
-messages are `check`'s, as it would print them after the import — fix the row in the draft.
+rejection and the `dup_of` of every duplicate — writes nothing, and names every row to fix in
+one run; the messages are `import`'s and those `check` would print after it — fix the row in
+the draft.
 A note that a plain import would replace what the register holds is the lead's call at
 import time (`--append` or `--force`), not a problem of the draft. A
 field run lost a whole block's import to verifier rows past the limits, found only after the
