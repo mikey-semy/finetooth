@@ -53,12 +53,30 @@ def tool_files(scripts: Path | None = None) -> dict[str, Path]:
 def tool_source(scripts: Path | None = None) -> str:
     """Весь код инструмента одним текстом — для правил о том, ЧТО написано, а не где.
 
-    Строки `from __future__` выброшены: в склейке они стояли бы посреди текста, а там их
-    не принимает компилятор, — правила, которые портят текст и компилируют порчу, падали бы
-    на склейке, а не на порче. Ни одно правило этих строк не читает."""
-    return "\n".join(line for p in tool_files(scripts).values()
-                     for line in p.read_text(encoding="utf-8").split("\n")
+    Каждый файл начинается строкой `# file: <путь от scripts/>` (TOOL_FILE_MARK): правилу о
+    том, кто кого импортирует, граница файла нужна, и `_tool_parts` восстанавливает по ней
+    файлы из склейки — в том числе из испорченной мутацией. Строки `from __future__`
+    выброшены: в склейке они стояли бы посреди текста, а там их не принимает компилятор, —
+    правила, которые портят текст и компилируют порчу, падали бы на склейке, а не на порче.
+    Ни одно правило этих строк не читает."""
+    return "\n".join(line for rel, p in tool_files(scripts).items()
+                     for line in [f"{TOOL_FILE_MARK}{rel}", *p.read_text(encoding="utf-8").split("\n")]
                      if not line.startswith("from __future__ import"))
+
+
+TOOL_FILE_MARK = "# file: "
+
+
+def _tool_parts(source: str) -> dict[str, str]:
+    """Склейка `tool_source` обратно по файлам: путь от `scripts/` → текст."""
+    out, rel = {}, None
+    for line in source.split("\n"):
+        if line.startswith(TOOL_FILE_MARK):
+            rel = line[len(TOOL_FILE_MARK):]
+            out[rel] = ""
+        elif rel is not None:
+            out[rel] += line + "\n"
+    return out
 
 
 def tool_module(name: str):
@@ -5110,7 +5128,9 @@ class IdempotenceTest(unittest.TestCase):
         out = self.s.run("restamp", "H1-001")
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertNotIn("Traceback", out.stderr)
-        self.assertIn("set-finding", out.stderr, "отказ обязан говорить, что делать")
+        # выход, который механизм даёт: у `set-finding` переноса находки нет, а у
+        # `restamp` есть `--file` (#56)
+        self.assertIn("restamp H1-001 --file <path>", out.stderr, "отказ обязан говорить, что делать")
         self.assertEqual((self.s.root / "docs/review/findings.jsonl").read_text(encoding="utf-8"),
                          before, "реестр остался прежним")
 
@@ -9778,6 +9798,28 @@ def _v_sweeps(source: str) -> list[str]:
     return _sweeps_without_body_check(source)
 
 
+def _v_layers(source: str) -> list[str]:
+    return _layer_violations(_tool_parts(source))
+
+
+def _import_up(source: str) -> str:
+    """Дефект правила слоёв: нижний модуль импортирует верхний."""
+    return source.replace(f"{TOOL_FILE_MARK}finetooth/base.py\n",
+                          f"{TOOL_FILE_MARK}finetooth/base.py\nfrom .cli import main\n", 1)
+
+
+def _imports_respelled(source: str, how: str) -> str:
+    """Те же относительные импорты другой записью: в скобках на несколько строк или модулем
+    целиком (`from ..report import sarif` вместо `from ..report.sarif import …`)."""
+    def one(m: re.Match) -> str:
+        dots, mod, names = m.group(1), m.group(2), m.group(3)
+        if how == "в скобках":
+            return f"from {dots}{mod} import (\n    {names},\n)"
+        head, _, last = mod.rpartition(".")
+        return f"from {dots}{head} import {last}"
+    return re.sub(r"^from (\.+)([\w.]+) import ([^(\n]+)$", one, source, flags=re.M)
+
+
 def _v_file_rules(source: str) -> list[str]:
     return SourceRuleTest._file_rules_without_samples(source)
 
@@ -9862,6 +9904,11 @@ SOURCE_MUTATIONS = {
         "как написано": _reparsed,
         "список команд в имени": _hoist_iters,
     }, True),
+    "_layer_violations": Mutated(_v_layers, _import_up, {
+        "как написано": lambda s: s,
+        "импорт в скобках": lambda s: _imports_respelled(s, "в скобках"),
+        "модуль целиком": lambda s: _imports_respelled(s, "модуль целиком"),
+    }, False),
     "_file_rules_without_samples": Mutated(_v_file_rules, _file_rule_without_sample, {
         "как написано": _reparsed,
         "файл сначала в имени": _file_read_into_a_name,
@@ -10001,13 +10048,17 @@ def _layers(init_text: str) -> tuple[str, ...]:
     return ()
 
 
-def _layer_violations(files: dict[str, str], layers: tuple[str, ...]) -> list[str]:
+def _layer_violations(files: dict[str, str]) -> list[str]:
     """Импорты пакета против порядка слоёв: модуль стоит только на слоях ДО своего.
 
-    Файлы — по пути от `scripts/`, как их отдаёт `tool_files`. Модули команд — один слой
-    `commands` и друг друга не импортируют. Модуль, которого нет в LAYERS, — тоже нарушение:
-    иначе новый модуль жил бы вне правила, и оно молча зеленело бы на нём.
+    Файлы — по пути от `scripts/`, как их отдаёт `tool_files`; порядок — LAYERS из
+    `finetooth/__init__.py` среди них же. Модули команд — один слой `commands` и друг друга
+    не импортируют. Модуль, которого нет в LAYERS, и слой без модуля — тоже нарушения:
+    иначе новый модуль жил бы вне правила, а порядок описывал бы не тот пакет.
     """
+    layers = _layers(files.get("finetooth/__init__.py", ""))
+    if not layers:
+        return ["в finetooth/__init__.py нет LAYERS — правилу нечем мерить"]
     def name(rel: str) -> str:
         parts = rel.removeprefix("finetooth/").removesuffix(".py").split("/")
         return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
@@ -10015,7 +10066,12 @@ def _layer_violations(files: dict[str, str], layers: tuple[str, ...]) -> list[st
     def layer(mod: str) -> str:
         return "commands" if mod.startswith("commands.") else mod
 
-    out = []
+    modules = [name(rel) for rel in files
+               if rel.startswith("finetooth/") and not rel.endswith("__init__.py")]
+    packages = {name(rel) for rel in files
+                if rel.startswith("finetooth/") and rel.endswith("/__init__.py")}
+    out = [f"{lay}: слой в LAYERS без модуля" for lay in layers
+           if lay not in {layer(m) for m in modules}]
     for rel, text in sorted(files.items()):
         if not rel.startswith("finetooth/") or rel.endswith("__init__.py"):
             continue
@@ -10027,8 +10083,10 @@ def _layer_violations(files: dict[str, str], layers: tuple[str, ...]) -> list[st
         for node in ast.walk(ast.parse(text)):
             if isinstance(node, ast.ImportFrom) and node.level:
                 base = package[:len(package) - (node.level - 1)]
-                targets = ([".".join(base + [node.module])] if node.module
-                           else [".".join(base + [a.name]) for a in node.names])
+                where = ".".join(base + ([node.module] if node.module else []))
+                # `from ..report import sarif` берёт ПОДМОДУЛЬ: из пакета импортируют модули
+                targets = ([f"{where}.{a.name}".lstrip(".") for a in node.names]
+                           if not node.module or where in packages else [where])
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
                         else [node.module or ""])
@@ -10051,40 +10109,36 @@ class PackageLayerTest(unittest.TestCase):
     только на слоях до своего, команды друг друга не зовут. Порядок объявлен один раз — в
     `finetooth/__init__.py`; тест читает его и каждый импорт пакета."""
 
-    def setUp(self) -> None:
-        self.files = {rel: p.read_text(encoding="utf-8") for rel, p in tool_files().items()}
-        self.layers = _layers(self.files["finetooth/__init__.py"])
-
     def test_импорты_пакета_идут_только_вниз_по_слоям(self):
-        self.assertTrue(self.layers, "в finetooth/__init__.py нет LAYERS — правило смотрит не туда")
-        self.assertEqual(_layer_violations(self.files, self.layers), [])
-
-    def test_в_layers_нет_слоя_без_модуля(self):
-        names = {rel.removeprefix("finetooth/").removesuffix(".py").replace("/", ".")
-                 for rel in self.files if rel.startswith("finetooth/")}
-        present = {"commands" if n.startswith("commands.") else n for n in names}
-        self.assertEqual(sorted(set(self.layers) - present), [],
-                         "слой назван в LAYERS, а модуля нет — порядок описывает не тот пакет")
+        files = {rel: p.read_text(encoding="utf-8") for rel, p in tool_files().items()}
+        self.assertEqual(_layer_violations(files), [])
 
     def test_правило_слоёв_краснеет_на_каждой_форме_нарушения(self):
-        layers = ("base", "git", "commands", "cli")
+        init = {"finetooth/__init__.py": 'LAYERS = ("base", "git", "commands", "cli")\n',
+                "finetooth/cli.py": "", "finetooth/commands/a.py": "", "finetooth/commands/b.py": ""}
         bad = {
             "импорт вверх": {"finetooth/base.py": "from .git import git\n"},
             "команда зовёт команду": {"finetooth/commands/a.py": "from .b import run\n"},
             "импорт пакета через точку": {"finetooth/base.py": "from . import git\n"},
+            "подмодуль из пакета": {"finetooth/git.py": "from .commands import a\n"},
             "модуль вне LAYERS": {"finetooth/extra.py": "x = 1\n"},
             "цель вне LAYERS": {"finetooth/git.py": "from .extra import x\n"},
             "абсолютное имя пакета": {"finetooth/git.py": "from finetooth.cli import main\n"},
             "из команды — наверх": {"finetooth/commands/a.py": "from ..cli import main\n"},
+            "слой без модуля": {"finetooth/base.py": None},
+            "нет LAYERS": {"finetooth/__init__.py": "\n"},
         }
-        for form, files in bad.items():
-            with self.subTest(форма=form):
-                self.assertNotEqual(_layer_violations(files, layers), [], form)
-        good = {"finetooth/git.py": "from .base import die\n",
+        good = {**init, "finetooth/base.py": "", "finetooth/git.py": "from .base import die\n",
                 "finetooth/commands/a.py": "from ..git import git\nfrom ..base import die\n",
-                "finetooth/cli.py": "from .commands.a import run\n",
+                "finetooth/cli.py": "from .commands.a import run\nfrom .commands import b\n",
+                "finetooth/commands/__init__.py": "",
                 "review.py": "from finetooth.cli import main\n"}
-        self.assertEqual(_layer_violations(good, layers), [], "правило придирается к верному")
+        self.assertEqual(_layer_violations(good), [], "правило придирается к верному")
+        for form, change in bad.items():
+            files = {**good, **change}
+            files = {rel: text for rel, text in files.items() if text is not None}
+            with self.subTest(форма=form):
+                self.assertNotEqual(_layer_violations(files), [], form)
 
 
 class RecordedFindingsImportTest(unittest.TestCase):
