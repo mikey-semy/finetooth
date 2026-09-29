@@ -207,6 +207,13 @@ FIX_AGE_DAYS = 7
 CLAIM_MAX = 220
 SCENARIO_MAX = 700
 ROLES = ["hunter", "verify", "fix", "fixreview"]
+# The roles whose reports carry hypothesis verdicts, in the order they are overlaid: the
+# verifier last, because its template tells it to override a verdict it disagrees with. One
+# list for every reader of a verdict — `verdicts_for`, the conflict gate and the gate on a
+# confirmation without a finding: while the last read two of the three, a hypothesis confirmed
+# in the fix report answered the verdict gate and escaped the finding gate (fix review of the
+# 0.8.0 candidate). The fix reviewer writes no hypothesis verdicts.
+VERDICT_ROLES = ("hunter", "fix", "verify")
 # The severity from which a fix-review finding earns another round — rule 11 of the fix
 # reviewer's template, from the method author's own review: low ones are fixed by the lead
 # without a round. The loop signal asks the same question of the previous round's top finding.
@@ -309,7 +316,7 @@ MSG = {
   "loop_stop": "loop signal: the top finding lies in the code the previous round wrote — the human decides. {id} ({sev}, {file}:{line}) of fix review round {prev} sits on a line fix round {prev} changed ({diff}); another round would repeat that pattern. Record the decision — a different mechanism, a revert of the class, or closing the block — with `{cli} decide {block} \"<decision>\"`: it goes into the next fix and fix review prompts. If the decision is to close the block: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, after fix review round {round}: {text}",
   "draft_unimported": "{block}: the draft {draft} holds {n} row(s) the register does not — the findings the block's verification wrote are not in the review: `summary`, `findings.md`, `sarif` and the fix gate do not see them. Take them in: `{cli} import {block}` when the block has nothing recorded yet, `{cli} import {block} --append` on top of what is recorded; then `{cli} findings`.",
-  "confirmed_no_finding": "{block}: {report} confirms hypothesis {h} but names no finding — a confirmed hypothesis is a defect, and a defect that is not a finding reaches neither the register nor the fix gate. Write it up in the draft {draft} and put its id on the verdict line: `{h} — confirmed: {block}-NNN — <what proves it>`. If what was confirmed is not a defect, the verdict is `{h} — refuted: <why it is not a defect>`, without the word confirmed.",
+  "confirmed_no_finding": "{block}: {report} confirms hypothesis {h} but names no finding. The way out depends on what the verdict means. The defect is there: a confirmed hypothesis is a defect, and a defect that is not a finding reaches neither the register nor the fix gate — write it up in the draft {draft} and put its id on the verdict line: `{h} — confirmed: {block}-NNN — <what proves it>`. It is not a defect, and the word only stands in the proof (\"no defect was confirmed\", \"the guard is there, confirmed by the test\"): rewrite the verdict as `{h} — refuted: <why it is not a defect>`, with no word confirmed on its line or in the proof under it — the gate reads both. The line is the template's sample copied as it stands (`{block}-NNN`, `<what exactly proves it>`): it answers nothing — check the hypothesis and write the verdict you reached.",
   "confirmed_unknown_finding": "{block}: {report} confirms hypothesis {h} with {ids}, which neither the draft {draft} nor the register holds — name the id the finding has (or will get on import, in the draft's order from the prompt's first new id), or write the finding up in the draft. If what was confirmed is not a defect, the verdict is `{h} — refuted: <why it is not a defect>`.",
   "draft_unreadable": "{block}: the draft {draft} cannot be read, so its findings are not in the register — {why}. Fix the line, then `{cli} import {block}` (or `--append` on top of what is recorded).",
   "f_where": "**Location:**", "f_claim": "**What is wrong:**", "f_scenario": "**Failure scenario:**", "f_invariant": "**Violated invariant:**", "f_conf": "confidence",
@@ -479,7 +486,7 @@ Next — by hand, and this is not a formality:
   "loop_stop": "сигнал петли: главная находка лежит в коде, который написал прошлый круг, — решает человек. {id} ({sev}, {file}:{line}) из ревью правок круга {prev} стоит на строке, которую изменил круг починки {prev} ({diff}); ещё один круг повторит тот же узор. Запишите решение — другой механизм, откат класса или закрытие блока — командой `{cli} decide {block} \"<decision>\"`: оно попадёт в задания следующего круга починки и ревью правок. Если решено закрыть блок: `{cli} set-status {block} closed`.",
   "dec_row": "- **{date}**, после ревью правок круга {round}: {text}",
   "draft_unimported": "{block}: в черновике {draft} есть строки, которых нет в реестре (неимпортированных строк: {n}) — находки, записанные проверкой блока, в ревью не попали: их не видят `summary`, `findings.md`, `sarif` и ворота починки. Внесите их: `{cli} import {block}`, если по блоку ещё ничего не записано, `{cli} import {block} --append` — поверх записанного; затем `{cli} findings`.",
-  "confirmed_no_finding": "{block}: {report} подтверждает гипотезу {h}, но не называет ни одной находки — подтверждённая гипотеза есть дефект, а дефект, не оформленный находкой, не попадает ни в реестр, ни в ворота починки. Оформите его в черновике {draft} и поставьте номер на строку вердикта: `{h} — подтверждена: {block}-NNN — <чем доказано>`. Если подтверждённое — не дефект, вердикт `{h} — опровергнута: <почему это не дефект>`, без слова «подтверждена».",
+  "confirmed_no_finding": "{block}: {report} подтверждает гипотезу {h}, но не называет ни одной находки. Выход зависит от того, что значит вердикт. Дефект есть: подтверждённая гипотеза есть дефект, а дефект, не оформленный находкой, не попадает ни в реестр, ни в ворота починки, — оформите его в черновике {draft} и поставьте номер на строку вердикта: `{h} — подтверждена: {block}-NNN — <чем доказано>`. Дефекта нет, а слово стоит только в доказательстве («гард на месте — подтверждена тестом»): перепишите вердикт как `{h} — опровергнута: <почему это не дефект>`, без слова «подтверждена» ни в строке, ни в доказательстве под ней — ворота читают и то и другое. Строка — образец шаблона, скопированный как есть (`{block}-NNN`, `<чем именно доказано>`): она ни на что не отвечает — проверьте гипотезу и запишите вердикт, к которому пришли.",
   "confirmed_unknown_finding": "{block}: {report} подтверждает гипотезу {h} находкой {ids}, которой нет ни в черновике {draft}, ни в реестре — назовите номер, который у находки есть (или будет при импорте: по порядку черновика от первого нового номера из промпта), либо оформите находку в черновике. Если подтверждённое — не дефект, вердикт `{h} — опровергнута: <почему это не дефект>`.",
   "draft_unreadable": "{block}: черновик {draft} не читается, и его находок нет в реестре — {why}. Исправьте строку, затем `{cli} import {block}` (или `--append` поверх записанного).",
   "f_where": "**Место:**", "f_claim": "**Что не так:**", "f_scenario": "**Сценарий отказа:**", "f_invariant": "**Нарушенный инвариант:**", "f_conf": "уверенность",
@@ -4550,7 +4557,12 @@ def render_decisions_for(block_id: str) -> str:
 
 
 def journal(block: str, text: str) -> None:
-    """Append a dated line to the journal — the log a human reads."""
+    """Append a dated line to the journal — the log a human reads. Every line the tool writes
+    comes through here (`log`, `decide`, `backfill`; `run-role.sh` calls `log`), and it only
+    appends, stamped now, so the tool cannot put a line out of time order. A journal edited on
+    two branches can: resolving the merge keeps each branch's lines as a block, and in the kit's
+    own review four such merges put a later line above an earlier one (fix review of the 0.8.0
+    candidate) — merging a journal, keep its lines in time order."""
     if not JOURNAL_FILE.exists():
         JOURNAL_FILE.write_text(T("journal_head"), encoding="utf-8")
     with JOURNAL_FILE.open("a", encoding="utf-8") as fh:
@@ -5198,10 +5210,7 @@ def cmd_backfill(args) -> int:
                 fh.write(json.dumps(f, ensure_ascii=False) + "\n")
         FINDINGS_MD.write_text(render_findings_md(rows), encoding="utf-8")
     note = T("backfill_note", head=head, blocks=", ".join(stamped_blocks) or "—", n=len(stamped_findings))
-    if not JOURNAL_FILE.exists():
-        JOURNAL_FILE.write_text(T("journal_head"), encoding="utf-8")
-    with JOURNAL_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(f"- **{now()}** · `backfill` — {note}\n")
+    journal("backfill", note)
     print(note)
     return 0
 
@@ -5644,11 +5653,25 @@ def verdicts_for(b: dict) -> dict[str, str]:
     of seniority.
     """
     out: dict[str, str] = {}
-    for role in ("hunter", "fix", "verify"):  # verify last — it is the one that overrides
-        p = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
-        if p.exists():
-            out.update(verdicts_in(p.read_text(encoding="utf-8"), b["id"]))
+    for p in verdict_reports(b):
+        out.update(verdicts_in(p.read_text(encoding="utf-8"), b["id"]))
     return out
+
+
+def verdict_reports(b: dict) -> list[Path]:
+    """The block's reports that carry hypothesis verdicts, in VERDICT_ROLES order — the files
+    every reader of a verdict opens, so no gate reads fewer of them than the parser does."""
+    stem = REVIEW / "reports" / f"{b['id']}-{b['slug']}"
+    paths = []
+    for role in VERDICT_ROLES:
+        paths.append(Path(f"{stem}.{role}.md"))
+        if role == "fix":
+            # later fixer passes (prompt --role fix --round N) write .fix-N.md — same verdicts
+            later = stem.parent.glob(f"{stem.name}.fix-*.md")
+            rounds = [(int(q.name[len(stem.name) + 5:-3]), q) for q in later
+                      if q.name[len(stem.name) + 5:-3].isdigit()]
+            paths += [q for _, q in sorted(rounds)]
+    return [p for p in paths if p.exists()]
 
 
 def cmd_hypotheses(args) -> int:
@@ -6176,15 +6199,13 @@ def cmd_check(args) -> int:
             continue
         if stt not in POST_VERIFY:
             continue
-        for role in ("hunter", "fix", "verify"):
-            rp = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
-            if rp.exists():
-                for h, vs in verdict_conflicts(rp.read_text(encoding="utf-8"), b["id"]).items():
-                    gates.refuse(
-                        "report/verdicts-conflict",
-                        f"{b['id']}: {rp.name} gives hypothesis {h} different verdicts "
-                        f"({' / '.join(vs)}) — the outcome would depend on line order; leave one"
-                    )
+        for rp in verdict_reports(b):
+            for h, vs in verdict_conflicts(rp.read_text(encoding="utf-8"), b["id"]).items():
+                gates.refuse(
+                    "report/verdicts-conflict",
+                    f"{b['id']}: {rp.name} gives hypothesis {h} different verdicts "
+                    f"({' / '.join(vs)}) — the outcome would depend on line order; leave one"
+                )
         seen = verdicts_for(b)
         missing = [h for h in ids if h not in seen]
         if missing:
@@ -6199,7 +6220,7 @@ def cmd_check(args) -> int:
     # CONFIRM_WORDS). From the hunt on: the hunter's draft is there, and the ids it will get
     # on import are known, so the refusal comes while the hunter's work is still fresh. Every
     # block, the closed ones of a review begun on an older kit included: on the kit's own
-    # review (T1–T4, eight hunter and verifier reports) the rule refuses nothing, and a closed
+    # review (T1–T4, twelve hunter, fix and verifier reports) the rule refuses nothing, and a closed
     # block elsewhere that it does refuse holds exactly the defect the rule exists to recover.
     block_ids = [b["id"] for b in defn["blocks"]]
     for b in defn["blocks"]:
@@ -6207,10 +6228,7 @@ def cmd_check(args) -> int:
             continue
         known = finding_ids_for(b, rows)
         draft = block_findings_path(b).relative_to(ROOT).as_posix()
-        for role in ("hunter", "verify"):
-            rp = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
-            if not rp.exists():
-                continue
+        for rp in verdict_reports(b):
             for h, unknown in confirmed_without_finding(
                     rp.read_text(encoding="utf-8"), b["id"], known, block_ids):
                 gates.refuse(

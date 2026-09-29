@@ -73,8 +73,9 @@ explanation. The state check requires a verdict for all hypotheses of the block.
 hunter's draft, or of your own new one in the final file (numbered on from the block's highest
 recorded id, in the file's order). A defect confirmed only in a verdict, a table or a live
 check and never written up is lost to the register; what you confirmed that is not a defect
-is `refuted: not a defect — <why>`, without the word "confirmed" on the line. The state check
-refuses a confirmation with no finding id, or with one neither the draft nor the register holds.
+is `refuted: not a defect — <why>`, without the word "confirmed" on the line or in the proof
+under it. The state check refuses a confirmation with no finding id, or with one neither the
+draft nor the register holds.
 Write it as an ordinary line, outside code blocks and quotations: a ``` or ~~~ fence, a
 block indented by four spaces, a line behind `>` and an `<!-- html comment -->` are all
 read as examples, and a verdict word alone in backticks is a quotation of the word. The

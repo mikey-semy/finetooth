@@ -125,8 +125,9 @@ or a run log and never written up reaches neither the register nor the fix gate,
 how the recall measurement lost half of the defects it found only partly. If what you
 confirmed turns out not to be a defect — the behaviour is intended, the scenario is ruled out
 higher up — the verdict is not "confirmed" but `refuted: not a defect — <why>`, and the word
-"confirmed" does not appear on that line. The state check refuses a confirmation that names
-no finding, or names an id that neither the draft nor the register holds.
+"confirmed" appears neither on that line nor in the proof under it ("the guard is there,
+confirmed by the test" reads as a confirmation). The state check refuses a confirmation that
+names no finding, or names an id that neither the draft nor the register holds.
 
 **Write the verdict as an ordinary line of the report, outside code blocks and quotations.**
 Everything markdown treats as quoted is read as an example, not as an answer — a ``` or ~~~
