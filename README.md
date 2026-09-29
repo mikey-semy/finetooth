@@ -698,7 +698,26 @@ it and a test that goes red on that change.
 skills/finetooth/                THE SKILL — this is what gets installed into the agent
   SKILL.md                        when to apply and the order of work (read by the agent)
   LICENSE                         terms — travel with the skill
-  scripts/review.py               the tool: every command in the table under "Commands"
+  scripts/review.py               the command: every command in the table under "Commands";
+                                  the code is the `finetooth/` package next to it
+  scripts/finetooth/              the tool, one module per concern; a module imports only
+                                  modules listed before it here, never one after
+    base.py, git.py               the skill's location, version, errors; git.py is the ONE
+                                  place a process is started
+    workspace.py, model.py        where the review lives on disk; statuses, roles, limits
+    i18n.py, text.py              messages en/ru; reading markdown: quoted vs said, sections
+    fingerprint.py, blocks.py     fingerprints of code; blocks, their state and stamps
+    register.py, verdicts.py      the findings register; hypotheses and their verdicts
+    coverage.py, history.py       who owns which file, freshness; co-change, churn, order
+    seams.py, journal.py          seams between blocks; the journal and the loop signal
+    gates.py, importing.py        refusals and the gates of a finding row; importing a draft
+    roles.py, settings.py         pieces of a role prompt; the project's own deny rules
+    report/sarif.py, summary.py,  SARIF export, the markdown and the HTML summary
+    report/html.py, refs.py       finding ids left in code and documents
+    commands/*.py                 the commands, a file per group: setup.py, status.py,
+                                  coverage.py, history.py, findings.py, prompt.py,
+                                  report.py, check.py
+    cli.py, __init__.py           arguments and dispatch; __init__.py marks each package
   scripts/axes.py                 the spend of a headless run, broken down by axis
   references/hunter.md            hunter: reads the block's files and raises findings
   references/verify.md            verifier: its own independent pass, three verdicts

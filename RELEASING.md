@@ -55,7 +55,7 @@ nothing but this list holds them. That is said here plainly because calling all 
    a version and the gates above hold, a PR `dev → master` carries the version bump and the
    CHANGELOG section; it is merged with a merge commit, so `master` keeps the release
    history readable.
-2. Bump `VERSION` in `skills/finetooth/scripts/review.py` and `version` in
+2. Bump `VERSION` in `skills/finetooth/scripts/finetooth/base.py` and `version` in
    `skills/finetooth/SKILL.md` in the same PR that moves **Unreleased** under the new
    version heading. (The two must agree: a test compares them.)
 3. After the merge into `master`: annotated tag `vX.Y.Z` on the merge commit, `gh release create` with the

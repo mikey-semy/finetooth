@@ -671,7 +671,26 @@ python3 -m unittest discover -s tests
 skills/finetooth/                СКИЛЛ — это и ставится агенту
   SKILL.md                        когда применять и порядок работы (читает агент)
   LICENSE                         условия — едут вместе со скиллом
-  scripts/review.py               инструмент: все команды из таблицы в разделе «Команды»
+  scripts/review.py               команда: все команды из таблицы в разделе «Команды»;
+                                  код — пакет `finetooth/` рядом с ней
+  scripts/finetooth/              инструмент, модуль на предмет; модуль импортирует только
+                                  модули, названные здесь раньше него, никогда — позже
+    base.py, git.py               где лежит скилл, версия, ошибки; git.py — ЕДИНСТВЕННОЕ
+                                  место, где запускается процесс
+    workspace.py, model.py        где ревью лежит на диске; статусы, роли, пределы
+    i18n.py, text.py              сообщения en/ru; чтение markdown: цитата или сказано, разделы
+    fingerprint.py, blocks.py     отпечатки кода; блоки, их состояние и отметки
+    register.py, verdicts.py      реестр находок; гипотезы и их вердикты
+    coverage.py, history.py       чей какой файл, свежесть дерева; совместные правки, порядок
+    seams.py, journal.py          стыки между блоками; журнал и сигнал кругов
+    gates.py, importing.py        отказы и ворота строки находки; импорт черновика
+    roles.py, settings.py         части промпта роли; собственные запреты проекта
+    report/sarif.py, summary.py,  выгрузка SARIF, сводка в markdown и в HTML
+    report/html.py, refs.py       id находок, оставленные в коде и документах
+    commands/*.py                 команды, файл на группу: setup.py, status.py,
+                                  coverage.py, history.py, findings.py, prompt.py,
+                                  report.py, check.py
+    cli.py, __init__.py           разбор аргументов и вызов команды; __init__.py отмечает пакет
   scripts/axes.py                 расход безголового прогона в разбивке по осям
   references/hunter.md            охотник: читает файлы блока и выдвигает находки
   references/verify.md            проверяющий: свой независимый проход, три вердикта

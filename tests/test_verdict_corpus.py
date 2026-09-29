@@ -21,10 +21,11 @@ Run: python3 -m unittest discover -s tests
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
 import os
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -37,10 +38,10 @@ BLOCK = "T1"
 
 
 def load_tool():
-    spec = importlib.util.spec_from_file_location("finetooth_review", TOOL)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The verdict parser — `finetooth.verdicts`, the package module next to the command."""
+    if str(TOOL.parent) not in sys.path:
+        sys.path.insert(0, str(TOOL.parent))
+    return importlib.import_module("finetooth.verdicts")
 
 
 FORM = re.compile(
