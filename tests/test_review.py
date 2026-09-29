@@ -3888,6 +3888,16 @@ class ProjectDenyRulesTest(unittest.TestCase):
         self.assertIn("hits `pytest` (roles: hunter, verify, fix, fixreview)", text)
         self.assertIn("python3 -m pytest", text, "совет называет рабочую форму команды")
 
+    def test_запрет_оболочки_назван_как_запрет_скрипта_перечня(self):
+        """Скрипт перечня роли запускают `bash docs/review/sweeps/…`; правило роли кончается
+        путём со звёздочкой, а не `prefix *`, и прежде в сверку не попадало: проект с запретом
+        `Bash(bash *)` не узнавал, что перечень не запустится (замечание Codex к #73)."""
+        self._settings("settings.json", json.dumps({"permissions": {"deny": ["Bash(bash *)"]}}))
+        out = self._setup()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("hits `bash docs/review/sweeps/` (roles: hunter, verify, fix, fixreview)",
+                      out.stdout)
+
     def test_обёртка_с_аргументами_опций_снимается_целиком(self):
         """Обёртку Claude Code снимает до сравнения, и снимать её надо вместе с аргументами
         её опций и позиционными: иначе `timeout -s KILL 5 pytest` читался как `KILL 5
@@ -5847,6 +5857,28 @@ class SpendTest(unittest.TestCase):
                 for t in want:
                     self.assertIn(t, tools, f"{role}: {t} не одобрен заранее")
                 for t in unwanted:
+                    self.assertNotIn(t, tools, f"{role}: {t} шире, чем нужно роли")
+
+    def test_каждая_роль_может_запустить_скрипт_перечня(self):
+        """Скрипт перечня (`docs/review/sweeps/<ID>.<ext>`) — доказательство полноты перебора,
+        а скрипт на оболочке не запускался вовсе: в прогоне ворот 3 перед 0.8.0 охотник
+        написал `Q1.sh`, обе роли получили отказ на `bash`, и доказательство не выполнил
+        никто. `bash`/`sh` одобрены заранее — только для этого каталога, не вообще."""
+        for role in ("hunter", "verify", "fix", "fixreview"):
+            with self.subTest(роль=role):
+                self.s = Stand()
+                self.addCleanup(self.s.cleanup)
+                def second() -> None:
+                    self.s.write("src/one.ts", "b\n")
+                    self.s.commit()
+                out, _ = self._run_role(exit_code=0, role=role,
+                                        before=second if role == "fixreview" else None)
+                self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+                args = self._claude_args()
+                tools = args[args.index("--allowedTools") + 1].split(",")
+                for t in ("Bash(bash docs/review/sweeps/*)", "Bash(sh docs/review/sweeps/*)"):
+                    self.assertIn(t, tools, f"{role}: {t} не одобрен заранее")
+                for t in ("Bash(bash *)", "Bash(sh *)"):
                     self.assertNotIn(t, tools, f"{role}: {t} шире, чем нужно роли")
 
     def test_без_role_deny_запрета_нет(self):

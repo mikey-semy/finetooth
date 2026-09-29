@@ -44,6 +44,11 @@ set -euo pipefail
 BLOCK="${1:?block id}"; ROLE="${2:?role}"; shift 2
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVIEW="${REVIEW:-python3 $HERE/../scripts/review.py}"
+# The sweep script (docs/review/sweeps/<ID>.<ext>) is what proves an enumeration complete, and
+# a shell one could not be run at all: the 0.8.0 gate-3 run wrote `Q1.sh`, both roles were
+# refused `bash` on it, and nobody ever ran the proof. `bash`/`sh` are pre-approved for that
+# directory only.
+#
 # Pre-approvals, not limits: whatever the operator's settings allow is allowed on top of
 # these lists, so "the verifier has no network" is not something a list can promise. What a
 # run must not do goes into ROLE_DENY (see the header).
@@ -54,9 +59,9 @@ case "$ROLE" in
   # how a uv project runs its tests: a field hunter without it wrapped `.venv/bin` into PATH
   # (see #45). verify, fix and fixreview get `uv *` too — a stand or a fix may need
   # `uv sync` first; the hunter gets only `uv run`, since `uv add` changes project files.
-  hunter)    CAP=110; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(make *)";;
-  verify)    CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(uv *),Bash(make *)";;
-  fix|fixreview) CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(uv *),Bash(make *)";;
+  hunter)    CAP=110; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(make *),Bash(bash docs/review/sweeps/*),Bash(sh docs/review/sweeps/*)";;
+  verify)    CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(uv *),Bash(make *),Bash(bash docs/review/sweeps/*),Bash(sh docs/review/sweeps/*)";;
+  fix|fixreview) CAP=330; TOOLS="Read,Grep,Glob,Write,Edit,Bash(git *),Bash(grep *),Bash(rg *),Bash(ls *),Bash(wc *),Bash(find *),Bash(cat *),Bash(sed *),Bash(head *),Bash(tail *),Bash(npm test *),Bash(npm run *),Bash(npx *),Bash(node *),Bash(python3 *),Bash(pytest *),Bash(uv run *),Bash(uv *),Bash(make *),Bash(bash docs/review/sweeps/*),Bash(sh docs/review/sweeps/*)";;
   *) echo "unknown role: $ROLE" >&2; exit 2;;
 esac
 CAP="${ROLE_MAX_TURNS:-$CAP}"

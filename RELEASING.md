@@ -46,12 +46,14 @@ nothing but this list holds them. That is said here plainly because calling all 
 - **`dev`** — integration, the default branch. Feature branches start here and come back
   here through a PR with green CI. `dev` may be ahead of the last release for weeks; that is
   its job.
-- **Feature branches** — `feat/…`, `fix/…`, `docs/…` from `dev`, one problem each, squash
-  merged into `dev`.
+- **Feature branches** — `feat/…`, `fix/…`, `docs/…` from `dev`, one problem each, merged
+  into `dev` with a merge commit: a pull request's commits are its steps (a mechanical move,
+  a feature on top, the register after it), and a squash would make them one change nobody
+  can review or revert by parts.
 
 ## How a release happens
 
-1. Feature branches → PRs → green CI → squash merge into `dev`. When **Unreleased** is worth
+1. Feature branches → PRs → green CI → merge into `dev` (a merge commit, see Branches). When **Unreleased** is worth
    a version and the gates above hold, a PR `dev → master` carries the version bump and the
    CHANGELOG section; it is merged with a merge commit, so `master` keeps the release
    history readable.

@@ -9,6 +9,13 @@ with a review already under way.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-29
+
+Released five days after 0.7.0, ahead of the one-release-a-week cadence, by the maintainer's
+decision: a field report on 0.7.0 (roles run as agents inside one session exhausting a plan's
+usage window within the hour) is answered by what this release carries — `run-role.sh`, the
+turn caps, fix batches of three and the note on restarting an interrupted role.
+
 The release that carries the kit's review of itself (blocks T1–T4) and what that review and
 the first field runs asked for. New commands: `order`, `coupling` and `seams` (which block to walk
 first, the seams between blocks and inside one), `summary` (the one file that outlives `docs/review/`),
@@ -108,6 +115,7 @@ there names the command that makes it green again.
 
 ### Fixed
 
+- **A shell sweep script could not be run by any role.** The sweep script (`docs/review/sweeps/<ID>.<ext>`) is what proves an enumeration complete, and `run-role.sh` pre-approved `python3` and `node` but not `bash` or `sh`: in the 0.8.0 gate-3 run the hunter wrote `Q1.sh`, both roles were refused on it, and the proof was never run while `check` stayed green (it asks only that the file exists). `bash` and `sh` are now pre-approved for `docs/review/sweeps/` only, for every role. `setup` reads these path-glob approvals too, so a project that denies `Bash(bash *)` is told its sweep cannot run (Codex on #73). Held by `test_каждая_роль_может_запустить_скрипт_перечня` and `test_запрет_оболочки_назван_как_запрет_скрипта_перечня`, each red under mutation.
 - **Re-setting a block's status no longer re-takes its fingerprint.** `set-status <ID> verified` or `closed` on a block already in that status called the same stamping as a real transition: `reviewed_sha`, `refs_sha` and `hypotheses_sha` were re-taken on today's code, without `restamped_at` and without a journal line, and a `state/files-changed` refusal disappeared — a block closed on one version of the code started to certify another. This release made the repeat a routine step (it is how a review under way records `read_lines`), which is how the fix review of the 0.8.0 candidate found it. A repeat now records the read size, if missing, and touches nothing else; re-taking the fingerprint stays with `restamp`, which says so on record. Mutation: the stamp called on a repeat again → `test_повторный_статус_записывает_размер_но_не_отпечаток` red, on both `verified` and `closed`.
 - **A finding whose `file` is `null` or a number no longer crashes `import --dry-run` and `check`.** `f.get("file", "")` falls back only when the key is missing, so `"file": null` reached the path code as `None` and `"file": 12` as a number: a traceback and exit 1, which in this tool means "the state is red", and the dry run died before printing the one line that would fix the draft. A null file is now named as an empty required field (`field file is empty`, in the dry run and in `check` alike); any other non-string as `file=12 is not a path`, and `check` refuses it under its own key, `finding/file-not-a-string`. Nothing to do for a review under way: a register with such a row crashed `check` before. Mutations, each red on `test_файл_находки_не_строкой`: the type guard dropped from `location_problems`; the new refusal dropped from `check` (it is in the gate registry); the guard dropped from `file_sha`; the not-a-path message dropped.
 - **Every command reads a finding's `file` through one rule, whatever JSON value it holds.** The fix above closed `import --dry-run` and `check` for `null` and a number; the other commands still read the field themselves. `findings` died on `+=` for any non-string, `sarif` on `removeprefix` for a number, the line lookup every display shares (`findings`, `summary`, `summary --html`, `sarif`, `roots`, the prompts) on a list or an object used as a cache key, and `check` on the set of paths a fixed finding's commit is compared with when `file` was a list or an object; a plain `import`, `--force` and `--append` took such a row into the register without a word. Now `finding_file` is the only reader — a string is the path, anything else is no file — and `file_problem` the only message: `file=[...] is not a path` in `check` (`finding/file-not-a-string`, and no longer "field file is empty" on top of it for `0`, `false`, `[]` or `{}`), in the dry run, in `restamp`, and in every path of `import`, which now stops on the row with the dry run's words (a written but empty or null `file` is stopped as empty; a row with no `file` key is left to `check`, as before). Nothing to do for a review under way: a register with such a row crashed these commands before. Mutations, each red on `test_файл_находки_любой_формы_во_всех_командах` (nine forms × open, deferred and fixed × `findings`, `sarif`, `summary`, `summary --html`, `roots`, `status`, `prompt` for hunter and fixer, `coverage`, `check`, `restamp`, `backfill`, and the draft through the dry run and the three imports): `finding_file` passing any non-null value through; `sarif` reading the raw field; the `import` refusal dropped; the fixed-commit comparison reading the raw field; the line cache keyed by the raw field; `findings.md` reading the raw field; the second "empty" refusal back in `check`; `file_problem` skipping falsy values; the `restamp` refusal dropped.
@@ -787,7 +795,8 @@ world practice.
   exist — the working copy of the neighbouring repository was 12 days behind. What failed was not
   the reasoning but the tree's freshness; hence the freshness check and the rule in the prompts.
 
-[Unreleased]: https://github.com/mikey-semy/finetooth/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mikey-semy/finetooth/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/mikey-semy/finetooth/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mikey-semy/finetooth/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mikey-semy/finetooth/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/mikey-semy/finetooth/compare/v0.5.0...v0.5.1

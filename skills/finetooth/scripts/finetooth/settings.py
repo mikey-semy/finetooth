@@ -108,14 +108,17 @@ def simple_commands(command: str) -> list[str]:
 
 def role_commands() -> dict[str, list[str]]:
     """The command prefixes the roles are pre-approved for, read from run-role.sh: for each
-    `Bash(prefix *)` in a role's list, the prefix, with the roles that have it."""
+    `Bash(prefix *)` in a role's list, the prefix, with the roles that have it. A rule that
+    ends in a path glob (`Bash(bash docs/review/sweeps/*)`) gives the command up to the `*`:
+    reading only the `prefix *` shape left the sweep script out, and a project denying
+    `Bash(bash *)` was never told its sweep cannot run (Codex on #73)."""
     out: dict[str, list[str]] = {}
     try:
         text = ROLE_RUNNER.read_text(encoding="utf-8")
     except OSError:
         return out
     for roles, tools in re.findall(r'^\s*([\w|]+)\)\s*CAP=\d+;\s*TOOLS="([^"]*)"', text, re.M):
-        for prefix in re.findall(r"Bash\(([^()*]+?) \*\)", tools):
+        for prefix in re.findall(r"Bash\(([^()*]+?)(?: \*|(?<=/)\*)\)", tools):
             for role in roles.split("|"):
                 if role not in out.setdefault(prefix, []):
                     out[prefix].append(role)
