@@ -332,6 +332,17 @@ a run, commits each as it lands, and the runner will not start a fixer or a fix 
 dirty tree (`ALLOW_DIRTY=1` to insist); the agent's PID sits in a `.pid` file next to the
 stream while it runs, so a stop reaches it, and stopping the script passes the stop on.
 
+**An interrupted role is started again, not continued.** The context is sent again on every
+turn and the prompt cache holds it only for minutes, so an agent continued after a pause (a
+usage limit, a crash, the night) pays for its whole context again. A field run (29.09, reported
+by the operator, on 0.7.0 with the roles as agents inside one session): 5–8 agents of 500–800k
+tokens each, continued after the plan's limit, took 15–20% of a five-hour window within a
+minute, and the limit itself came within the hour. The state of a review is on disk, so a role
+cut off is started anew on its block — `run-role.sh` never continues a session — and two or
+three roles at once is what a plan's window holds, with one writing role (`fix`, `fixreview`)
+per checkout: two writers in one tree commit each other's edits, so a second one gets a
+worktree of its own.
+
 The per-role tool lists the runner passes are pre-approvals, not limits: they add to what the
 operator's own permission settings allow. What a run must not reach goes into `ROLE_DENY`,
 passed to `claude -p` as `--disallowedTools` — details and a measured pitfall in
@@ -402,8 +413,8 @@ loop signal above stops the rounds for a human.
 - do not let one agent both hunt and fix;
 - do not close a block whose acceptance criterion is not met;
 - do not leave findings only in the conversation;
-- do not keep more than two or three agents at once if a build is running on the same
-  machine.
+- do not keep more than two or three agents at once: the plan's usage window runs out
+  before the machine does, and a build on the same machine makes it fewer still.
 
 The method's main blind spot is **how much it misses**. We know that what it finds is real
 (6 planted findings out of 6 rejected), and we do not know what share of what exists that is.
