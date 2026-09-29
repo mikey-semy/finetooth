@@ -1,6 +1,6 @@
 {
   "review_id": "finetooth-review",
-  "updated_at": "2026-09-29T03:57:49Z",
+  "updated_at": "2026-09-29T03:58:44Z",
   "blocks": {
     "T1": {
       "status": "closed",
@@ -8,10 +8,10 @@
       "finished": "2026-09-25T02:22:21Z",
       "reports": [],
       "note": "",
-      "reviewed_sha": "bd0a090aeae0a893",
+      "reviewed_sha": "a5a595a3e12b29e4",
       "refs_sha": "507d9f9e5702c24a",
       "hypotheses_sha": "4ab68e42761325b3",
-      "restamped_at": "2026-09-29T03:57:48Z",
+      "restamped_at": "2026-09-29T03:58:43Z",
       "read_lines": 5639
     },
     "T2": {
@@ -21,9 +21,9 @@
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
       "reviewed_sha": "4662dd58413e2587",
-      "refs_sha": "e898518998c38cff",
+      "refs_sha": "119e07a3835ca7c8",
       "hypotheses_sha": "1d5450e8e739f769",
-      "restamped_at": "2026-09-29T03:57:49Z",
+      "restamped_at": "2026-09-29T03:58:43Z",
       "read_lines": 3236
     },
     "T3": {
@@ -33,9 +33,9 @@
       "reports": [],
       "note": "closed after its last fix round on the loop signal (owner's decision for T2, same rule for T3/T4); 0 open, guard gaps deferred to #29/#31/#30",
       "reviewed_sha": "a28bffb19d423c0a",
-      "refs_sha": "e898518998c38cff",
+      "refs_sha": "119e07a3835ca7c8",
       "hypotheses_sha": "fcbe3731d494ce45",
-      "restamped_at": "2026-09-29T03:57:49Z"
+      "restamped_at": "2026-09-29T03:58:44Z"
     },
     "T4": {
       "status": "closed",
