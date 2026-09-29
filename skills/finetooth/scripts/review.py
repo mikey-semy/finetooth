@@ -3903,8 +3903,10 @@ def draft_lines(src: Path):
 def not_json(exc: json.JSONDecodeError) -> str:
     """What is wrong with a draft line JSON cannot read — and the way out, for someone
     seeing the draft format for the first time."""
-    return (f"not JSON — {exc}; one finding per line, as `{{...}}`: keys and strings in double "
-            f"quotes, no trailing comma")
+    # `exc.msg` and the column, not `str(exc)`: that one says "line 1 column 34" of the one
+    # line it was given, next to the draft's own line number.
+    return (f"not JSON — {exc.msg} at column {exc.colno}; one finding per line, as `{{...}}`: "
+            f"keys and strings in double quotes, no trailing comma")
 
 
 NOT_AN_OBJECT = "not a JSON object — one finding per line, as `{...}`"
@@ -4149,7 +4151,8 @@ class ImportWouldReplace(ImportRefused):
 
 def import_plan(block: str, name: str, numbered: list[tuple[int, dict]], existing: list[dict],
                 *, append: bool, force: bool, found_in: dict | None = None,
-                hold_rows: bool = True) -> tuple[list, list[dict], list[dict]]:
+                hold_rows: bool = True, refused: list[tuple[int, str]] | None = None,
+                ) -> tuple[list, list[dict], list[dict]]:
     """What `import` writes, computed without writing it: (the rows of the block's file after
     the import, the register after it, the rows of the register that are new or rewritten).
     Raises ImportRefused where `import` refuses. ONE place: `import` writes what this returns,
@@ -4159,7 +4162,14 @@ def import_plan(block: str, name: str, numbered: list[tuple[int, dict]], existin
     dry run and was refused by `check` a minute later (fix review of the 0.8.0 candidate).
     `hold_rows=False` is the dry run's: `check` holds the same two limits and the same rule
     for `file` (`file_problem`, the empty-field gate) and names every row that breaks them,
-    where `import` stops at the first."""
+    where `import` stops at the first.
+
+    `refused` is the dry run's too: a refusal that belongs to a row — an id numbered for
+    another block, an id two rows carry — is added to it as (line, message) instead of
+    raised, and the row is planned as it will be once fixed, without that id. Raised, the
+    first such refusal stopped the dry run before a single row was asked (Codex on #66): a
+    draft with two equal ids and a bad severity took two runs to fix."""
+    line_of = {id(row): n for n, row in numbered}
     incoming = []
     for n, row in numbered:
         # The limits `check` holds are held here too: a draft that `import` accepted and
@@ -4185,13 +4195,18 @@ def import_plan(block: str, name: str, numbered: list[tuple[int, dict]], existin
     # A row numbered for ANOTHER block (`V2-001` in the file of H1) is refused on every
     # path: the top-up skipped it silently as "already known", and the plain import would
     # file it under this block with a foreign number (the kit author's review, 24.09).
-    other = [f.get("id") for f in incoming
+    other = [f for f in incoming
              if isinstance(f.get("id"), str) and (m := re.fullmatch(r"(.+)-(\d+)", f["id"]))
              and m.group(1) != block]
-    if other:
+    if other and refused is None:
         raise ImportRefused(
-            f"{name}: rows numbered for another block — {', '.join(other)}; a block's file "
-            f"holds that block's findings only: remove the rows or import them with their own block")
+            f"{name}: rows numbered for another block — {', '.join(f['id'] for f in other)}; "
+            f"a block's file holds that block's findings only: remove the rows or import them "
+            f"with their own block")
+    for f in other:
+        refused.append((line_of[id(f)], f"id {f.pop('id')} is numbered for another block — a "
+                        f"block's file holds that block's findings only: remove the row or import "
+                        f"it with its own block"))
 
     if append:
         # TOP-UP IMPORT: findings found on top of what is already recorded. The regular
@@ -4274,10 +4289,13 @@ def import_plan(block: str, name: str, numbered: list[tuple[int, dict]], existin
     for f in incoming:
         fid = f.get("id")
         if fid and fid in seen_here:
-            raise ImportRefused(
-                f"{name}: two rows carry the id {fid} — an id is unique within a block; "
-                f"delete the id field of the row that is new and the import will hand out a "
-                f"free number")
+            why = (f"two rows carry the id {fid} — an id is unique within a block; delete the "
+                   f"id field of the row that is new and the import will hand out a free number")
+            if refused is None:
+                raise ImportRefused(f"{name}: {why}")
+            refused.append((line_of[id(f)], why))
+            del f["id"]
+            continue
         if fid:
             seen_here.add(fid)
     numbered_ids = [n for fid in taken if (n := finding_number(block, fid)) is not None]
@@ -4339,25 +4357,31 @@ def import_dry_run(block: str, src: Path, numbered: list[tuple[int, dict]],
     would write them — the path SKILL.md gives a draft that holds only new findings on top of
     recorded ones."""
     rel = src.relative_to(ROOT)
-    problems = [f"line {n}: {why}" for n, why in unreadable]
+    # (line, message); 0 for a message about the file as a whole.
+    problems: list[tuple[int, str]] = list(unreadable)
     # A row whose `block` names another block: the plain import would file it there without
     # a word.
-    problems += [f"line {n}: `block` is {row.get('block')!r} — this is the draft of {block}"
+    problems += [(n, f"`block` is {row.get('block')!r} — this is the draft of {block}")
                  for n, row in numbered if row.get("block") not in (None, block)]
     rows = numbered
     line_of = {id(row): n for n, row in rows}
     note = ""
+    # ONE list across both plans: the first may record a row's refusal and drop the id it
+    # was about before it raises ImportWouldReplace, and the second plan no longer sees it.
+    refused: list[tuple[int, str]] = []
     try:
         try:
             _, merged, new = import_plan(block, src.name, rows, findings(), append=append,
-                                         force=force, found_in=found_in, hold_rows=False)
+                                         force=force, found_in=found_in, hold_rows=False,
+                                         refused=refused)
         except ImportWouldReplace as exc:
             note = str(exc)
             _, merged, new = import_plan(block, src.name, rows, findings(), append=True,
-                                         force=force, found_in=found_in, hold_rows=False)
+                                         force=force, found_in=found_in, hold_rows=False,
+                                         refused=refused)
     except ImportRefused as exc:
-        problems.append(f"`import` refuses the file as a whole — {exc}; the rows are checked "
-                        f"once it takes the file")
+        problems.append((0, f"`import` refuses the file as a whole — {exc}; the rows are "
+                            f"checked once it takes the file"))
     else:
         asked = {id(f) for f in new}
         idx, tracked, seen = block_index(blocks()), all_files(), set()
@@ -4372,15 +4396,17 @@ def import_dry_run(block: str, src: Path, numbered: list[tuple[int, dict]],
             # `check` names the finding by the id `import` would give it; the draft's author
             # knows the row by its line.
             own = f"finding {f.get('id')}: "
-            problems += [f"line {line_of[id(f)]}: {m.removeprefix(own)}" for m in gates.problems]
+            problems += [(line_of[id(f)], m.removeprefix(own)) for m in gates.problems]
+    problems += refused
     if note:
         print(f"note, the lead's call at import time: {note}; the rows are checked as "
               f"`--append` would write them")
     if problems:
         print(f"{rel}: {len(problems)} problem(s) — fix them in the draft and run this again "
-              f"(the messages are `check`'s after the import; fix the row in the draft):")
-        for p in problems:
-            print(f"  {p}")
+              f"(the messages are `import`'s and `check`'s after it; fix the row in the draft):")
+        # By line, so a row's problems stand together whichever check named them.
+        for n, why in sorted(problems, key=lambda p: p[0]):
+            print(f"  line {n}: {why}" if n else f"  {why}")
         return 1
     print(f"{rel}: {len(numbered)} row(s), nothing `import` or `check` would refuse"
           + (" in the rows" if note else ""))
