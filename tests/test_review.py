@@ -12722,9 +12722,33 @@ class RegionFingerprintTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual((self._row()["file"], self._row()["line"]), ("src/two.ts", 20))
 
+    def test_находка_без_строки_переезжает_с_отпечатком_всего_файла(self):
+        """Находка о файле целиком (без строки) окна не имеет: переезд берёт отпечаток нового
+        файла целиком, строки не требует (замечание Codex к #70)."""
+        body = self._stand(line=None)
+        self.assertIn("code_sha", self._row())
+        self.s.write("src/two.ts", self._text(body))
+        (self.s.root / "src/one.ts").unlink()
+        self.s.blocks(paths=["src/two.ts"])
+        self.s.commit("файл переименован")
+        self.s.run("coverage")
+        out = self.s.run("restamp", "H1-001", "--file", "src/two.ts")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        row = self._row()
+        self.assertEqual(row["file"], "src/two.ts")
+        self.assertNotIn("line", row)
+        self.assertIn("code_sha", row)
+        self.s.run("findings")
+        self.s.commit("находка уехала")
+        out = self.s.run("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+
     def test_переезд_отказывает_без_файла_и_на_блоке(self):
         self._stand()
+        # файл есть на диске, но git его не ведёт: `check` такую находку отверг бы следом
+        self.s.write("src/untracked.ts", "x\n")
         for argv, said in ((("H1-001", "--file", "src/none.ts"), "src/none.ts is not in the repository"),
+                           (("H1-001", "--file", "src/untracked.ts"), "src/untracked.ts is not in the repository"),
                            (("H1-001", "--file", "src/one.ts"), "already points at src/one.ts"),
                            (("H1", "--file", "src/one.ts"), "--file belongs to a finding")):
             with self.subTest(argv=argv):

@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .base import die, now
-from .git import ROOT
+from .git import ROOT, all_files
 from .workspace import CLI, FINDINGS_FILE, FINDINGS_MD, named_file
 from .model import FIX_AGE_DAYS, FIX_GATE_DEFAULT, SEVERITIES
 from .i18n import T
@@ -407,9 +407,11 @@ def restamp_finding(fid: str, line: int | None = None, to_file: str | None = Non
         new = to_file.removeprefix("./")
         if new == rel:
             die(f"{fid} already points at {rel} — drop --file to stamp it where it is")
-        if not file_sha(new):
-            die(f"file {new} is not in the repository — --file names the file the finding's "
-                f"code is in now, relative to the repository root")
+        # tracked, not merely present: `check` holds a live finding to `git ls-files`, and a
+        # move onto an untracked file passed here only to be refused by the next check
+        if new not in all_files():
+            die(f"file {new} is not in the repository — --file names a file git tracks, the one "
+                f"the finding's code is in now, relative to the repository root")
         moved_from, rel = rel, new
     elif not file_sha(rel):
         die(f"file {rel} does not exist — if the finding's code moved to another file, say "
@@ -430,9 +432,14 @@ def restamp_finding(fid: str, line: int | None = None, to_file: str | None = Non
                 f"the way; read it and say where the defect sits: "
                 f"`{CLI} restamp {fid} --file {rel} --line <N>`")
         at = at or was
-    elif moved_from:
+    elif moved_from and lines is not None and isinstance(was, int):
+        # a line recorded under the whole-file form: its window was never stored, so there
+        # is nothing to look for in the new file. A finding without a line, or one moved onto
+        # a binary or a symlink, keeps the whole-file form and needs no line.
         die(f"{fid} has no window to look for in {rel} — say where the defect sits: "
             f"`{CLI} restamp {fid} --file {rel} --line <N>`")
+    elif moved_from:
+        at = was
     elif lines is not None and f.get("code_sha"):
         at = cited_line_now(f, lines)
     else:
