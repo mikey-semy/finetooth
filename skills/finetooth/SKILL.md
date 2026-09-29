@@ -182,6 +182,17 @@ touch goes into `ROLE_DENY`, which the script hands to `claude -p` as its deny l
 `fixreview` on a dirty tree (`ALLOW_DIRTY=1` to insist), and the agent's PID sits in
 `<stream>.pid` while it runs, so a stop reaches it.
 
+**An interrupted role is started again, not continued.** A role's cost is turns × context, and
+the whole context is sent again on every turn; the prompt cache makes that cheap only for
+minutes. An agent continued after a pause — a usage limit, a crash, the night — sends its whole
+context again at full price: in a field run (29.09, reported by the operator) 5–8 agents of
+500–800k tokens each, continued after the plan's limit, took 15–20% of a five-hour window within
+a minute. Everything a role needs is on disk — the manifest, its draft, the reports — so a role
+cut off is started anew on its block (`run-role.sh` never continues a session), and it reads the
+block again for a fraction of that. Run as many roles at once as the plan's window holds, not
+as many as the machine does — two or three; a role whose context passes a few hundred thousand
+tokens is reading outside its block or keeping test output, and its report says which.
+
 ## Rules not to break
 
 - One agent does not hunt and fix at the same time; the one who found does not fix; the one
@@ -194,7 +205,8 @@ touch goes into `ROLE_DENY`, which the script hands to `claude -p` as its deny l
   tree shows what is fixed as broken.
 - No references to the review in code: finding and block numbers die with `docs/review/`.
   `review refs` lists the ones that got in; `check` warns about them.
-- Do not run more than two or three agents at once if a build is running on the machine.
+- Do not run more than two or three agents at once: the plan's usage window runs out long
+  before the machine does, and a build on the machine makes it fewer still.
 
 ## What `review check` holds
 
