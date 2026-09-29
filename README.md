@@ -714,6 +714,8 @@ skills/finetooth/                THE SKILL — this is what gets installed into 
     roles.py, settings.py         pieces of a role prompt; the project's own deny rules
     report/sarif.py, summary.py,  SARIF export, the markdown and the HTML summary
     report/html.py, refs.py       finding ids left in code and documents
+    checks/*.py                   what `check` looks at, a function per check: state.py,
+                                  findings.py, coverage.py, reports.py
     commands/*.py                 the commands, a file per group: setup.py, status.py,
                                   coverage.py, history.py, findings.py, prompt.py,
                                   report.py, check.py

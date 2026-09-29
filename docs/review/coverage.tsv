@@ -73,6 +73,11 @@ skills/finetooth/scripts/axes.py	T1
 skills/finetooth/scripts/finetooth/__init__.py	T1
 skills/finetooth/scripts/finetooth/base.py	T1
 skills/finetooth/scripts/finetooth/blocks.py	T1
+skills/finetooth/scripts/finetooth/checks/__init__.py	T1
+skills/finetooth/scripts/finetooth/checks/coverage.py	T1
+skills/finetooth/scripts/finetooth/checks/findings.py	T1
+skills/finetooth/scripts/finetooth/checks/reports.py	T1
+skills/finetooth/scripts/finetooth/checks/state.py	T1
 skills/finetooth/scripts/finetooth/cli.py	T1
 skills/finetooth/scripts/finetooth/commands/__init__.py	T1
 skills/finetooth/scripts/finetooth/commands/check.py	T1

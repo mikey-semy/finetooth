@@ -51,3 +51,18 @@ from the module's location. The next review of this code splits T1 into blocks a
 - skills/finetooth/scripts/finetooth/text.py
 - skills/finetooth/scripts/finetooth/verdicts.py
 - skills/finetooth/scripts/finetooth/workspace.py
+
+## 2026-09-29, second move: `check` into named checks
+
+`cmd_check` (in `commands/check.py`, read as `review.py` by this block) was split into 28
+functions, each part copied verbatim into the file of its subject; `cmd_check` runs them in
+the old order. New code: the function headers, their one-line docstrings, `CHECKS`, and the
+four import blocks. T1-064's window straddled two parts that went to different files, so it
+was anchored by hand at the raw read of the reports in `files_named_in_reports` — the line
+its claim is about.
+
+- skills/finetooth/scripts/finetooth/checks/__init__.py
+- skills/finetooth/scripts/finetooth/checks/coverage.py
+- skills/finetooth/scripts/finetooth/checks/findings.py
+- skills/finetooth/scripts/finetooth/checks/reports.py
+- skills/finetooth/scripts/finetooth/checks/state.py

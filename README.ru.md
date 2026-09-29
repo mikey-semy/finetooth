@@ -687,6 +687,8 @@ skills/finetooth/                СКИЛЛ — это и ставится аг�
     roles.py, settings.py         части промпта роли; собственные запреты проекта
     report/sarif.py, summary.py,  выгрузка SARIF, сводка в markdown и в HTML
     report/html.py, refs.py       id находок, оставленные в коде и документах
+    checks/*.py                   что смотрит `check`, функция на проверку: state.py,
+                                  findings.py, coverage.py, reports.py
     commands/*.py                 команды, файл на группу: setup.py, status.py,
                                   coverage.py, history.py, findings.py, prompt.py,
                                   report.py, check.py
