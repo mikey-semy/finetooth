@@ -1,3 +1,4 @@
+[Русская версия](CODE_OF_CONDUCT.ru.md)
 
 # Contributor Covenant Code of Conduct
 

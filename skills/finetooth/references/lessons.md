@@ -55,8 +55,11 @@ lesson is ours, it says so.
     `scenario` — 700.
 12. **A rejected finding is kept with the reason.** Otherwise the next review finds the same thing.
 13. **A deferred finding lives through the whole review unnoticed**, because it does not
-    count as open. → `deferred` requires a reason; before the review ends each one is either
-    fixed or rejected with a reason.
+    count as open. → `deferred` requires a reason, and the reason is what turns it from a
+    postponement into an accepted risk: the summary publishes every deferred finding under
+    "Accepted risks" with the reason someone gave for it. A deferral is a decision that
+    leaves the review, not a fix owed at the end of it; what is forbidden is deferring in
+    silence.
 14. **Finding numbers must not shift.** Ids are assigned by position; without writing the id
     back into the block's file, a finding added later would renumber everything below it. →
     Numbers are written back, a second batch is `import --append`.

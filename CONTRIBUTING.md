@@ -6,7 +6,7 @@ not a promised response time but an honest description of the pace.
 ## What is customary here
 
 - **Language.** English for code, commits, PRs and issues; documentation is maintained in
-  English with Russian copies (README.ru.md, docs/ru/). File names and identifiers in Latin
+  English with Russian copies (`README.ru.md`, `CHANGELOG.ru.md`). File names and identifiers in Latin
   letters.
 - **No dependencies.** The tool is the Python standard library and `git`. A PR that adds a
   dependency will be rejected: the kit is installed into projects on any stack.
@@ -53,14 +53,17 @@ Terraform, Next.js, Better Auth); each has a reason.
 
 ## Releases
 
-How a version number is chosen and what has to be true before a tag exists — `RELEASING.md`.
-In short: semantic versioning with a zero major, at most one release a week, four mechanical
-gates including a run on a live project, and no direct pushes to `master` for anyone.
+Branches: `master` holds releases only, `dev` is where work lands — open your PR against
+`dev` (it is the default). How a version number is chosen and what has to be true before a
+tag exists — `RELEASING.md`.
+In short: semantic versioning with a zero major, at most one release a week, four gates before
+a tag — two run by CI, two by a human, including a run on a live project — and no direct pushes
+to `master` for anyone.
 
 ## Before a PR
 
 ```sh
-python3 -m unittest discover -s tests          # ~1 minute, needs only git
+python3 -m unittest discover -s tests          # ~a quarter of an hour, needs only git
 skills-ref validate skills/finetooth            # pip install skills-ref
 ```
 
@@ -74,9 +77,17 @@ Every commit is signed with the line `Signed-off-by: Name <email>` (`git commit 
 you confirm the [Developer Certificate of Origin](https://developercertificate.org/): you have
 the right to hand over this code under the project's license. There is no CLA.
 
+CI checks it on every pull request — the commit's own author must be the one who signed off —
+and names the way out if a commit is missing the line. To run the same check locally:
+
+```sh
+.github/dco.sh origin/dev..HEAD
+```
+
 ## What we will not accept
 
-- Dependencies, a web interface, a database — see "What not to do" in `ROADMAP.md`.
+- Dependencies, a web interface, a database — see "What we will not do" under "Where it is
+  going" in [`README.md`](README.md); the reasons are in the maintainer's knowledge base.
 - Turning the kit into a diff reviewer: that is a different class of tools, and it is taken.
 - Changes without a test and a CHANGELOG entry.
 

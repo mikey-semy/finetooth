@@ -1,5 +1,16 @@
 # Working on the kit itself
 
+> ## ⏳ A whole-repository review of the kit itself is in progress — read `docs/review/README.md` first
+>
+> The kit is being reviewed with its own method, block by block (T1 the tool, T2 the prompts,
+> T3 the tests as a gate, T4 the repository contract). All of its state lives on disk, not in
+> a conversation: `python3 skills/finetooth/scripts/review.py status` says where it stands and
+> which block is next. Do not start a fresh review of your own and do not fix findings outside
+> its rules — both are described in that README.
+>
+> When the review closes, `docs/review/` is deleted in one PR and this banner goes with it;
+> what lasts moves into this file, into the knowledge base and into tests.
+
 This file is for the agent that edits **the kit itself**, not one that runs a review with it.
 It is read in every session, so it is short.
 
@@ -11,14 +22,24 @@ installed into the agent lives in `skills/finetooth/` — `SKILL.md`, `scripts/r
 `references/`, `assets/`. The rest of the repository (documents, tests, the plan) is not
 installed into the agent.
 
-The tool is a single file on the standard library, no dependencies. The skill lives apart from
+The tool is `scripts/review.py`, a thin command over the `finetooth` package next to it, on the
+standard library, no dependencies. A module per concern, in layers declared once in
+`finetooth/__init__.py` (`LAYERS`): a module imports only the layers before its own, command
+modules (`commands/`) do not import each other, and `PackageLayerTest` holds it. A new command:
+its function goes to the `commands/` file of its group, its arguments to `cli.py`, and whatever
+another command also needs goes down to the lowest module that can hold it. A new gate of `check` is a function in the `checks/`
+file of its subject, added to `CHECKS` in `commands/check.py` where its message belongs; it
+fills the container and returns nothing. A new module gets its place in `LAYERS`. The skill lives apart from
 the repository under review — in its `.claude/skills/`, in the home directory, anywhere — so
 everything the tool can do must work in someone else's tree, with someone else's branch names
 and directory layout, and the project root is taken from the working directory, not from the
-file's location.
+file's location. The tool writes under `docs/review/` only, apart from the files a user asks
+for by name — `summary` (Markdown or `--html`, `--out` anywhere) and `sarif --out`:
+`SECURITY.md` lists them, `WriteBoundaryTest` holds the list, and a command that writes
+anywhere else is a vulnerability by that document.
 
 The design and intent are in [`README.md`](README.md), the check against world practice in
-[`docs/comparison-with-practice.md`](docs/comparison-with-practice.md), the history in
+`comparison-with-practice` in the knowledge base (private repository `finetooth-hq`), the history in
 [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Rules that must not be broken here
@@ -43,10 +64,20 @@ The design and intent are in [`README.md`](README.md), the check against world p
    body of `SKILL.md` is shorter than 500 lines; details go to `references/`, links from
    `SKILL.md` go one level deep.
 7. **File names in Latin letters**; content in English, with Russian copies in `README.ru.md`
-   and `docs/ru/`.
+   (`README.ru.md`, `CHANGELOG.ru.md`); research, measurements and the roadmap live in the private knowledge base `finetooth-hq`.
 8. **A change to a mechanism is a change to a prompt.** If a gate has started requiring
    something new, the role template must say so: the agent will not guess it from an error
    message that a human will see.
+9. **One place starts git; one container holds the refusals.** Every git run goes through
+   `git()`: it adds `-z` to any run whose output carries paths and reads that output back
+   (`.fields`, `.records`), so no call site can forget either. `git log` is ordered and parsed
+   only in `log_records`. Every gate of `check` adds its refusal through `Refusals` with its
+   OWN key — `gates.refuse("finding/code-changed", …)` — and that key is what the suite pairs
+   with the test holding the gate; `cmd_check` returns nothing but `gates.report()`. A process
+   started elsewhere, a refusal with a key assembled on the way, a gate that prints and exits
+   by itself: each is a red run, not a style note. This is the answer to a defect class that
+   came back three rounds running — a guard that recognises how a call is WRITTEN always
+   misses the next spelling.
 
 ## Check before committing
 
@@ -54,7 +85,8 @@ The design and intent are in [`README.md`](README.md), the check against world p
 python3 -m unittest discover -s tests
 ```
 
-98 scenarios, about a minute. The tests create temporary git repositories and call the tool
+561 scenarios, about a quarter of an hour (measured on the author's machine; the number of scenarios
+is held by a test, the time is not). The tests create temporary git repositories and call the tool
 from the skill folder — internals are deliberately not imported: a move survives the external
 contract, not the internal structure. The skill format:
 
@@ -69,5 +101,6 @@ skills-ref validate skills/finetooth
   pinned to the repository together with the state, not updated underneath it.
 - **Configuration beyond `blocks.json`.** Everything the tool needs to know lies in the block
   definitions; a second source of truth will drift from the first.
-- **A history of runs.** State is "where we are now", not a journal; what happened is told by
-  `git log` on the review directory.
+- **A database of runs.** State is "where we are now"; what happened is told by the journal
+  (`docs/review/journal.md`: a line per decision and per measured role run) and by `git log`
+  on the review directory.

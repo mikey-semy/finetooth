@@ -13,11 +13,15 @@ body:
     id: how
     attributes:
       label: How to close it
-      description: a mechanism, not a wish; how the neighbours do it (see docs/prior-art.md), if they do
+      description: a mechanism, not a wish; and how the neighbouring tools do it, if they do
     validations:
       required: true
   - type: textarea
-    id: roadmap
+    id: proof
     attributes:
-      label: Which ROADMAP direction
-      description: the number, if one fits; otherwise — why a new one is needed
+      label: How it would be proven
+      description: >-
+        which gate would go red on the defect, and the mutation that proves the gate —
+        every check here comes with a test, and the test with a mutation (CONTRIBUTING.md).
+        The plan itself lives in a private knowledge base, so do not look for a direction
+        number: the maintainer places the proposal against it.

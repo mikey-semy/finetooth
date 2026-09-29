@@ -3,6 +3,7 @@
   "kit_version": "0.6.0",
   "project": "Toy",
   "lang": "en",
+  "cli": "python3 <skill>/scripts/review.py",
   "gates": [
     "npm test"
   ],
@@ -15,6 +16,10 @@
     {
       "pattern": ".gitignore",
       "reason": "not code"
+    },
+    {
+      "pattern": "README.md",
+      "reason": "describes the example itself, not the toy app"
     }
   ],
   "blocks": [

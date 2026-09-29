@@ -1,3 +1,4 @@
+[English version](CODE_OF_CONDUCT.md)
 
 # Кодекс Поведения участника
 

@@ -28,6 +28,12 @@ written confirmation by the author himself (a comment in an issue or a commit wi
 
 ## Other people's projects
 
-The examples and descriptions in the repository are anonymised: the names of the projects the
-method was road-tested on, their internal details and the defects found are not published. If
-any of that nevertheless turns up — report it, and it will be removed.
+**Someone else's project is never named here.** The project the method was worked out on, and
+any project reviewed for anyone but the owner: the name, the internals and the defects found
+are not published, and the examples and descriptions in the repository are anonymised
+accordingly. If any of that nevertheless turns up — report it, and it will be removed.
+
+**The owner's own projects are named**, with the paths a number needs to be traceable: the
+CHANGELOG cites `setfork H3` and a file from it as the source of two verdict-parser defects.
+A measurement whose origin cannot be checked is not a measurement, and the rights to those
+projects are the owner's to give.

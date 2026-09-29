@@ -75,6 +75,22 @@
       "proof": "read"
     },
     {
+      "id": "H13",
+      "slug": "test-quality",
+      "phase": 1,
+      "title": "Test quality: do they catch the defect",
+      "role": "test-auditor",
+      "proof": "measured",
+      "goal": "Not read 180 thousand lines of tests but measure: a set of mutant patches at the places of maximum cost of a mistake and results.tsv (patch → command → killed/survived); a coverage table of the critical paths; a search for mocks softer than the system and one-sided permission checks.",
+      "paths": [
+        "src/**/*.test.ts",
+        "tests"
+      ],
+      "ref_paths": [
+        "src"
+      ]
+    },
+    {
       "id": "V1a",
       "slug": "order-lifecycle",
       "phase": 2,
@@ -107,22 +123,6 @@
       "ref_paths": [
         "server/internal/infrastructure/repository/order_repo.go",
         "db/seeds/002_statuses_transitions.sql"
-      ]
-    },
-    {
-      "id": "H13",
-      "slug": "test-quality",
-      "phase": 1,
-      "title": "Test quality: do they catch the defect",
-      "role": "test-auditor",
-      "proof": "measured",
-      "goal": "Not read 180 thousand lines of tests but measure: a set of mutant patches at the places of maximum cost of a mistake and results.tsv (patch → command → killed/survived); a coverage table of the critical paths; a search for mocks softer than the system and one-sided permission checks.",
-      "paths": [
-        "src/**/*.test.ts",
-        "tests"
-      ],
-      "ref_paths": [
-        "src"
       ]
     },
     {

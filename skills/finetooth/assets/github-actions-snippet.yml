@@ -1,0 +1,91 @@
+# The review in GitHub Actions. Saved as .github/workflows/review.yml in the project.
+#
+# Three jobs, three different things:
+#   check   — the review state is consistent (`review.py check`). Make it a REQUIRED status
+#             check in the branch protection rule: a pull request that edits code under an
+#             open finding, or leaves the register contradicting the tree, cannot be merged.
+#   sarif   — the open and deferred findings of the register as SARIF 2.1.0, uploaded to
+#             code scanning: they show in the Security tab and on the lines of a pull
+#             request. Deferred ones are marked "accepted risk" in the message: GitHub does
+#             not read SARIF suppressions, so they are shown as open alerts.
+#   comment — optional, delete it if code scanning is enough: the same SARIF through
+#             reviewdog as review comments on the lines a pull request adds or changes.
+#             The difference: code scanning keeps alerts across the whole repository with a
+#             state of their own (open, dismissed, fixed) and needs code scanning enabled —
+#             in a private repository that is GitHub Code Security; a review comment is an
+#             ordinary comment in the conversation of this pull request, on any plan, and
+#             shows only open findings: reviewdog skips a result whose suppression is
+#             accepted, so a deferred finding is not commented on.
+#
+# The path to the tool is where the skill was installed into the project; change REVIEW if
+# yours is elsewhere. Every action is pinned to a commit, not to a moving tag: a tag is
+# someone else's code in a step that holds a token with write access to your alerts.
+
+name: review
+
+on:
+  push:
+    branches: [main]   # your default branch
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  REVIEW: .claude/skills/finetooth/scripts/review.py
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # The whole history: `check` follows fix commits and the main line through git.
+          fetch-depth: 0
+      - name: Review state is consistent
+        run: python3 "$REVIEW" check
+
+  sarif:
+    runs-on: ubuntu-latest
+    # A pull request from a fork gets a read-only token and cannot upload alerts.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      security-events: write
+      # Needed by upload-sarif in a private repository only.
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Findings as SARIF
+        run: python3 "$REVIEW" sarif --out "$RUNNER_TEMP/finetooth.sarif"
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ runner.temp }}/finetooth.sarif
+          # One category per tool: another analysis uploaded to the same repository keeps
+          # its own alerts instead of closing ours, and ours do not close its.
+          category: finetooth
+
+  comment:
+    runs-on: ubuntu-latest
+    # Pull requests only, and not from a fork: its token is read-only and cannot comment.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Findings as SARIF
+        run: python3 "$REVIEW" sarif --out "$RUNNER_TEMP/finetooth.sarif"
+      # The action installs whatever reviewdog_version says, and its default is `latest`:
+      # the version is named here, like the commit of the action itself.
+      - uses: reviewdog/action-setup@d8a7baabd7f3e8544ee4dbde3ee41d0011c3a93f # v1.5.0
+        with:
+          reviewdog_version: v0.21.2
+      - name: Findings as review comments
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # -filter-mode=added: only lines this pull request adds or changes. The exit code
+        # stays 0 (-fail-level=none, the default): the gate is the check job.
+        run: >-
+          reviewdog -f=sarif -name=finetooth -reporter=github-pr-review -filter-mode=added
+          < "$RUNNER_TEMP/finetooth.sarif"
