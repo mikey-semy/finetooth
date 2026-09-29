@@ -202,7 +202,7 @@ A red check means the work is not done, even if it looks done. Among other thing
 a file without a block and a stale coverage map; a file of a readable block not named by full
 path in any report (what was read — as a list, what was not — in the coverage limits); a
 hypothesis without a verdict or with conflicting verdicts; a hypothesis confirmed by the
-hunter or the verifier whose verdict names no finding of the draft or the register (a
+hunter, the fixer or the verifier whose verdict names no finding of the draft or the register (a
 confirmed hypothesis is a finding; what is not a defect is "refuted"); a hunter report without a
 "Coverage limits" section and an empty verifier report; a deferred finding without a reason;
 an open finding older than a week (a warning);

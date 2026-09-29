@@ -207,6 +207,13 @@ FIX_AGE_DAYS = 7
 CLAIM_MAX = 220
 SCENARIO_MAX = 700
 ROLES = ["hunter", "verify", "fix", "fixreview"]
+# The roles whose reports carry hypothesis verdicts, in the order they are overlaid: the
+# verifier last, because its template tells it to override a verdict it disagrees with. One
+# list for every reader of a verdict — `verdicts_for`, the conflict gate and the gate on a
+# confirmation without a finding: while the last read two of the three, a hypothesis confirmed
+# in the fix report answered the verdict gate and escaped the finding gate (fix review of the
+# 0.8.0 candidate). The fix reviewer writes no hypothesis verdicts.
+VERDICT_ROLES = ("hunter", "fix", "verify")
 # The severity from which a fix-review finding earns another round — rule 11 of the fix
 # reviewer's template, from the method author's own review: low ones are fixed by the lead
 # without a round. The loop signal asks the same question of the previous round's top finding.
@@ -5589,11 +5596,16 @@ def verdicts_for(b: dict) -> dict[str, str]:
     of seniority.
     """
     out: dict[str, str] = {}
-    for role in ("hunter", "fix", "verify"):  # verify last — it is the one that overrides
-        p = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
-        if p.exists():
-            out.update(verdicts_in(p.read_text(encoding="utf-8"), b["id"]))
+    for p in verdict_reports(b):
+        out.update(verdicts_in(p.read_text(encoding="utf-8"), b["id"]))
     return out
+
+
+def verdict_reports(b: dict) -> list[Path]:
+    """The block's reports that carry hypothesis verdicts, in VERDICT_ROLES order — the files
+    every reader of a verdict opens, so no gate reads fewer of them than the parser does."""
+    paths = (REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md" for role in VERDICT_ROLES)
+    return [p for p in paths if p.exists()]
 
 
 def cmd_hypotheses(args) -> int:
@@ -6118,15 +6130,13 @@ def cmd_check(args) -> int:
             continue
         if stt not in POST_VERIFY:
             continue
-        for role in ("hunter", "fix", "verify"):
-            rp = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
-            if rp.exists():
-                for h, vs in verdict_conflicts(rp.read_text(encoding="utf-8"), b["id"]).items():
-                    gates.refuse(
-                        "report/verdicts-conflict",
-                        f"{b['id']}: {rp.name} gives hypothesis {h} different verdicts "
-                        f"({' / '.join(vs)}) — the outcome would depend on line order; leave one"
-                    )
+        for rp in verdict_reports(b):
+            for h, vs in verdict_conflicts(rp.read_text(encoding="utf-8"), b["id"]).items():
+                gates.refuse(
+                    "report/verdicts-conflict",
+                    f"{b['id']}: {rp.name} gives hypothesis {h} different verdicts "
+                    f"({' / '.join(vs)}) — the outcome would depend on line order; leave one"
+                )
         seen = verdicts_for(b)
         missing = [h for h in ids if h not in seen]
         if missing:
@@ -6141,7 +6151,7 @@ def cmd_check(args) -> int:
     # CONFIRM_WORDS). From the hunt on: the hunter's draft is there, and the ids it will get
     # on import are known, so the refusal comes while the hunter's work is still fresh. Every
     # block, the closed ones of a review begun on an older kit included: on the kit's own
-    # review (T1–T4, eight hunter and verifier reports) the rule refuses nothing, and a closed
+    # review (T1–T4, twelve hunter, fix and verifier reports) the rule refuses nothing, and a closed
     # block elsewhere that it does refuse holds exactly the defect the rule exists to recover.
     block_ids = [b["id"] for b in defn["blocks"]]
     for b in defn["blocks"]:
@@ -6149,10 +6159,7 @@ def cmd_check(args) -> int:
             continue
         known = finding_ids_for(b, rows)
         draft = block_findings_path(b).relative_to(ROOT).as_posix()
-        for role in ("hunter", "verify"):
-            rp = REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md"
-            if not rp.exists():
-                continue
+        for rp in verdict_reports(b):
             for h, unknown in confirmed_without_finding(
                     rp.read_text(encoding="utf-8"), b["id"], known, block_ids):
                 gates.refuse(

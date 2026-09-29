@@ -166,7 +166,11 @@ one will appear on its own.
    - incidental fixes, each with its own test;
    - **found, not fixed** — the same class elsewhere, listed by path and grouped, the decision
      left to the lead; observations outside the assignment, separately;
-   - rejected findings with the reason; what was run, with the result.
+   - rejected findings with the reason; what was run, with the result;
+   - a verdict on a hypothesis of the block, if you give one (`{{BLOCK_ID}}.N — …`), follows
+     the hunter's rule, and the state check holds it to it: a confirmation names the finding
+     that carries it (`{{BLOCK_ID}}.N — confirmed: {{BLOCK_ID}}-NNN — <proof>`), and
+     what is not a defect is `refuted: not a defect — <why>`, without the word "confirmed".
 3. In the reply to me — only a summary: closed N, rejected M (with reasons), which gates
    were run and with what result.
 
