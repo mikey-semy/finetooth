@@ -9,6 +9,13 @@ with a review already under way.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-29
+
+Released five days after 0.7.0, ahead of the one-release-a-week cadence, by the maintainer's
+decision: a field report on 0.7.0 (roles run as agents inside one session exhausting a plan's
+usage window within the hour) is answered by what this release carries — `run-role.sh`, the
+turn caps, fix batches of three and the note on restarting an interrupted role.
+
 The release that carries the kit's review of itself (blocks T1–T4) and what that review and
 the first field runs asked for. New commands: `order`, `coupling` and `seams` (which block to walk
 first, the seams between blocks and inside one), `summary` (the one file that outlives `docs/review/`),
@@ -787,7 +794,8 @@ world practice.
   exist — the working copy of the neighbouring repository was 12 days behind. What failed was not
   the reasoning but the tree's freshness; hence the freshness check and the rule in the prompts.
 
-[Unreleased]: https://github.com/mikey-semy/finetooth/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mikey-semy/finetooth/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/mikey-semy/finetooth/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mikey-semy/finetooth/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mikey-semy/finetooth/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/mikey-semy/finetooth/compare/v0.5.0...v0.5.1

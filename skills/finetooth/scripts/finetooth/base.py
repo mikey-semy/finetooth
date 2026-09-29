@@ -20,7 +20,7 @@ def die(msg: str) -> None:
 
 # Version of the kit. The skill is installed as a copy (into the project or the home
 # directory), and there is nobody else to ask "what do I have installed" — only itself.
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 
 def now() -> str:
