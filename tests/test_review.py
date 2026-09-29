@@ -13224,6 +13224,125 @@ class FieldRun46Test(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertIn("1 row(s), nothing `import` or `check` would refuse", out.stdout)
 
+    def test_строка_json_но_не_объект_отказ_с_номером_на_каждом_пути(self):
+        """Строка черновика `[1,2]`, `"текст"` или `42` — это JSON, но не находка: пробный
+        прогон называл её, а настоящий `import` (простой, `--force`, `--append`) падал с
+        трейсбеком на `.get`. Проверка одна на все четыре пути: отказ называет строку по
+        номеру, реестр и черновик не тронуты. Строка, которая не JSON вовсе, названа рядом с
+        ней, а не вместо неё."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        register = self.s.root / "docs/review/findings.jsonl"
+        good = json.dumps({"block": "H1", "severity": "low", "confidence": "confirmed",
+                           "status": "open", "file": "src/one.ts", "claim": "дефект",
+                           "scenario": "x делает y"}, ensure_ascii=False)
+        register.write_text("", encoding="utf-8")
+        for bad in ('[1, 2]', '"текст"', '42', 'null'):
+            for flags in (("--dry-run",), (), ("--force",), ("--append",)):
+                with self.subTest(строка=bad, ключи=flags):
+                    text = f"{good}\n{bad}\n"
+                    draft.write_text(text, encoding="utf-8")
+                    out = self.s.run("import", "H1", *flags)
+                    said = out.stdout + out.stderr
+                    self.assertNotIn("Traceback", out.stderr, out.stderr)
+                    self.assertEqual(out.returncode, 1 if flags == ("--dry-run",) else 2, said)
+                    self.assertIn("line 2: not a JSON object", said)
+                    self.assertNotIn("line 1", said, "верная строка названа плохой")
+                    self.assertEqual(register.read_text(encoding="utf-8"), "", "реестр записан")
+                    self.assertEqual(draft.read_text(encoding="utf-8"), text, "черновик переписан")
+        draft.write_text(f"{good}\n{{ не json\n[1, 2]\n", encoding="utf-8")
+        for flags in (("--dry-run",), ()):
+            with self.subTest(обе_формы=flags):
+                out = self.s.run("import", "H1", *flags)
+                said = out.stdout + out.stderr
+                self.assertIn("line 2: not JSON", said)
+                self.assertIn("line 3: not a JSON object", said)
+                self.assertEqual(register.read_text(encoding="utf-8"), "", "реестр записан")
+
+    def test_import_dry_run_называет_все_проблемы_сразу(self):
+        """Пробный прогон обещает назвать каждую строку, которую надо поправить, а
+        останавливался дважды: на строке, которая не JSON (R13-003, проверка кандидата
+        0.8.0), и на отказе уровня плана — два одинаковых номера, номер чужого блока, —
+        после которого строки не спрашивались вовсе (Codex на PR #66). Черновик с тремя
+        бедами правился за три прогона. Теперь все названы за один, каждая своей строкой."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        register = self.s.root / "docs/review/findings.jsonl"
+        register.write_text("", encoding="utf-8")
+        good = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"}
+        lines = [json.dumps(dict(good, id="H1-001"), ensure_ascii=False),
+                 '{"block": "H1", "severity": "low",}',
+                 json.dumps(dict(good, id="H1-001", claim="тот же номер"), ensure_ascii=False),
+                 json.dumps(dict(good, severity="огромная"), ensure_ascii=False),
+                 json.dumps(dict(good, id="V2-001"), ensure_ascii=False)]
+        text = "\n".join(lines) + "\n"
+        draft.write_text(text, encoding="utf-8")
+        out = self.s.run("import", "H1", "--dry-run")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr, out.stderr)
+        self.assertIn("4 problem(s)", out.stdout)
+        self.assertIn("line 2: not JSON", out.stdout)
+        self.assertIn("line 3: two rows carry the id H1-001", out.stdout)
+        self.assertIn("line 4: severity=огромная is not in the vocabulary", out.stdout)
+        self.assertIn("line 5: id V2-001 is numbered for another block", out.stdout)
+        self.assertNotIn("line 1:", out.stdout, "верная строка названа плохой")
+        self.assertNotIn("refuses the file as a whole", out.stdout)
+        self.assertEqual(register.read_text(encoding="utf-8"), "", "реестр записан")
+        self.assertEqual(draft.read_text(encoding="utf-8"), text, "черновик переписан")
+        # Настоящий импорт по-прежнему останавливается — и на каждом отказе плана по
+        # отдельности, словами пробного прогона.
+        for keep, said in (((0, 2), "two rows carry the id H1-001"),
+                           ((0, 4), "rows numbered for another block — V2-001")):
+            with self.subTest(отказ=said):
+                draft.write_text("".join(lines[i] + "\n" for i in keep), encoding="utf-8")
+                real = self.s.run("import", "H1")
+                self.assertEqual(real.returncode, 2, real.stdout + real.stderr)
+                self.assertIn(said, real.stderr)
+                self.assertEqual(register.read_text(encoding="utf-8"), "", "реестр записан")
+
+    def test_import_dry_run_одна_проблема_одно_сообщение(self):
+        """Пробный прогон печатает отказы самого `import` и ворота `check` — и одна беда
+        строки называлась дважды: чужой `block` — черновиком и воротами «нет такого блока»,
+        а при `--append` ещё и отказом всего файла, после которого прочие строки не
+        спрашивались; пустая `severity` — как пустое поле и как «вне словаря»; одинаковый
+        номер — планом и воротами «повтор номера». Черновик с тремя разными бедами даёт
+        ровно три строки вывода под заголовком, на каждом пути."""
+        self._stand(status="hunted")
+        draft = self.s.root / "docs/review/reports/H1-findings.jsonl"
+        register = self.s.root / "docs/review/findings.jsonl"
+        good = {"block": "H1", "severity": "low", "confidence": "confirmed", "status": "open",
+                "file": "src/one.ts", "claim": "дефект", "scenario": "x делает y"}
+        lines = [json.dumps(dict(good, id="H1-001"), ensure_ascii=False),
+                 '{"block": "H1",, "severity": "low"}',
+                 json.dumps(dict(good, block="X9"), ensure_ascii=False),
+                 json.dumps(dict(good, severity=None), ensure_ascii=False)]
+        cases = {(): lines, ("--force",): lines, ("--append",): lines,
+                 # Одинаковый номер — беда простого импорта; дозапись номера раздаёт сама.
+                 ("один номер",): lines[:1] + lines[:1]}
+        for flags, rows in cases.items():
+            with self.subTest(ключи=flags):
+                register.write_text("", encoding="utf-8")
+                draft.write_text("".join(r + "\n" for r in rows), encoding="utf-8")
+                args = () if flags == ("один номер",) else flags
+                out = self.s.run("import", "H1", "--dry-run", *args)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                named = [l.strip() for l in out.stdout.splitlines() if l.startswith("  ")]
+                want = (["line 2: two rows carry the id H1-001"] if flags == ("один номер",) else
+                        ["line 2: not JSON", "line 3: `block` is 'X9'", "line 4: field severity is empty"])
+                self.assertEqual(len(named), len(want), out.stdout)
+                self.assertIn(f"{len(want)} problem(s)", out.stdout)
+                for said, line in zip(want, named):
+                    self.assertTrue(line.startswith(said), f"{said!r} ≠ {line!r}")
+        # Пустое поле словаря — одна строка, и в `check` по реестру тоже.
+        for field in ("block", "severity", "confidence", "status"):
+            with self.subTest(пустое=field):
+                register.write_text("", encoding="utf-8")
+                draft.write_text(json.dumps(dict(good, **{field: None})) + "\n", encoding="utf-8")
+                out = self.s.run("import", "H1", "--dry-run")
+                named = [l.strip() for l in out.stdout.splitlines() if l.startswith("  ")]
+                self.assertEqual(named, [f"line 1: field {field} is empty"], out.stdout)
+
     def test_import_dry_run_проверяет_место_находки_как_check(self):
         """Место правдоподобное, но неверное — файла нет, строка текстом, строка за концом
         файла: пробный прогон обещал, что импорт пройдёт, а `check` сразу после импорта
