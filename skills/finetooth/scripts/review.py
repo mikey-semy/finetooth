@@ -5661,7 +5661,16 @@ def verdicts_for(b: dict) -> dict[str, str]:
 def verdict_reports(b: dict) -> list[Path]:
     """The block's reports that carry hypothesis verdicts, in VERDICT_ROLES order — the files
     every reader of a verdict opens, so no gate reads fewer of them than the parser does."""
-    paths = (REVIEW / "reports" / f"{b['id']}-{b['slug']}.{role}.md" for role in VERDICT_ROLES)
+    stem = REVIEW / "reports" / f"{b['id']}-{b['slug']}"
+    paths = []
+    for role in VERDICT_ROLES:
+        paths.append(Path(f"{stem}.{role}.md"))
+        if role == "fix":
+            # later fixer passes (prompt --role fix --round N) write .fix-N.md — same verdicts
+            later = stem.parent.glob(f"{stem.name}.fix-*.md")
+            rounds = [(int(q.name[len(stem.name) + 5:-3]), q) for q in later
+                      if q.name[len(stem.name) + 5:-3].isdigit()]
+            paths += [q for _, q in sorted(rounds)]
     return [p for p in paths if p.exists()]
 
 
