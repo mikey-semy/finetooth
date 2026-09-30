@@ -468,8 +468,8 @@ maintainer's knowledge base; this is the short version.
   written before the hunt — and parts shared out between several hunters, each held to the
   readability ceiling. A closed block whose files changed is re-read by its diff from the
   commit it was closed at, with a verifier of its own, instead of a restamp or a full rerun.
-  Asked for by a field review moving onto the kit.
-- **Seams in Go** — the import graph behind `seams` learns Go.
+  Asked for by a field review moving onto the kit ([#78](https://github.com/mikey-semy/finetooth/issues/78), [#79](https://github.com/mikey-semy/finetooth/issues/79)).
+- **Seams in Go** — the import graph behind `seams` learns Go ([#80](https://github.com/mikey-semy/finetooth/issues/80)).
 - **Blind zones.** What the review's own roles were required to read and did not — a map of
   what was actually opened, kept with every run; what the agent that wrote the project
   changed without reading what the change depends on — from its session logs, or from traces
