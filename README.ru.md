@@ -439,8 +439,11 @@ note), место — файл и строка от корня репозито�
 
 - разборщик вердиктов, выведенный из корпуса настоящих отчётов, а не из последнего дефекта
   ([#17](https://github.com/mikey-semy/finetooth/issues/17));
-- то, о чём попросили первые полевые прогоны ([#46](https://github.com/mikey-semy/finetooth/issues/46)),
-  и пробелы узд, отложенные ревью самого набора
+- о чём полевые прогоны попросили дальше: правка проверяющего в заголовке и сценарии находки
+  должна доходить до реестра ([#74](https://github.com/mikey-semy/finetooth/issues/74)), внешний
+  список гипотез не должен теряться ни в одном манифесте
+  ([#77](https://github.com/mikey-semy/finetooth/issues/77)); и пробелы узд, отложенные ревью
+  самого набора
   ([#29](https://github.com/mikey-semy/finetooth/issues/29),
   [#30](https://github.com/mikey-semy/finetooth/issues/30),
   [#31](https://github.com/mikey-semy/finetooth/issues/31)).

@@ -452,8 +452,11 @@ maintainer's knowledge base; this is the short version.
 
 - the verdict parser derived from a corpus of real reports, not from the last defect
   ([#17](https://github.com/mikey-semy/finetooth/issues/17));
-- what the first field runs asked for ([#46](https://github.com/mikey-semy/finetooth/issues/46))
-  and the guard gaps the kit's own review deferred
+- what the field runs asked for next: a verifier's correction of a finding's claim and
+  scenario reaching the register ([#74](https://github.com/mikey-semy/finetooth/issues/74)),
+  an external hypothesis list that no manifest may lose
+  ([#77](https://github.com/mikey-semy/finetooth/issues/77)); and the guard gaps the kit's own
+  review deferred
   ([#29](https://github.com/mikey-semy/finetooth/issues/29),
   [#30](https://github.com/mikey-semy/finetooth/issues/30),
   [#31](https://github.com/mikey-semy/finetooth/issues/31)).
