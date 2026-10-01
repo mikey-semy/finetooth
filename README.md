@@ -424,7 +424,7 @@ The method's main blind spot is **how much it misses**. We know that what it fin
 The detailed roadmap — with measurements, sources and the order of work — lives in the
 maintainer's knowledge base; this is the short version.
 
-**Done in `dev`, shipping in 0.8.0:**
+**Released in 0.8.0** (2026-09-29):
 
 - **the fix gate** — the next block does not start while earlier ones hold open findings at
   `fix_gate` severity; deferring needs a reason;
@@ -441,26 +441,48 @@ maintainer's knowledge base; this is the short version.
   own last fix;
 - **a finding's fingerprint is the lines around it**, not the whole file, and a finding is
   shown at the line its code sits on now;
+- **a confirmed hypothesis names the finding it produced** — `check` refuses a confirmation
+  without one;
 - **spend measured** — `run-role.sh` and `axes.py`, turn caps, the one-read rule in the
   templates, `ROLE_DENY` as the runner's one limit;
-- **sweeps** for acceptance criteria that reach beyond the block's files.
+- **sweeps** for acceptance criteria that reach beyond the block's files;
+- **the tool split into a package**, one module per concern, behind the same command.
 
 **In work:**
 
-- a confirmed hypothesis must name the finding it produced
-  ([#60](https://github.com/mikey-semy/finetooth/pull/60));
 - the verdict parser derived from a corpus of real reports, not from the last defect
   ([#17](https://github.com/mikey-semy/finetooth/issues/17));
-- splitting `review.py` into modules — the tool is near the kit's own readability ceiling
-  ([#56](https://github.com/mikey-semy/finetooth/issues/56));
-- what the first field runs asked for ([#46](https://github.com/mikey-semy/finetooth/issues/46))
-  and the guard gaps the kit's own review deferred
+- what the field runs asked for next: a verifier's correction of a finding's claim and
+  scenario reaching the register ([#74](https://github.com/mikey-semy/finetooth/issues/74)),
+  an external hypothesis list that no manifest may lose
+  ([#77](https://github.com/mikey-semy/finetooth/issues/77)); and the guard gaps the kit's own
+  review deferred
   ([#29](https://github.com/mikey-semy/finetooth/issues/29),
   [#30](https://github.com/mikey-semy/finetooth/issues/30),
   [#31](https://github.com/mikey-semy/finetooth/issues/31)).
 
 **Next, roughly in order:**
 
+- **A large block and a closed block that moved.** Every block declares its sweep explicitly
+  (or says it has none), with a method — read in full, or places enumerated by a command
+  written before the hunt — and parts shared out between several hunters, each held to the
+  readability ceiling. A closed block whose files changed is re-read by its diff from the
+  commit it was closed at, with a verifier of its own, instead of a restamp or a full rerun.
+  Asked for by a field review moving onto the kit ([#78](https://github.com/mikey-semy/finetooth/issues/78), [#79](https://github.com/mikey-semy/finetooth/issues/79)).
+- **Seams in Go** — the import graph behind `seams` learns Go ([#80](https://github.com/mikey-semy/finetooth/issues/80)).
+- **Blind zones.** What the review's own roles were required to read and did not — a map of
+  what was actually opened, kept with every run; what the agent that wrote the project
+  changed without reading what the change depends on — from its session logs, or from traces
+  in git once the logs are gone; and the reviewer's own blind spots, including the one it
+  shares with the model that wrote the code. The promise is visibility, not a guarantee of
+  quality.
+- **Algorithms instead of agent turns.** What is mechanical is done by code on the standard
+  library — scheduling roles within a usage window, near-duplicate findings, import edges
+  between blocks, a reading order for each hypothesis, honest intervals in measurements;
+  the model judges, and an algorithm only proposes.
+- **Review kinds over one core.** Beside the whole-repository review: a pull request review,
+  a review of the plan and the design before code, a lens run, gates before a release — each
+  a separate edition writing to the same register, invariants and `check`.
 - **Measuring what is missed.** A corpus of real past defects with a known answer; cheap
   sampling of closed blocks by a different model as an upper bound. A first recall
   measurement has been run — `seams` came out of it.
@@ -473,9 +495,10 @@ maintainer's knowledge base; this is the short version.
 - A run manifest, two reviewers at once, a block spanning two repositories, portability to
   another language.
 
-What we will not do: turn the kit into a diff reviewer, add dependencies, build a web UI or a
-database, automate finding without a human accepting each one, reward being first. Each has
-a reason in the knowledge base.
+What we will not do: turn the whole-repository review itself into a diff reviewer (lighter
+review kinds are separate editions over the same register), add dependencies, build a web UI
+or a database, automate finding without a human accepting each one, reward being first. Each
+has a reason in the knowledge base.
 
 ## Where it came from
 
